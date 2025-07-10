@@ -1912,6 +1912,23 @@ mod tests {
             println!("m_text: {}", String::from_utf8_lossy(m_text));
         }
     }
+
+    #[test]
+    fn not_rev_invariant() {
+        let query = b"GCC";
+        let text = b"AGCGCTA";
+        let mut searcher = Searcher::<Dna>::new_fwd();
+        let matches = searcher.search(query, &text, 1);
+        let query_rev = query.iter().rev().copied().collect::<Vec<_>>();
+        let text_rev = text.iter().rev().copied().collect::<Vec<_>>();
+        let matches_rev = searcher.search(&query_rev, &text_rev, 1);
+        assert!(
+            matches.len() != matches_rev.len(),
+            "error: fwd matches {} vs rev {}",
+            matches.len(),
+            matches_rev.len()
+        );
+    }
 }
 
 /*
