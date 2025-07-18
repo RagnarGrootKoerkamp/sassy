@@ -11,21 +11,45 @@ a problem that goes by many names:
 - fuzzy searching.
 
 The motivating application is searching short (length 20 to 100) DNA sequences
-in a human genome or e.g. sets of reads, but it generally works well for
-patterns/queries up to length 1000, and also supports plain ASCII alphabet.
+in a human genome or e.g. in a set of reads.
+Sassy generally works well for patterns/queries up to length 1000,
+and supports both ASCII and DNA.
 
 Highlights:
-- Sassy uses bitpacking and SIMD, and its main novelty is tiling these in the
-  text direction.
+- Sassy uses bitpacking and SIMD.
+  Its main novelty is tiling these in the text direction.
 - Support for _overhang_ alignments where the pattern extends beyond the text.
 - Support for (case-insensitive) ASCII, DNA (`ACGT`), and
-  [IUPAC](https://www.bioinformatics.org/sms/iupac.html) (=DNA+`NYR`...) alphabets.
+  [IUPAC](https://www.bioinformatics.org/sms/iupac.html) (=`ACGT+NYR...`) alphabets.
 - Rust library (`cargo add sassy`), binary (`cargo install sassy`), Python
   bindings (`pip install sassy-rs`), and C bindings (see below).
 
 **The paper** can be found at TODO, and evals are in [evals/](evals/).
 
 ## Usage
+
+### 0. Rust library
+
+A larger example can be found in [`src/lib.rs`](src/lib.rs).
+
+```rust
+use sassy::{Searcher, Match, profiles::{Dna}, Strand};
+
+let pattern = b"ATCG";
+let text = b"AAAATTGAAA";
+let k = 1;
+
+let mut searcher = Searcher::<Dna>::new_fwd();
+let matches = searcher.search(pattern, &text, k);
+
+assert_eq!(matches.len(), 1);
+
+assert_eq!(matches[0].text_start, 3);
+assert_eq!(matches[0].text_end, 7);
+assert_eq!(matches[0].cost, 1);
+assert_eq!(matches[0].strand, Strand::Fwd);
+assert_eq!(matches[0].cigar.to_string(), "2=X=");
+```
 
 ### 1. Command-line interface (CLI)
 

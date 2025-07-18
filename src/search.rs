@@ -181,6 +181,8 @@ impl<P: Profile> LaneState<P> {
 /// - Searching only forward or also the reverse complement text.
 /// - Overhang cost, for `Iupac` profile.
 ///
+/// This object caches internal buffers, so that reusing it avoids allocations.
+///
 /// See the library documentation for examples.
 pub struct Searcher<P: Profile> {
     // Config
