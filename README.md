@@ -39,7 +39,7 @@ Explore the sub-commands:
 sassy --help
 ```
 
-#### pattern/fasta search
+#### Search patterns
 Searching a single pattern (`ATGAGCA`) in `text.fasta` with ≤1 edit:
 
 ```bash
@@ -77,14 +77,6 @@ matches  = searcher.search(pattern, text, k=1)
 
 for m in matches:
     print(m)
-```
-
-Output
-
-```text
-Match(text_start=4, text_end=12, cost=0, strand='+', cigar='8=')
-Match(text_start=6, text_end=14, cost=1, strand='-', cigar='6=X=')
-Match(text_start=2, text_end=10, cost=1, strand='-', cigar='X7=')
 ```
 
 See [python/README.md](python/README.md) for more details.
