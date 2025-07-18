@@ -1,14 +1,14 @@
 [![PyPI version](https://img.shields.io/pypi/v/sassy-rs.svg)](https://pypi.org/project/sassy-rs/)
 
-# Sassy: SIMD-accelerated Approximate String Searching
+# Sassy: SIMD-accelerated Approximate String Matching
 
-Sassy is a library and tool for approximately searching short patterns in texts,
+Sassy is a library and tool for approximately matching short patterns in texts,
 the problem that goes by many names:
 - approximate string matching,
 - pattern searching,
 - fuzzy searching.
 
-The motivating application is searching short (~20bp) DNA fragments in a human genome (3GB), but it also works well for longer patterns up to ~1Kbp, and shorter texts.
+The motivating application is matching short (~20bp) DNA fragments in a human genome (3GB), but it also works well for longer patterns up to ~1Kbp, and shorter texts.
 
 ---
 
@@ -16,7 +16,7 @@ The motivating application is searching short (~20bp) DNA fragments in a human g
 
 * Highly optimized with SIMD
 * Bindings: **CLI**, **Python**, and **C**
-* Supports different alphabets, `Ascii`, `Dna`, and `Iupac` or you can implement your own `Profile`
+* Supports different alphabets,  $\textsf{Ascii}$,  $\textsf{Dna}$, and  $\textsf{Iupac}$ or you can implement your own $\texttt{Profile}$
 * Support overhang cost when alignments go past text boundaries
 
 ---
@@ -40,29 +40,30 @@ sassy --help
 ```
 
 #### Search patterns
-Searching a single pattern (`ATGAGCA`) in `text.fasta` with ≤1 edit:
+Searching a single pattern $\textsf{ATGAGCA}$ in $\textnormal{text.fasta}$ with ≤1 edit:
 
 ```bash
 sassy search --pattern ATGAGCA --alphabet dna -k 1 text.fasta
 ```
-or search with a multi-fasta file with `--pattern-fasta <fasta-file>` instead of `--pattern`.
+or search with a multi-fasta file with $\texttt{--pattern-fasta <fasta-file>}$ instead of $\texttt{--pattern}$.
 
 For the alphabets see [supported alphabets](#supported-alphabets)
 
-#### Crispr off-target
-CRISPR off-target search for guides in `guides.txt`:
+#### CRISPR off-target
+CRISPR off-target search for guides in $\textnormal{guides.txt}$:
 
 ```bash
 sassy crispr --guide guides.txt --k 1  text.fasta
 ```
-Allows at most 1 error in the sgRNA (not the PAM), if `--allow-pam-edits` is enabled
-it allows at most 1 edits across the sgRNA+PAM.
+Allows $\leq k$ edits in the sgRNA (not the PAM), if $\texttt{--allow-pam-edits}$ is enabled
+it allows $\leq k$ edits across the sgRNA+PAM.
 
-For additional CLI options see `sassy <command> --help`.
+
+For additional CLI options see $\texttt{sassy <command> --help}$.
 
 ### 2. Python bindings
 
-We regularly publish wheels on PyPi which can be installed with:
+We regularly publish wheels on PyPI which can be installed with:
 
 ```bash
 pip install sassy-rs 
@@ -74,7 +75,7 @@ import sassy
 pattern = b"ATCGATCG"
 text    = b"GGGGATCGATCGTTTT"
 
-searcher = sassy.Searcher("dna")    # ascii / dna / iupac
+searcher = sassy.Searcher("dna") # ascii / dna / iupac
 matches  = searcher.search(pattern, text, k=1)
 
 for m in matches:
@@ -128,7 +129,7 @@ Detailed API documentation and build instructions are in
 
 <sup>1</sup> See [IUPAC nucleotide codes](https://www.bioinformatics.org/sms/iupac.html) for details.
 
-When using Sassy as Rust library you can also implement a custom `Profile`.
+When using Sassy as Rust library you can also implement a custom $\texttt{Profile}$.
 
 ---
 
