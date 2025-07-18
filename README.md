@@ -1,4 +1,6 @@
-# Sassy: SIMD Approximate String Searching
+[![PyPI version](https://img.shields.io/pypi/v/sassy-rs.svg)](https://pypi.org/project/sassy-rs/)
+
+# Sassy: SIMD-accelerated Approximate String Searching
 
 Sassy is a library and tool for approximately searching short patterns in texts,
 the problem that goes by many names:
@@ -6,81 +8,142 @@ the problem that goes by many names:
 - pattern searching,
 - fuzzy searching.
 
-The motivating application is searching short (~20bp) DNA fragments in a human
-genome (3GB), but it also works well for longer patterns up to ~1Kbp, and
-shorter texts.
+The motivating application is searching short (~20bp) DNA fragments in a human genome (3GB), but it also works well for longer patterns up to ~1Kbp, and shorter texts.
+
+---
+
+## Key features
+
+* Highly optimized with SIMD
+* Bindings: **CLI**, **Python**, and **C**
+* Supports different alphabets, `Ascii`, `Dna`, and `Iupac` or you can implement your own `Profile`
+* Support overhang cost when alignments go past text boundaries
+
+---
 
 ## Usage
 
-```
-> cargo run -r --  --help
+> Pick the interface that best suits your workflow.
 
-Usage: sassy <COMMAND>
+### 1. Command-line interface (CLI)
 
-Commands:
-  search  Search a single sequence or multi-fasta in a multi-fasta text
-  crispr  CRISPR-specific search with PAM and edit-free region
-  help    Print this message or the help of the given subcommand(s)
+Install from source (requires Rust ≥1.73):
 
-Options:
-  -h, --help     Print help
-  -V, --version  Print version
-
+```bash
+cargo install --git https://github.com/RagnarGrootKoerkamp/sassy
 ```
 
-## Examples
+Explore the sub-commands:
 
+```bash
+sassy --help
+```
 
-### Search
+#### pattern/fasta search
+Searching a single pattern (`ATGAGCA`) in `text.fasta` with ≤1 edit:
+
+```bash
+sassy search --pattern ATGAGCA --alphabet dna -k 1 text.fasta
+```
+or search with a multi-fasta file with `--pattern-fasta <fasta-file>` instead of `--pattern`.
+
+For the alphabets see [supported alphabets](#supported-alphabets)
+
+#### Crispr off-target
+CRISPR off-target search for guides in `guides.txt` (PAM tolerant, 1 edit):
+
+```bash
+sassy crispr --guide guides.txt --k 1 --allow-pam-edits text.fasta
+```
+
+For additional CLI options see `sassy <command> --help`.
+
+### 2. Python bindings
+
+We regularly publish wheels on PyPi which can be installed with:
+
+```bash
+pip install sassy-rs 
+```
+
+```python
+import sassy
+
+pattern = b"ATCGATCG"
+text    = b"GGGGATCGATCGTTTT"
+
+searcher = sassy.Searcher("dna")    # ascii / dna / iupac
+matches  = searcher.search(pattern, text, k=1)
+
+for m in matches:
+    print(m)
+```
+
+Output
+
+```text
+Match(text_start=4, text_end=12, cost=0, strand='+', cigar='8=')
+Match(text_start=6, text_end=14, cost=1, strand='-', cigar='6=X=')
+Match(text_start=2, text_end=10, cost=1, strand='-', cigar='X7=')
+```
+
+See [python/README.md](python/README.md) for more details.
+
+### 3. C library
+
+Enable the `c` feature when building, then link against the generated static
+library:
+
+```bash
+cargo build --release --features c
+```
+
+Minimal usage example:
+
+```c
+#include <stdio.h>
+#include "sassy.h"
+
+int main(void) {
+    const char *pattern = "ATCG";
+    const char *text    = "AAAATCGT";
+
+    SassySearcher *s = sassy_searcher_new(SASSY_ALPHABET_DNA, /*rc=*/true);
+    SassyMatches  *m = sassy_search(s, pattern, 4, text, 8, /*k=*/1);
+
+    sassy_matches_print(m);
+
+    sassy_matches_free(m);
+    sassy_searcher_free(s);
+    return 0;
+}
+```
+
+Detailed API documentation and build instructions are in
+[c/README.md](c/README.md).
 
 ---
-**Search single pattern (--pattern)**
 
+## Supported alphabets
 
-To search the pattern `ATGAGCA` in the fasta file `text.fasta` allowing up to `1` edit:
-```bash 
-cargo run -r -- sassy search --pattern "ATGAGCA" --alphabet dna -k 1 text.fasta
-```
-This will print the output to `stdout`, if you want to save it to a file use `--output matches.txt`. 
-For alphabets see [alphabets section](#alphabets).
+| Alphabet | Description                               |
+| -------- | ----------------------------------------- |
+| ASCII    | Exact character equality                  |
+| DNA      | Case-insensitive `A C G T`                |
+| IUPAC<sup>1</sup>    | Extended IUPAC codes (e.g. `N`, `Y`, `R`) |
 
+<sup>1</sup> See [IUPAC nucleotide codes](https://www.bioinformatics.org/sms/iupac.html) for details.
 
-
+When using Sassy as Rust library you can also implement a custom `Profile`.
 
 ---
-**Search with multi Fasta (--pattern-fasta)**
-
-
-If you have more than one pattern to search, you can use `--pattern-fasta` instead of `--pattern`:
-```bash 
-cargo run -r -- sassy search --pattern-fasta patterns.fasta --alphabet dna -k 1 text.fasta
-```
----
-
-### Off-target (CRISPR)
-To search a list of sgRNAs flanked by a PAM sequence. 
-
-```bash 
-cargo run -r -- sassy crispr --guide guides.txt --k 1 text.fasta
-```
-*Note* to stick to common format the input for `--guide` is a .txt file, not a fasta file, with a 
-guide per line.
-If you want to limit the matches with `N` characters, you can use `--max-n-frac`, and if you 
-do allow edits in the PAM sequence you can use the `--allow-pam-edits` flag.
-
-
-## Alphabets
-Three alphabets are supported:
-- *ASCII*: only equal characters match.
-- *DNA*: Only `ACTG` and `actg` characters are expected, and treated case-insensitively.
-- *IUPAC*: On top of the DNA characters, also supports `NYR` and furter
-  characters (again, case insensitive), so that `A` matches `N`. See [here](https://www.bioinformatics.org/sms/iupac.html) for full table of IUPAC codes. 
 
 ## Evals
+
 For the evals see [evals/README.md](evals/README.md).
 
-## Python bindings
-For python bindings see [python/README.md](python/README.md).
+---
 
-## C bindings
-for C bindings see [c/README.md](c/README.md).
+## License
+
+MIT

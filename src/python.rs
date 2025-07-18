@@ -60,7 +60,7 @@ impl Searcher {
     }
 
     #[pyo3(signature = (pattern, text, k))]
-    #[doc = "Search for a pattern in a text. Returns a list of PyMatch."]
+    #[doc = "Search for a pattern in a text. Returns a list of Match."]
     fn search(
         &mut self,
         pattern: &Bound<'_, PyBytes>,
