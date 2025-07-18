@@ -1,6 +1,27 @@
 #![feature(portable_simd)]
 //! # Sassy: fast approximate string matching
 //!
+//! Sassy is a library for searching approximate matches of short patterns/queries in longer texts.
+//! It supports ASCII and DNA, and works best for patterns of length up to 1000.
+//!
+//! The main entrypoint is the [`Searcher`](search::Searcher) object.
+//! This can be configured with the alphabet ([`profiles::Ascii`], [`profiles::Dna`], or [`profiles::Iupac`]),
+//! whether to search the reverse complement ([`Searcher::new_fwd`], [`Searcher::new_rc`]),
+//! and optionally with an _overhang cost_ for IUPAC profiles ([`Searcher::new_fwd_with_overhang`]).
+//!
+//! Given a [`Searcher`], you can search call [`Searcher::search`] with a pattern, text, and maximum edit distance `k`.
+//! This will return a vector of [`Match`] objects, that each contain the substring of text they match, the corresponding `cost`,
+//! and the `cigar` string that describes the alignment.
+//!
+//! ## `search` vs `search_all`
+//!
+//! By default, [`Searcher::search`] will only return matches that end in a rightmost local minimum.
+//! [`Searcher::search_all`], on the other hand, always returns matches in all end-positions with cost <= `k`.
+//!
+//! See the paper (linked on [GitHub](https://github.com/RagnarGrootKoerkamp/sassy)) for details.
+//!
+//! ## Example
+//!
 //! Usage example:
 //! ```
 //! use sassy::{Searcher, Match, profiles::{Dna, Iupac}, Strand};
