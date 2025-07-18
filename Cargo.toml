@@ -6,7 +6,7 @@ authors = ["Rick Beeloo", "Ragnar Groot Koerkamp"]
 description = "Approximate string matching using SIMD"
 repository = "https://github.com/RagnarGrootKoerkamp/sassy"
 license = "MIT"
-keywords = ["bioinformatics", "SIMD", "approximate string matching", "fuzzy searching", "pattern matching"]
+keywords = ["bioinformatics", "SIMD", "string searching", "fuzzy searching", "pattern matching"]
 readme = "README.md"
 categories = ["science"]
 
