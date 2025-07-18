@@ -128,9 +128,9 @@ fn as_output_line(
 
 // To create a fixed type, cost of match should be neglible
 enum SearchWrapper {
-    Ascii(Searcher<Ascii>),
-    Dna(Searcher<Dna>),
-    Iupac(Searcher<Iupac>),
+    Ascii(Box<Searcher<Ascii>>),
+    Dna(Box<Searcher<Dna>>),
+    Iupac(Box<Searcher<Iupac>>),
 }
 
 impl SearchWrapper {
@@ -149,7 +149,7 @@ pub fn search(args: &SearchArgs) {
     assert!(!patterns.is_empty(), "No pattern sequences found");
 
     // Create output writer, stdout by default (or user provided), and share it safely across threads
-    let ref output_writer = Mutex::new(get_output_writer(args));
+    let output_writer = &Mutex::new(get_output_writer(args));
 
     // Write header
     let header = format!(
@@ -166,15 +166,19 @@ pub fn search(args: &SearchArgs) {
     let rc = (args.alphabet == Alphabet::Dna || args.alphabet == Alphabet::Iupac) && !args.no_rc;
 
     let num_threads = args.threads.unwrap_or_else(num_cpus::get);
-    let ref task_iterator = InputIterator::new(&args.path, &patterns, None, rc);
+    let task_iterator = &InputIterator::new(&args.path, &patterns, None, rc);
     std::thread::scope(|s| {
         for _ in 0..num_threads {
             s.spawn(move || {
                 // Each thread has own searcher here
                 let mut searcher: SearchWrapper = match args.alphabet {
-                    Alphabet::Ascii => SearchWrapper::Ascii(Searcher::<Ascii>::new(false, None)),
-                    Alphabet::Dna => SearchWrapper::Dna(Searcher::<Dna>::new(rc, None)),
-                    Alphabet::Iupac => SearchWrapper::Iupac(Searcher::<Iupac>::new(rc, None)),
+                    Alphabet::Ascii => {
+                        SearchWrapper::Ascii(Box::new(Searcher::<Ascii>::new(false, None)))
+                    }
+                    Alphabet::Dna => SearchWrapper::Dna(Box::new(Searcher::<Dna>::new(rc, None))),
+                    Alphabet::Iupac => {
+                        SearchWrapper::Iupac(Box::new(Searcher::<Iupac>::new(rc, None)))
+                    }
                 };
 
                 while let Some(batch) = task_iterator.next_batch() {
@@ -254,10 +258,10 @@ mod test {
         // FIXME: capture output and assert or write to file for easy check
         // anyway for now run with -- --nocapture and check for 10,50,100
         println!("Search without RC");
-        search(&mut args.clone());
+        search(&args);
 
         println!("Search with RC");
         args.no_rc = false;
-        search(&mut args);
+        search(&args);
     }
 }

@@ -52,7 +52,7 @@ impl V {
     pub fn m(&self) -> VBase {
         self.1
     }
-    pub fn value_to(v: &Vec<Self>, j: I) -> Cost {
+    pub fn value_to(v: &[Self], j: I) -> Cost {
         let mut s = 0;
         for vj in &v[0..j as usize / 64] {
             s += vj.value();
@@ -62,7 +62,7 @@ impl V {
         }
         s
     }
-    pub fn value_from(v: &Vec<Self>, j: I) -> Cost {
+    pub fn value_from(v: &[Self], j: I) -> Cost {
         let mut s = 0;
         if j % 64 != 0 {
             s += v[j as usize / 64].value_of_suffix(64 - j % 64);

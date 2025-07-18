@@ -55,7 +55,7 @@ pub fn compute_block<P: Profile>(h0: &mut H, v: &mut V, ca: &P::A, cb: &P::B) {
     let hp = (hp << 1) | h0.p();
     let hm = (hm << 1) | h0.m();
 
-    *h0 = H::from(hpw as u64, hmw);
+    *h0 = H::from(hpw, hmw);
     *v = V::from(hm | !(vx | hp), hp & vx);
 }
 

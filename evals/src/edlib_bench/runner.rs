@@ -70,7 +70,7 @@ pub fn run(grid_config: &str) {
         .write(true)
         .truncate(true)
         .open(grid.output_file())
-        .expect(&format!("Unable to open {}", grid.output_file()));
+        .unwrap_or_else(|_| panic!("Unable to open {}", grid.output_file()));
 
     let mut writer = BufWriter::new(file);
 
@@ -82,7 +82,7 @@ pub fn run(grid_config: &str) {
 
     // Get combinations
     for param_set in grid.all_combinations() {
-        println!("Param set: {:?}", param_set);
+        println!("Param set: {param_set:?}");
 
         let num_matches = param_set.matches;
         let bench_iter = param_set.bench_iter;
@@ -135,18 +135,18 @@ pub fn run(grid_config: &str) {
         if param_set.verbose {
             println!("Edlib matches");
             for loc in edlib_matches.iter() {
-                println!("{}", loc);
+                println!("{loc}");
             }
             println!("Sassy matches");
             for loc in sassy_matches.iter() {
-                println!("{:?}", loc);
+                println!("{loc:?}");
             }
         }
 
         // Write row to CSV
         writeln!(
             writer,
-            "{},{},{},{},{},{},{},{},{},{},{:.0},{:.0},{:.0},{:.0}", // Added one more .0 for plus_one_ms
+            "{},{},{},{},{},{},{},{:?},{},{},{:.0},{:.0},{:.0},{:.0}", // Added one more .0 for plus_one_ms
             param_set.query_length,
             param_set.text_length,
             param_set.k,
@@ -154,7 +154,7 @@ pub fn run(grid_config: &str) {
             sassy_matches.len(),
             param_set.max_edits,
             param_set.bench_iter,
-            format!("{:?}", param_set.alphabet),
+            param_set.alphabet,
             param_set.profile,
             param_set.rc,
             edlib_mean_ms,
@@ -180,19 +180,19 @@ fn get_search_fn(param_set: &ParamSet) -> SearchFn {
         // IUPAC profile
         "iupac" => {
             let mut searcher = Searcher::<sassy::profiles::Iupac>::new(rc, None);
-            Box::new(move |q, t, k| searcher.search(&q, &t, k))
+            Box::new(move |q, t, k| searcher.search(q, &t, k))
         }
 
         // DNA profile
         "dna" => {
             let mut searcher = Searcher::<sassy::profiles::Dna>::new(rc, None);
-            Box::new(move |q, t, k| searcher.search(&q, &t, k))
+            Box::new(move |q, t, k| searcher.search(q, &t, k))
         }
 
         // ASCII profile
         "ascii" => {
             let mut searcher = Searcher::<sassy::profiles::Ascii>::new(rc, None);
-            Box::new(move |q, t, k| searcher.search(&q, &t, k))
+            Box::new(move |q, t, k| searcher.search(q, &t, k))
         }
 
         _ => panic!(

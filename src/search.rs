@@ -92,7 +92,7 @@ pub trait RcSearchAble {
     /// The forward text
     fn text(&self) -> impl AsRef<[u8]>;
     /// The reverse text
-    fn rev_text<'a>(&'a self) -> impl AsRef<[u8]>;
+    fn rev_text(&self) -> impl AsRef<[u8]>;
 }
 
 /// Any text can be reversed on the fly.
@@ -1227,7 +1227,7 @@ mod tests {
                 // eprintln!("matches {matches:?}");
                 // let m = matches
                 //     .iter()
-                //     .find(|m| (m.text_start as usize).abs_diff(expected_idx) <= edits);
+                //     .find(|m| m.text_start .abs_diff(expected_idx) <= edits);
                 // assert!(m.is_some());
 
                 // // Also rc search, should still find the same match
@@ -1236,7 +1236,7 @@ mod tests {
                 // eprintln!("matches {matches:?}");
                 // let m = matches
                 //     .iter()
-                //     .find(|m| (m.text_start as usize).abs_diff(expected_idx) <= edits);
+                //     .find(|m| m.text_start .abs_diff(expected_idx) <= edits);
                 // assert!(m.is_some());
 
                 // Check if fwd and rev give the same
@@ -1312,9 +1312,7 @@ mod tests {
 
         // Verify all matches are found
         for expected_idx in expected_matches {
-            let found = matches
-                .iter()
-                .any(|m| m.text_start as usize == expected_idx);
+            let found = matches.iter().any(|m| m.text_start == expected_idx);
             assert!(found, "Expected match at {} not found", expected_idx);
         }
 
@@ -1650,15 +1648,13 @@ mod tests {
         println!("Forward matches:");
         for m in fwd_matches.iter() {
             println!("  {:?}", m.without_cigar());
-            let matching_slice =
-                String::from_utf8_lossy(&text[m.text_start as usize..m.text_end as usize]);
+            let matching_slice = String::from_utf8_lossy(&text[m.text_start..m.text_end]);
             println!("\tM slice: {}", matching_slice);
         }
         println!("\nReverse complement matches:");
         for m in rc_matches.iter() {
             println!("  {:?}", m.without_cigar());
-            let matching_slice =
-                String::from_utf8_lossy(&text[m.text_start as usize..m.text_end as usize]);
+            let matching_slice = String::from_utf8_lossy(&text[m.text_start..m.text_end]);
             println!("\tM slice: {}", matching_slice);
         }
 
@@ -1722,7 +1718,7 @@ mod tests {
 
         let m = matches
             .iter()
-            .find(|m| (m.text_start as usize).abs_diff(expected_idx) <= edits);
+            .find(|m| m.text_start.abs_diff(expected_idx) <= edits);
         assert!(m.is_some(), "Fwd searcher failed");
     }
 
@@ -1759,7 +1755,7 @@ mod tests {
 
         let m = matches
             .iter()
-            .find(|m| (m.text_start as usize).abs_diff(expected_idx) <= edits);
+            .find(|m| m.text_start.abs_diff(expected_idx) <= edits);
         assert!(m.is_some(), "Fwd searcher failed");
     }
 
@@ -1796,7 +1792,7 @@ mod tests {
 
         let m = matches
             .iter()
-            .find(|m| (m.text_start as usize).abs_diff(expected_idx) <= edits);
+            .find(|m| m.text_start.abs_diff(expected_idx) <= edits);
         assert!(m.is_some(), "Fwd searcher failed");
     }
 
@@ -1931,7 +1927,7 @@ mod tests {
         let fwd_cigar = matches[0].cigar.to_string();
         println!(
             "start - end: {} - {}",
-            matches[0].text_start as usize, matches[0].text_end as usize
+            matches[0].text_start, matches[0].text_end
         );
         println!("FWD: {}", fwd_cigar);
         // RC search
@@ -1939,7 +1935,7 @@ mod tests {
         let rc_cigar = matches[0].cigar.to_string();
         println!(
             "start - end: {} - {}",
-            matches[0].text_start as usize, matches[0].text_end as usize
+            matches[0].text_start, matches[0].text_end
         );
         println!("RC: {}", rc_cigar);
     }
@@ -1985,8 +1981,8 @@ mod tests {
         let matches = searcher.search(pattern, &text, 2);
 
         for m in matches {
-            let start = m.text_start as usize;
-            let end = m.text_end as usize;
+            let start = m.text_start;
+            let end = m.text_end;
             let m_text = &text[start..end];
             println!(
                 "m_text: {}",
@@ -1999,8 +1995,8 @@ mod tests {
         let mut searcher = Searcher::<Iupac>::new_rc();
         let matches = searcher.search(&pattern_rc, &text, 2);
         for m in matches {
-            let start = m.text_start as usize;
-            let end = m.text_end as usize;
+            let start = m.text_start;
+            let end = m.text_end;
             let m_text = &text[start..end];
             println!(
                 "m_text: {}",
@@ -2028,7 +2024,7 @@ mod tests {
         println!("pattern: {:?}", String::from_utf8_lossy(&pattern));
         println!(
             "pattern rc: {:?}",
-            String::from_utf8_lossy(&pattern_rc.as_slice())
+            String::from_utf8_lossy(pattern_rc.as_slice())
         );
         println!("Sub text: {:?}", String::from_utf8_lossy(text));
         let mut searcher = Searcher::<Iupac>::new_rc();
@@ -2068,7 +2064,7 @@ mod tests {
         let matches = searcher.search(q, &text, 12);
         for m in matches.iter() {
             println!("m: {:?}", m.without_cigar());
-            let (m_start, m_end) = (m.text_start as usize, m.text_end as usize);
+            let (m_start, m_end) = (m.text_start, m.text_end);
             let m_text = &text[m_start..m_end];
             let path = m.to_path();
             println!("Cigar: {}", m.cigar.to_string());
@@ -2088,7 +2084,7 @@ mod tests {
         println!("Reverse matches");
         let matches = searcher.search(q, &text_rc, 12);
         for m in matches.iter() {
-            let (m_start, m_end) = (m.text_start, m.text_end as usize);
+            let (m_start, m_end) = (m.text_start, m.text_end);
             let m_text = &text_rc[m_start..m_end];
             println!("Match text: {}", String::from_utf8_lossy(m_text));
             let path = m.to_path();

@@ -147,7 +147,7 @@ pub fn matching_seq<P: Profile>(seq1: &[u8], seq2: &[u8]) -> bool {
     true
 }
 
-pub fn crispr(args: CrisprArgs) {
+pub fn crispr(args: &CrisprArgs) {
     let guide_sequences = read_guide_sequences(&args.guide);
     println!("[GUIDES] Found {} guides", guide_sequences.len());
 
@@ -156,7 +156,7 @@ pub fn crispr(args: CrisprArgs) {
     }
 
     // Read the first record from the FASTA file for benchmarking
-    let ref writer = Mutex::new(get_output_writer(&args));
+    let writer = &Mutex::new(get_output_writer(args));
 
     // Write header
     let header = format!(
@@ -165,7 +165,7 @@ pub fn crispr(args: CrisprArgs) {
     );
     writer.lock().unwrap().write_all(header.as_bytes()).unwrap();
 
-    let (pam, max_n_frac) = print_and_check_params(&args, &guide_sequences);
+    let (pam, max_n_frac) = print_and_check_params(args, &guide_sequences);
     let pam = pam.as_bytes();
     let pam_compl = Iupac::complement(pam);
     let pam_compl = pam_compl.as_slice();

@@ -23,8 +23,8 @@ fn main() {
     let args = Args::parse();
     env_logger::init();
 
-    match args {
-        Args::Search(search_args) => search(&mut search_args.clone()),
+    match &args {
+        Args::Search(search_args) => search(search_args),
         Args::Crispr(crispr_args) => crispr(crispr_args),
         Args::Test => {
             sassy::test_cpu_features();

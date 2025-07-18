@@ -276,8 +276,8 @@ mod tests {
 
         let mut cost_matrix = Default::default();
         simd_fill::<Dna>(
-            &query,
-            &[&text1, &text2, &text3, &text4],
+            query,
+            &[text1, text2, text3, text4],
             text4.len(),
             &mut cost_matrix,
             None,
