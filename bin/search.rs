@@ -209,6 +209,7 @@ mod test {
     use super::*;
     use rand::Rng;
     use std::io::Write;
+    use tempfile::NamedTempFile;
 
     fn random_dna_string(len: usize) -> Vec<u8> {
         let mut rng = rand::rng();
@@ -240,14 +241,14 @@ mod test {
         text.splice(50..50, query.iter().copied());
         text.splice(100..100, rc(query).iter().copied());
         // Write to file
-        let mut file = std::fs::File::create("test.fasta").unwrap();
-        writeln!(file, ">test").unwrap();
-        writeln!(file, "{}", String::from_utf8_lossy(&text)).unwrap();
+        let mut tmp_file = NamedTempFile::new().expect("Failed to create tmp file");
+        writeln!(tmp_file, ">test").unwrap();
+        writeln!(tmp_file, "{}", String::from_utf8_lossy(&text)).unwrap();
 
         let mut args: SearchArgs = SearchArgs {
             pattern: Some(String::from_utf8(query.to_vec()).unwrap()),
             k: 0,
-            path: PathBuf::from("test.fasta"),
+            path: tmp_file.path().to_path_buf(),
             alphabet: Alphabet::Dna,
             no_rc: true,
             threads: Some(1),
@@ -255,7 +256,7 @@ mod test {
             output: None,
         };
 
-        // FIXME: capture output and assert or write to file for easy check
+        // FIXME: capture output and assert or write to tmp_file for easy check
         // anyway for now run with -- --nocapture and check for 10,50,100
         println!("Search without RC");
         search(&args);
@@ -263,5 +264,7 @@ mod test {
         println!("Search with RC");
         args.no_rc = false;
         search(&args);
+
+        drop(tmp_file)
     }
 }
