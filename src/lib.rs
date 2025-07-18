@@ -24,68 +24,94 @@
 //!
 //! Usage example:
 //! ```
-//! use sassy::{Searcher, Match, profiles::{Dna, Iupac}, Strand};
-//!
-//!
-//! let pattern = b"ATCG"; // ATCG dist=1
-//! let text = b"AAAATCGGGGGGCATGGG";
-//! let k = 1;
-//! // rc = CGAT         rc: CAT dist=1
-//!
-//! let mut searcher = Searcher::<Dna>::new_rc();
-//! let matches = searcher.search(pattern, &text, k);
-//!
-//! assert_eq!(matches.len(), 3);
-//!
-//! assert_eq!(matches[0].text_start, 3);
-//! assert_eq!(matches[0].text_end, 7);
-//! assert_eq!(matches[0].cost, 0);
-//! assert_eq!(matches[0].strand, Strand::Fwd);
-//! assert_eq!(matches[0].cigar.to_string(), "4=");
-//!
-//! assert_eq!(matches[1].text_start, 13);
-//! assert_eq!(matches[1].text_end, 17);
-//! assert_eq!(matches[1].cost, 1);
-//! assert_eq!(matches[1].strand, Strand::Fwd);
-//! assert_eq!(matches[1].cigar.to_string(), "2=X=");
-//!
-//! assert_eq!(matches[2].text_start, 12);
-//! assert_eq!(matches[2].text_end, 15);
-//! assert_eq!(matches[2].cost, 1);
-//! assert_eq!(matches[2].strand, Strand::Rc);
-//! assert_eq!(matches[2].cigar.to_string(), "2=D=");
-//!
-//! // Search with overhang and IUPAC.
-//!
-//! let pattern = b"ACGT";
-//! let text =      b"GTXXXNNN";
-//! //                     ACGT
-//! let alpha = 0.5;
-//! let k = 1;
-//!
-//! let mut searcher = Searcher::<Iupac>::new_fwd_with_overhang(alpha);
-//! let matches = searcher.search(pattern, &text, k);
-//!
-//! eprintln!("{:?}", matches);
-//!
-//! assert_eq!(matches[0].pattern_start, 2);
-//! assert_eq!(matches[0].pattern_end, 4);
-//! assert_eq!(matches[0].text_start, 0);
-//! assert_eq!(matches[0].text_end, 2);
-//! assert_eq!(matches[0].cost, 1);
-//! assert_eq!(matches[0].strand, Strand::Fwd);
-//! assert_eq!(matches[0].cigar.to_string(), "2=");
-//!
-//! assert_eq!(matches[1].pattern_start, 0);
-//! assert_eq!(matches[1].pattern_end, 3);
-//! assert_eq!(matches[1].text_start, 5);
-//! assert_eq!(matches[1].text_end, 8);
-//! assert_eq!(matches[1].cost, 0);
-//! assert_eq!(matches[1].strand, Strand::Fwd);
-//! assert_eq!(matches[1].cigar.to_string(), "3=");
-//! ```
+use sassy::{
+    CachedRev, Match, Searcher, Strand,
+    profiles::{Dna, Iupac},
+};
+
+// --- Test data ---
+let pattern = b"ATCG";
+let text = b"CCCATCACCC";
+let k = 1;
+
+// --- FWD only search ---
+/*
+    CCCATCACCC (text)
+       |||x
+       ATCG    (pattern)
+*/
+let mut searcher = Searcher::<Dna>::new_fwd();
+let matches = searcher.search(pattern, &text, k);
+
+assert_eq!(matches.len(), 1);
+let fwd_match = matches[0].clone();
+assert_eq!(fwd_match.pattern_start, 0);
+assert_eq!(fwd_match.pattern_end, 4);
+assert_eq!(fwd_match.text_start, 3);
+assert_eq!(fwd_match.text_end, 7);
+assert_eq!(fwd_match.cost, 1);
+assert_eq!(fwd_match.strand, Strand::Fwd);
+assert_eq!(fwd_match.cigar.to_string(), "3=X");
+
+// --- FWD + RC search ---
+/*
+    CCCATCACCC (text)       GGGTGATGGG (text - rc)
+       |||x                      ||x|
+       ATCG    (pattern)         ATCG
+*/
+let mut searcher = Searcher::<Dna>::new_rc();
+// We can cache the reverse text if we do multiple pattern
+// searches in `rc` mode
+let cached_text = CachedRev::new(text, true);
+let matches = searcher.search(pattern, &cached_text, k);
+
+// Gives two matches, of which one the previous forward match
+assert_eq!(matches.len(), 2);
+assert_eq!(matches[0], fwd_match);
+let rc_match = matches[1].clone();
+assert_eq!(rc_match.pattern_start, 0);
+assert_eq!(rc_match.pattern_end, 4);
+assert_eq!(rc_match.text_start, 1);
+assert_eq!(rc_match.text_end, 5);
+assert_eq!(rc_match.cost, 1);
+assert_eq!(rc_match.strand, Strand::Rc);
+assert_eq!(rc_match.cigar.to_string(), "2=X=");
+
+// --- FWD + RC search with overhang ---
+/*
+              GTXXXNNN     (text)
+              ||   |||
+            ACGT   ACGT    (pattern)
+*/
+let pattern = b"ACGT";
+let text = b"GTXXXNNN";
+let alpha = 0.5;
+let k = 1;
+let mut searcher = Searcher::<Iupac>::new_fwd_with_overhang(alpha);
+let matches = searcher.search(pattern, &text, k);
+
+assert_eq!(matches[0].pattern_start, 2);
+assert_eq!(matches[0].pattern_end, 4);
+assert_eq!(matches[0].text_start, 0);
+assert_eq!(matches[0].text_end, 2);
+assert_eq!(matches[0].cost, 1);
+assert_eq!(matches[0].strand, Strand::Fwd);
+assert_eq!(matches[0].cigar.to_string(), "2=");
+
+assert_eq!(matches[1].pattern_start, 0);
+assert_eq!(matches[1].pattern_end, 3);
+assert_eq!(matches[1].text_start, 5);
+assert_eq!(matches[1].text_end, 8);
+assert_eq!(matches[1].cost, 0);
+assert_eq!(matches[1].strand, Strand::Fwd);
+assert_eq!(matches[1].cigar.to_string(), "3=");
+```
 #![cfg_attr(
-    not(any(doc, all(target_feature = "avx2", target_feature = "bmi2",))),
+    not(any(
+        doc,
+        debug_assertions,
+        all(target_feature = "avx2", target_feature = "bmi2",)
+    )),
     deprecated(
         note = "Sassy currently requires x86-64 with AVX2 and BMI2 instructions. Compile using `-C target-cpu=x64-64-v3`."
     )
@@ -188,6 +214,7 @@ pub fn test_cpu_features() {
     }
 }
 
+/// Print throughput in GB/s for random pattern and text.
 pub fn test_throughput() {
     eprintln!("Running a little test: aligning a 23bp pattern against 100kb text, with 1 error.");
     eprintln!("With AVX2, this is typically around 2GB/s. Without, closer to 1.3GB/s.");
