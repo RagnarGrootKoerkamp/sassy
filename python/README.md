@@ -4,15 +4,14 @@
 
 ## Installation
 
-
-### From pip
+**Pip.**
 ```bash
 pip install sassy-rs
 ```
 (as sassy was already taken we chose sassy-rs)
 
-### From source
-In the root after git clone, run: 
+**From source.**
+In the root of the repository, run: 
 ```bash
 maturin develop --features python
 ```
@@ -66,12 +65,13 @@ Further options are `sassy.Searcher(alpha=0.5)` to allow overhang alignments,
 and `sassy.Searcher("dna", rc=False)` to disable reverse complements for DNA
 or IUPAC strings.
 
-See [example.py](sassy/example.py) for a larger example.
+See [sassy/example.py](sassy/example.py) for a larger example.
 
 ## Troubleshooting
 
 
-### 1. I could install `sassy-rc` but no modules/functions are found
+**1. I could install `sassy-rc` but no modules/functions are found.**
+
 When creating an issue please include the output of `print(dir(sassy))` if you were able to install `sassy-rs` but no functions/modules were found. 
 
 Your output might look like:
@@ -83,5 +83,6 @@ Whereas it should look like:
 ['Searcher', '__all__', '__builtins__', '__cached__', '__doc__', '__file__', '__loader__', '__name__', '__package__', '__path__', '__spec__', 'features', 'sassy']
 ```
 
-### 2. Other sassy issues
+**2. Other sassy issues.**
+
 If you were able to install sassy, but have other issues please also add the output of `sassy.features()`.

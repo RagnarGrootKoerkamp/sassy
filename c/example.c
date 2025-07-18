@@ -18,15 +18,14 @@ int main() {
 	const char* text    = "CCCCCCCCCAAGGGGACCCCCAAGGCGACCCCCCCCC";
 	const size_t k      = 1;
 
-	sassy_Match* out_matches = NULL;
+	sassy_Match* matches = NULL;
 
-	size_t n_matches = search(searcher, (const uint8_t*)pattern, strlen(pattern),
-	                          (const uint8_t*)text, strlen(text), k, &out_matches);
+	size_t n_matches = search(searcher, pattern, strlen(pattern), text, strlen(text), k, &matches);
 
 	printf("Found %zu match(es):\n", n_matches);
-	for(size_t i = 0; i < n_matches; i++) print_match(&out_matches[i], i);
+	for(size_t i = 0; i < n_matches; i++) print_match(&matches[i], i);
 
-	sassy_matches_free(out_matches, n_matches);
+	sassy_matches_free(matches, n_matches);
 	sassy_searcher_free(searcher);
 
 	return 0;

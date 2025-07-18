@@ -1,69 +1,58 @@
-[![PyPI version](https://img.shields.io/pypi/v/sassy-rs.svg)](https://pypi.org/project/sassy-rs/)
+[![crates.io](https://img.shields.io/crates/v/sassy.svg)](https://crates.io/crates/sassy)
+[![docs.rs](https://img.shields.io/docsrs/sassy.svg)](https://docs.rs/sassy)
+[![PyPI](https://img.shields.io/pypi/v/sassy-rs.svg)](https://pypi.org/project/sassy-rs/)
 
 # Sassy: SIMD-accelerated Approximate String Matching
 
-Sassy is a library and tool for approximately matching short patterns in texts,
-the problem that goes by many names:
+Sassy is a library and tool for searching short strings in texts,
+a problem that goes by many names:
 - approximate string matching,
-- pattern searching,
+- pattern matching,
 - fuzzy searching.
 
-The motivating application is matching short (~20bp) DNA fragments in a human genome (3GB), but it also works well for longer patterns up to ~1Kbp, and shorter texts.
+The motivating application is searching short (length 20 to 100) DNA sequences
+in a human genome or e.g. sets of reads, but it generally works well for
+patterns/queries up to length 1000, and also supports plain ASCII alphabet.
 
----
+Highlights:
+- Sassy uses bitpacking and SIMD, and its main novelty is tiling these in the
+  text direction.
+- Support for _overhang_ alignments where the pattern extends beyond the text.
+- Support for (case-insensitive) ASCII, DNA (`ACGT`), and
+  [IUPAC](https://www.bioinformatics.org/sms/iupac.html) (=DNA+`NYR`...) alphabets.
+- Rust library (`cargo add sassy`), binary (`cargo install sassy`), Python
+  bindings (`pip install sassy-rs`), and C bindings (see below).
 
-## Key features
-
-* Highly optimized with SIMD
-* Bindings: **CLI**, **Python**, and **C**
-* Supports different alphabets,  `Ascii`,  `Dna`, and `Iupac` or you can implement your own Profile
-* Support overhang cost when alignments go past text boundaries
-
----
+**The paper** can be found at TODO, and evals are in [evals/](evals/).
 
 ## Usage
 
-> Pick the interface that best suits your workflow.
-
 ### 1. Command-line interface (CLI)
 
-Install from source (requires Rust ≥1.73):
+**Build and install** using `cargo`:
 
 ```bash
-cargo install --git https://github.com/RagnarGrootKoerkamp/sassy
+cargo install sassy
 ```
 
-Explore the sub-commands:
-
-```bash
-sassy --help
-```
-
-#### Search patterns
-Searching a single pattern `ATGAGCA` in `text.fasta` with ≤1 edit:
-
+**Search a pattern** `ATGAGCA` in `text.fasta` with ≤1 edit:
 ```bash
 sassy search --pattern ATGAGCA --alphabet dna -k 1 text.fasta
 ```
-or search with a multi-fasta file with `--pattern-fasta <fasta-file>` instead of `--pattern`.
+or search all records of a fasta file with `--pattern-fasta <fasta-file>` instead of `--pattern`.
 
 For the alphabets see [supported alphabets](#supported-alphabets)
 
-#### CRISPR off-target
-CRISPR off-target search for guides in `guides.txt`:
-
+**CRISPR off-target search** for guides in `guides.txt`:
 ```bash
 sassy crispr --guide guides.txt --k 1  text.fasta
 ```
-Allows `<= k` edits in the sgRNA (not the PAM), if `--allow-pam-edits` is enabled
-it allows `<= k` edits across the sgRNA+PAM.
-
-
-For additional CLI options see `sassy <command> --help`.
+Allows `<= k` edits in the sgRNA, and the PAM has to match exactly, unless
+`--allow-pam-edits` is given.
 
 ### 2. Python bindings
 
-We regularly publish wheels on PyPI which can be installed with:
+PyPI wheels can be installed with:
 
 ```bash
 pip install sassy-rs 
@@ -72,8 +61,8 @@ pip install sassy-rs
 ```python
 import sassy
 
-pattern = b"ATCGATCG"
-text    = b"GGGGATCGATCGTTTT"
+pattern = b"ACTG"
+text    = b"ACGGCTACGCAGCATCATCAGCAT"
 
 searcher = sassy.Searcher("dna") # ascii / dna / iupac
 matches  = searcher.search(pattern, text, k=1)
@@ -86,59 +75,25 @@ See [python/README.md](python/README.md) for more details.
 
 ### 3. C library
 
-Enable the `c` feature when building, then link against the generated static
-library:
-
-```bash
-cargo build --release --features c
-```
-
-Minimal usage example:
+See [c/README.md](c/README.md) for details. Quick example:
 
 ```c
-#include <stdio.h>
 #include "sassy.h"
 
-int main(void) {
-    const char *pattern = "ATCG";
-    const char *text    = "AAAATCGT";
+int main() {
+    const char* pattern = "ACTG";
+    const char* text    = "ACGGCTACGCAGCATCATCAGCAT";
 
-    SassySearcher *s = sassy_searcher_new(SASSY_ALPHABET_DNA, /*rc=*/true);
-    SassyMatches  *m = sassy_search(s, pattern, 4, text, 8, /*k=*/1);
+    // DNA alphabet, with reverse complement, without overhang.
+    sassy_SearcherType* searcher = sassy_searcher("dna", true, NAN);
+    sassy_Match* out_matches = NULL;
+    size_t n_matches = search(searcher,
+                              pattern, strlen(pattern),
+                              text, strlen(text),
+                              1, // k=1
+                              &out_matches);
 
-    sassy_matches_print(m);
-
-    sassy_matches_free(m);
-    sassy_searcher_free(s);
-    return 0;
+    sassy_matches_free(out_matches, n_matches);
+    sassy_searcher_free(searcher);
 }
 ```
-
-Detailed API documentation and build instructions are in
-[c/README.md](c/README.md).
-
----
-
-## Supported alphabets
-
-| Alphabet | Description                               |
-| -------- | ----------------------------------------- |
-| ASCII    | Exact character equality                  |
-| DNA      | Case-insensitive `A C G T`                |
-| IUPAC<sup>1</sup>    | Extended IUPAC codes (e.g. `N`, `Y`, `R`) |
-
-<sup>1</sup> See [IUPAC nucleotide codes](https://www.bioinformatics.org/sms/iupac.html) for details.
-
-When using Sassy as Rust library you can also implement a custom Profile.
-
----
-
-## Evals
-
-For the evals see [evals/README.md](evals/README.md).
-
----
-
-## License
-
-MIT
