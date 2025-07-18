@@ -9,7 +9,7 @@
 ```bash
 pip install sassy-rs
 ```
-(as sassy as already taken we chose sassy-rs)
+(as sassy was already taken we chose sassy-rs)
 
 ### From source
 In the root after git clone, run: 
