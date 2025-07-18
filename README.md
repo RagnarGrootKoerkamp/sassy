@@ -24,7 +24,7 @@ Highlights:
 - Rust library (`cargo add sassy`), binary (`cargo install sassy`), Python
   bindings (`pip install sassy-rs`), and C bindings (see below).
 
-**The paper** can be found here, and evals are in [evals/](evals/).
+**The paper** (_Sassy: Searching Short DNA Strings in the 2020s_) can be found [here](https://curiouscoding.nl/papers/sassy.pdf), and evals are in [evals/](evals/).
 
 The main **limitation** is that currently **AVX2** and **BMI2** are required.
 
