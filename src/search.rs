@@ -1146,7 +1146,7 @@ mod tests {
 
     #[test]
     fn search_fuzz() {
-        let mut query_lens = (10..20)
+        let mut pattern_lens = (10..20)
             .chain((0..10).map(|_| random_range(10..100)))
             .chain((0..10).map(|_| random_range(100..1000)))
             .collect::<Vec<_>>();
@@ -1157,42 +1157,42 @@ mod tests {
             .chain((0..10).map(|_| random_range(1000..10000)))
             .collect::<Vec<_>>();
 
-        query_lens.sort();
+        pattern_lens.sort();
         text_lens.sort();
 
         // Create single searcher for all tests to check proper resetting of internal states
         let mut searcher = Searcher::<Dna>::new_fwd();
         let mut rc_searcher = Searcher::<Dna>::new_rc();
 
-        for q in query_lens {
+        for pattern_len in pattern_lens {
             for t in text_lens.clone() {
-                println!("q {q} t {t}");
-                let query = (0..q)
+                println!("q {pattern_len} t {t}");
+                let pattern = (0..pattern_len)
                     .map(|_| b"ACGT"[random_range(0..4)])
                     .collect::<Vec<_>>();
                 let mut text = (0..t)
                     .map(|_| b"ACGT"[random_range(0..4)])
                     .collect::<Vec<_>>();
 
-                let edits = random_range(0..q / 3);
-                let mut p = query.clone();
+                let edits = random_range(0..pattern_len / 3);
+                let mut p_mutated = pattern.clone();
                 for _ in 0..edits {
                     let tp = random_range(0..3);
                     match tp {
                         0 => {
                             // insert
-                            let idx = random_range(0..=p.len());
-                            p.insert(idx, b"ACGT"[random_range(0..4)]);
+                            let idx = random_range(0..=p_mutated.len());
+                            p_mutated.insert(idx, b"ACGT"[random_range(0..4)]);
                         }
                         1 => {
                             // del
-                            let idx = random_range(0..p.len());
-                            p.remove(idx);
+                            let idx = random_range(0..p_mutated.len());
+                            p_mutated.remove(idx);
                         }
                         2 => {
                             // replace
-                            let idx = random_range(0..p.len());
-                            p[idx] = b"ACGT"[random_range(0..4)];
+                            let idx = random_range(0..p_mutated.len());
+                            p_mutated[idx] = b"ACGT"[random_range(0..4)];
                         }
                         _ => panic!(),
                     }
@@ -1203,24 +1203,24 @@ mod tests {
                 }
                 eprintln!("\n");
                 eprintln!("edits {edits}");
-                eprintln!("query q={q} {}", show(&query));
-                eprintln!("pattern {}", show(&p));
+                eprintln!("Search pattern p={pattern_len} {}", show(&pattern));
+                eprintln!("Inserted pattern {}", show(&p_mutated));
 
-                if p.len() > text.len() {
+                if p_mutated.len() > text.len() {
                     continue;
                 }
 
-                let idx = random_range(0..=text.len().saturating_sub(p.len()));
+                let idx = random_range(0..=text.len().saturating_sub(p_mutated.len()));
                 eprintln!("text len {}", text.len());
                 eprintln!("planted idx {idx}");
-                let expected_idx = (idx + p.len()).saturating_sub(q);
+                let expected_idx = (idx + p_mutated.len()).saturating_sub(pattern_len);
                 eprintln!("expected idx {expected_idx}");
 
-                text.splice(idx..idx + p.len(), p);
+                text.splice(idx..idx + p_mutated.len(), p_mutated);
                 eprintln!("text {}", show(&text));
 
                 // Just fwd
-                let matches = searcher.search(&query, &text, edits);
+                let matches = searcher.search(&pattern, &text, edits);
                 eprintln!("matches {matches:?}");
                 let m = matches
                     .iter()
@@ -1228,7 +1228,7 @@ mod tests {
                 assert!(m.is_some());
 
                 // Also rc search, should still find the same match
-                let matches = rc_searcher.search(&query, &text, edits);
+                let matches = rc_searcher.search(&pattern, &text, edits);
 
                 eprintln!("matches {matches:?}");
                 let m = matches
@@ -1471,7 +1471,7 @@ mod tests {
     }
 
     #[test]
-    fn test_random_queries_60_range() {
+    fn test_random_patterns_60_range() {
         use rand::Rng;
         let mut rng = rand::rng();
         let mut i = 0;
