@@ -16,7 +16,7 @@ The motivating application is matching short (~20bp) DNA fragments in a human ge
 
 * Highly optimized with SIMD
 * Bindings: **CLI**, **Python**, and **C**
-* Supports different alphabets,  $\textsf{Ascii}$,  $\textsf{Dna}$, and  $\textsf{Iupac}$ or you can implement your own $\texttt{Profile}$
+* Supports different alphabets,  `Ascii`,  `Dna`, and `Iupac` or you can implement your own Profile
 * Support overhang cost when alignments go past text boundaries
 
 ---
@@ -40,26 +40,26 @@ sassy --help
 ```
 
 #### Search patterns
-Searching a single pattern $\textsf{ATGAGCA}$ in $\textnormal{text.fasta}$ with ≤1 edit:
+Searching a single pattern `ATGAGCA` in `text.fasta` with ≤1 edit:
 
 ```bash
 sassy search --pattern ATGAGCA --alphabet dna -k 1 text.fasta
 ```
-or search with a multi-fasta file with $\texttt{--pattern-fasta <fasta-file>}$ instead of $\texttt{--pattern}$.
+or search with a multi-fasta file with `--pattern-fasta <fasta-file>` instead of `--pattern`.
 
 For the alphabets see [supported alphabets](#supported-alphabets)
 
 #### CRISPR off-target
-CRISPR off-target search for guides in $\textnormal{guides.txt}$:
+CRISPR off-target search for guides in `guides.txt`:
 
 ```bash
 sassy crispr --guide guides.txt --k 1  text.fasta
 ```
-Allows $\leq k$ edits in the sgRNA (not the PAM), if $\texttt{--allow-pam-edits}$ is enabled
-it allows $\leq k$ edits across the sgRNA+PAM.
+Allows `<= k` edits in the sgRNA (not the PAM), if `--allow-pam-edits` is enabled
+it allows `<= k` edits across the sgRNA+PAM.
 
 
-For additional CLI options see $\texttt{sassy <command> --help}$.
+For additional CLI options see `sassy <command> --help`.
 
 ### 2. Python bindings
 
@@ -129,7 +129,7 @@ Detailed API documentation and build instructions are in
 
 <sup>1</sup> See [IUPAC nucleotide codes](https://www.bioinformatics.org/sms/iupac.html) for details.
 
-When using Sassy as Rust library you can also implement a custom $\texttt{Profile}$.
+When using Sassy as Rust library you can also implement a custom Profile.
 
 ---
 
