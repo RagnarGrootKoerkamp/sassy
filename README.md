@@ -50,11 +50,13 @@ or search with a multi-fasta file with `--pattern-fasta <fasta-file>` instead of
 For the alphabets see [supported alphabets](#supported-alphabets)
 
 #### Crispr off-target
-CRISPR off-target search for guides in `guides.txt` (PAM tolerant, 1 edit):
+CRISPR off-target search for guides in `guides.txt`:
 
 ```bash
-sassy crispr --guide guides.txt --k 1 --allow-pam-edits text.fasta
+sassy crispr --guide guides.txt --k 1  text.fasta
 ```
+Allows at most 1 error in the sgRNA (not the PAM), if `--allow-pam-edits` is enabled
+it allows at most 1 edits across the sgRNA+PAM.
 
 For additional CLI options see `sassy <command> --help`.
 
