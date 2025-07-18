@@ -1146,7 +1146,7 @@ mod tests {
 
     #[test]
     fn search_fuzz() {
-        let mut pattern_lens = (10..20)
+        let mut query_lens = (10..20)
             .chain((0..10).map(|_| random_range(10..100)))
             .chain((0..10).map(|_| random_range(100..1000)))
             .collect::<Vec<_>>();
@@ -1157,23 +1157,17 @@ mod tests {
             .chain((0..10).map(|_| random_range(1000..10000)))
             .collect::<Vec<_>>();
 
-        // let mut pattern_lens = [3, 4, 5, 8, 10].repeat(1000);
-        // let mut text_lens = [10, 15, 20, 30].repeat(1000);
-
-        // let mut pattern_lens = [1000, 2000, 5000, 10_000].repeat(1);
-        // let mut text_lens = [10_000, 100_000, 1_000_000].repeat(1);
-
-        pattern_lens.sort();
+        query_lens.sort();
         text_lens.sort();
 
         // Create single searcher for all tests to check proper resetting of internal states
-        // let mut searcher = Searcher::<Dna>::new_fwd();
+        let mut searcher = Searcher::<Dna>::new_fwd();
         let mut rc_searcher = Searcher::<Dna>::new_rc();
 
-        for q in pattern_lens {
+        for q in query_lens {
             for t in text_lens.clone() {
                 println!("q {q} t {t}");
-                let pattern = (0..q)
+                let query = (0..q)
                     .map(|_| b"ACGT"[random_range(0..4)])
                     .collect::<Vec<_>>();
                 let mut text = (0..t)
@@ -1181,7 +1175,7 @@ mod tests {
                     .collect::<Vec<_>>();
 
                 let edits = random_range(0..q / 3);
-                let mut p = pattern.clone();
+                let mut p = query.clone();
                 for _ in 0..edits {
                     let tp = random_range(0..3);
                     match tp {
@@ -1207,52 +1201,40 @@ mod tests {
                 fn show(x: &[u8]) -> &str {
                     str::from_utf8(x).unwrap()
                 }
-                //  eprintln!("pattern q={q} {}", show(&pattern));
-                //  eprintln!("pattern {}", show(&p));
+                eprintln!("\n");
+                eprintln!("edits {edits}");
+                eprintln!("query q={q} {}", show(&query));
+                eprintln!("pattern {}", show(&p));
+
                 if p.len() > text.len() {
                     continue;
                 }
 
                 let idx = random_range(0..=text.len().saturating_sub(p.len()));
-                //  eprintln!("text len {}", text.len());
-                // eprintln!("planted idx {idx}");
-                // let expected_idx = (idx + p.len()).saturating_sub(q);
-                // eprintln!("expected idx {expected_idx}");
+                eprintln!("text len {}", text.len());
+                eprintln!("planted idx {idx}");
+                let expected_idx = (idx + p.len()).saturating_sub(q);
+                eprintln!("expected idx {expected_idx}");
 
                 text.splice(idx..idx + p.len(), p);
-                //eprintln!("text {}", show(&text));
+                eprintln!("text {}", show(&text));
 
-                // // Just fwd
-                // let matches = searcher.search(&pattern, &text, edits);
-                // eprintln!("matches {matches:?}");
-                // let m = matches
-                //     .iter()
-                //     .find(|m| m.text_start .abs_diff(expected_idx) <= edits);
-                // assert!(m.is_some());
+                // Just fwd
+                let matches = searcher.search(&query, &text, edits);
+                eprintln!("matches {matches:?}");
+                let m = matches
+                    .iter()
+                    .find(|m| m.text_start.abs_diff(expected_idx) <= edits);
+                assert!(m.is_some());
 
-                // // Also rc search, should still find the same match
-                let matches = rc_searcher.search(&pattern, &text, edits);
+                // Also rc search, should still find the same match
+                let matches = rc_searcher.search(&query, &text, edits);
 
-                // eprintln!("matches {matches:?}");
-                // let m = matches
-                //     .iter()
-                //     .find(|m| m.text_start .abs_diff(expected_idx) <= edits);
-                // assert!(m.is_some());
-
-                // Check if fwd and rev give the same
-                let pattern_rev = pattern.iter().rev().copied().collect::<Vec<_>>();
-                let text_rev = text.iter().rev().copied().collect::<Vec<_>>();
-                let matches_rev = rc_searcher.search(&pattern_rev, &text_rev, edits);
-                assert_eq!(
-                    matches.len(),
-                    matches_rev.len(),
-                    "error: fwd matches {} vs rev {}\npattern: {}\nText: {}\nEdits: {}",
-                    matches.len(),
-                    matches_rev.len(),
-                    show(&pattern),
-                    show(&text),
-                    edits,
-                );
+                eprintln!("matches {matches:?}");
+                let m = matches
+                    .iter()
+                    .find(|m| m.text_start.abs_diff(expected_idx) <= edits);
+                assert!(m.is_some());
             }
         }
     }
