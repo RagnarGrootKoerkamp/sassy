@@ -1,7 +1,14 @@
+# Evals
+
+There are 3 separate evals related to the paper:
+- Section 3: synthetic results of Sassy vs Edlib
+- Section 3: searching a 23bp pattern in the human genome with Sassy vs Parasail
+  vs Ish.
+- Section 4: comparison with crispr off-target tools SWOffinder and CHOPOFF.
 
 
-## Running the bench 
-First make sure to create the "benchmarks" executable:
+## Section 3: Sassy vs Edlib on synthetic data
+First make sure to build the `benchmarks` executable:
 
 `cargo build --release -p benchmarks`
 
@@ -9,38 +16,74 @@ This creates the `benchmarks` executable in `/target/release/`.
 This is what the python scripts use to run the benchmarks. 
 
 
-### Tool comparison (0 & 1 match)
-
-#### Generating the data
-Should be used from within **this folder** otherwise change `bench_cmd = ""` in `run_tool_bench.py` to the correct folder
+**Running the benchmark.**
+Run the command below inside **this directory**.
 ```bash
 python3 run_tool_bench.py
 ```
-This creates a folder called `benchmarks` which has the tool configurations and several `results_*.csv` files which have the bench results.
+This creates `benchmarks/` that contains some configuration, and `data/*.csv`
+with benchmark results.
 
-#### Creating throughput (0-match) plot
+**Throughput plot.**
 ```bash
 python3 plot_tool_bench.py
 ```
-Creates `figs` folder if it does not exist yet and writes the plot to `tool_comparison_high_res.svg` 
+Outputs `figs/throughput.{svg,pdf}`.
 
-#### Throughput stats
-To get GB/s for the different cut-offs, and the speed up compared to Edlib use 
+**Throughput statistics.**
+Prints numeric throughput (GB/s) statistics corresponding to the plot above.
 ```bash
 python3 throughput_stats.py results_*.csv
 ```
 
-#### Creating trace cost plot 
+**Trace plot.**
 ```bash
 python3 plot_trace_bench.py
 ```
+Outputs `figs/trace.{svg,pdf}`.
 
-### CIRSPR off-traget
-We used the benchmark of the [ChopOff paper](https://www.biorxiv.org/content/10.1101/2025.01.06.603201v1.full.pdf) from [their gitlab](https://git.app.uib.no/valenlab/chopoff-benchmark/-/tree/master?ref_type=heads) with [our fork here](https://github.com/rickbeeloo/sassy-crispr-bench):
+## Section 3: Comparison with Parasail and Ish
 
-This workflows uses conda/mamba so you would need to install that if you don't have it already.
+To compare with [parasail](https://github.com/jeffdaily/parasail),
+clone the repo and follow the cmake build instructions.
+`make parasail_aligner` is sufficient, but will still take a while.
+Then, create [`patterns.fa`](./patterns.fa) and download a human genome ([chm13v2.0.fa](https://github.com/marbl/CHM13?tab=readme-ov-file#t2t-chm13v20-t2t-chm13y), [direct download
+link](https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz)):
 
+```text
+>pattern
+ACTCGACTTCAGCTACGCACATA
 ```
+
+and run
+
+```bash
+time ./parasail_aligner -a sg_dx_striped_sse41_128_8 -x -d -t 1 -q patterns.fa -f chm13v2.0.fa -v -V
+time ./parasail_aligner -a sg_dx_striped_sse41_128_16 -x -d -t 1 -q patterns.fa -f chm13v2.0.fa -v -V
+time ./parasail_aligner -a sg_dx_striped_avx2_256_8 -x -d -t 1 -q patterns.fa -f chm13v2.0.fa -v -V
+time ./parasail_aligner -a sg_dx_striped_avx2_256_16 -x -d -t 1 -q patterns.fa -f chm13v2.0.fa -v -V
+```
+
+For [Ish](https://github.com/BioRadOpenSource/ish), follow the build
+instructions using `pixi` and then run:
+
+``` bash
+time ./ish --scoring-matrix actgn --record-type fastx --threads 1 ACTCGACTTCAGCTACGCACATA chm13v2.0.fa
+```
+
+
+## Section 4: CIRSPR off-traget
+We reused the benchmark of the
+[ChopOff paper](https://www.biorxiv.org/content/10.1101/2025.01.06.603201v1.full.pdf)
+from
+[their gitlab](https://git.app.uib.no/valenlab/chopoff-benchmark/-/tree/master?ref_type=heads)
+with
+[our fork here](https://github.com/rickbeeloo/sassy-crispr-bench):
+
+This workflows uses conda/mamba so you need to install that if you don't have it already.
+Run the following in the root of the fork:
+
+```bash
 mamba env create --name sassy-benchmark --file environment.yaml
 mamba activate sassy-benchmark
 snakemake --cores 16
