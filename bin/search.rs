@@ -1,6 +1,6 @@
+use crate::input_iterator::{InputIterator, PatternRecord};
 use needletail::parse_fastx_file;
 use sassy::CachedRev;
-use sassy::input_iterator::{InputIterator, PatternRecord};
 use sassy::{
     Match, RcSearchAble, Searcher, Strand,
     profiles::{Ascii, Dna, Iupac, Profile},

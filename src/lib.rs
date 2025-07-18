@@ -79,7 +79,6 @@ mod trace;
 
 // (PARTIALLY) PUBLIC MODS
 
-pub mod input_iterator;
 pub mod profiles;
 
 pub use search::CachedRev;

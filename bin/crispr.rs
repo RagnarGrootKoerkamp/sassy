@@ -1,6 +1,6 @@
+use crate::input_iterator::{InputIterator, PatternRecord};
 use sassy::{
     RcSearchAble, Searcher, Strand,
-    input_iterator::{InputIterator, PatternRecord},
     profiles::{Iupac, Profile},
 };
 use std::fs::File;

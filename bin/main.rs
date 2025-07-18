@@ -1,4 +1,5 @@
 mod crispr;
+mod input_iterator;
 mod search;
 
 use clap::Parser;
