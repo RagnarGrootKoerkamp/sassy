@@ -24,7 +24,9 @@ Highlights:
 - Rust library (`cargo add sassy`), binary (`cargo install sassy`), Python
   bindings (`pip install sassy-rs`), and C bindings (see below).
 
-**The paper** can be found at TODO, and evals are in [evals/](evals/).
+**The paper** can be found here, and evals are in [evals/](evals/).
+
+The main **limitation** is that currently **AVX2** and **BMI2** are required.
 
 ## Usage
 
