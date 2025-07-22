@@ -55,21 +55,34 @@ link](https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/
 ACTCGACTTCAGCTACGCACATA
 ```
 
-and run
+and to run with cost parameters matching Ish:
 
 ```bash
-time ./parasail_aligner -a sg_dx_striped_sse41_128_8 -x -d -t 1 -q patterns.fa -f chm13v2.0.fa -v -V
+# Default cost params: 53-69s
+time ./parasail_aligner -a sg_dx_striped_sse41_128_8  -x -d -t 1 -q patterns.fa -f chm13v2.0.fa -v -V
 time ./parasail_aligner -a sg_dx_striped_sse41_128_16 -x -d -t 1 -q patterns.fa -f chm13v2.0.fa -v -V
-time ./parasail_aligner -a sg_dx_striped_avx2_256_8 -x -d -t 1 -q patterns.fa -f chm13v2.0.fa -v -V
-time ./parasail_aligner -a sg_dx_striped_avx2_256_16 -x -d -t 1 -q patterns.fa -f chm13v2.0.fa -v -V
+time ./parasail_aligner -a sg_dx_striped_avx2_256_8   -x -d -t 1 -q patterns.fa -f chm13v2.0.fa -v -V
+time ./parasail_aligner -a sg_dx_striped_avx2_256_16  -x -d -t 1 -q patterns.fa -f chm13v2.0.fa -v -V
+# Ish' cost params: 81s-200s
+time ./parasail_aligner -a sg_dx_striped_sse41_128_8  -x -d -t 1 -X 2 -M 2 -o 3 -e 1 -q patterns.fa -f chm13v2.0.fa -v -V
+time ./parasail_aligner -a sg_dx_striped_sse41_128_16 -x -d -t 1 -X 2 -M 2 -o 3 -e 1 -q patterns.fa -f chm13v2.0.fa -v -V
+time ./parasail_aligner -a sg_dx_striped_avx2_256_8   -x -d -t 1 -X 2 -M 2 -o 3 -e 1 -q patterns.fa -f chm13v2.0.fa -v -V
+time ./parasail_aligner -a sg_dx_striped_avx2_256_16  -x -d -t 1 -X 2 -M 2 -o 3 -e 1 -q patterns.fa -f chm13v2.0.fa -v -V
 ```
 
-For [Ish](https://github.com/BioRadOpenSource/ish), follow the build
-instructions using `pixi` and then run:
+For [Ish](https://github.com/BioRadOpenSource/ish) ([commit](https://github.com/BioRadOpenSource/ish/commit/92f4fad04142f2f7d08770feec66f928ee1f7079)), follow the build
+instructions. To build with `sse` as the target instead of default `avx`
+(because it's faster in our benchmark with quite short queries):
+``` bash
+pixi run build -D ISH_SIMD_TARGET=sse
+```
+Then run:
 
 ``` bash
 time ./ish --scoring-matrix actgn --record-type fastx --threads 1 ACTCGACTTCAGCTACGCACATA chm13v2.0.fa
 ```
+
+For me, this takes 69s for SSE, and 110s for AVX2.
 
 
 ## Section 4: CIRSPR off-traget
