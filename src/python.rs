@@ -117,4 +117,20 @@ impl Match {
     fn cigar(&self) -> String {
         self.cigar.to_string()
     }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "<Match pattern_start={} text_start={} pattern_end={} text_end={} cost={} strand='{}' cigar='{}'>",
+            self.pattern_start,
+            self.text_start,
+            self.pattern_end,
+            self.text_end,
+            self.cost,
+            match self.strand {
+                Strand::Fwd => "+",
+                Strand::Rc => "-",
+            },
+            self.cigar.to_string()
+        )
+    }
 }
