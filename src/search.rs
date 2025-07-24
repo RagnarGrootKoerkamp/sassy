@@ -48,12 +48,11 @@ pub struct Match {
 impl Match {
     /// Convert the match to a list of (pattern pos, text pos) positions.
     pub fn to_path(&self) -> Vec<Pos> {
-        let path_start_text = if self.strand == Strand::Rc {
-            self.text_end - 1 // exclusive end
+        let (path_start_text, sign) = if self.strand == Strand::Rc {
+            (self.text_end - 1, -1) // exclusive end
         } else {
-            self.text_start
+            (self.text_start, 1)
         };
-        let sign = -((self.strand == Strand::Rc) as i32);
         let mut pos = Pos(self.pattern_start as i32, path_start_text as i32);
         let mut path = vec![pos];
         for op in &self.cigar.ops {
@@ -1436,18 +1435,14 @@ mod tests {
         //                              0123456789*1234567
         //                                      ||||-||
         //                                      ATGCGGA
-
-        // let pattern = rc(&pattern);
         let mut searcher = Searcher::<Dna>::new_rc();
         let matches = searcher.search(&pattern, &text, 1);
-
-        let path = matches[0].to_path();
-        println!("First cigar: {:?}", matches[0].cigar.to_string());
-        println!("path: {:?}", path);
-        for Pos(q_pos, r_pos) in path {
-            println!(
-                "q char: {} r char: {}",
-                pattern[q_pos as usize] as char, text[r_pos as usize] as char
+        let path: Vec<Pos> = matches[0].to_path();
+        for i in 0..4 {
+            let Pos(q_pos, r_pos) = path[i];
+            assert_eq!(
+                pattern[q_pos as usize] as char,
+                rc(&text[r_pos as usize..r_pos as usize + 1])[0] as char
             );
         }
     }
