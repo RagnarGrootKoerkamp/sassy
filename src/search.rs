@@ -48,15 +48,20 @@ pub struct Match {
 impl Match {
     /// Convert the match to a list of (pattern pos, text pos) positions.
     pub fn to_path(&self) -> Vec<Pos> {
-        let mut pos = Pos(self.pattern_start as i32, self.text_start as i32);
+        let path_start_text = if self.strand == Strand::Rc {
+            self.text_end - 1 // exclusive end
+        } else {
+            self.text_start
+        };
+        let sign = -((self.strand == Strand::Rc) as i32);
+        let mut pos = Pos(self.pattern_start as i32, path_start_text as i32);
         let mut path = vec![pos];
-        for el in &self.cigar.ops {
-            for _ in 0..el.cnt {
-                pos += match el.op {
-                    CigarOp::Match => Pos(1, 1),
-                    CigarOp::Sub => Pos(1, 1),
+        for op in &self.cigar.ops {
+            for _ in 0..op.cnt {
+                pos += match op.op {
+                    CigarOp::Match | CigarOp::Sub => Pos(1, sign),
                     CigarOp::Del => Pos(1, 0),
-                    CigarOp::Ins => Pos(0, 1),
+                    CigarOp::Ins => Pos(0, sign),
                 };
                 path.push(pos);
             }
@@ -1422,6 +1427,29 @@ mod tests {
         // Ends are exclusive
         assert_eq!(matches[0].pattern_end, path.last().unwrap().0 as usize + 1);
         assert_eq!(matches[0].text_end, path.last().unwrap().1 as usize + 1);
+    }
+
+    #[test]
+    fn test_pattern_trace_path_0_edits_rc() {
+        let pattern = b"TCCGGAT".to_vec(); // ATGCCGA
+        let text = b"GGGGGGGGATGCGGAAAA";
+        //                              0123456789*1234567
+        //                                      ||||-||
+        //                                      ATGCGGA
+
+        // let pattern = rc(&pattern);
+        let mut searcher = Searcher::<Dna>::new_rc();
+        let matches = searcher.search(&pattern, &text, 1);
+
+        let path = matches[0].to_path();
+        println!("First cigar: {:?}", matches[0].cigar.to_string());
+        println!("path: {:?}", path);
+        for Pos(q_pos, r_pos) in path {
+            println!(
+                "q char: {} r char: {}",
+                pattern[q_pos as usize] as char, text[r_pos as usize] as char
+            );
+        }
     }
 
     #[test]
