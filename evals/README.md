@@ -63,7 +63,7 @@ time ./parasail_aligner -a sg_dx_striped_sse41_128_8  -x -d -t 1 -q patterns.fa 
 time ./parasail_aligner -a sg_dx_striped_sse41_128_16 -x -d -t 1 -q patterns.fa -f chm13v2.0.fa -v -V
 time ./parasail_aligner -a sg_dx_striped_avx2_256_8   -x -d -t 1 -q patterns.fa -f chm13v2.0.fa -v -V
 time ./parasail_aligner -a sg_dx_striped_avx2_256_16  -x -d -t 1 -q patterns.fa -f chm13v2.0.fa -v -V
-# Ish' cost params: 81s-200s
+# Ish' cost params: 81s-198s
 time ./parasail_aligner -a sg_dx_striped_sse41_128_8  -x -d -t 1 -X 2 -M 2 -o 3 -e 1 -q patterns.fa -f chm13v2.0.fa -v -V
 time ./parasail_aligner -a sg_dx_striped_sse41_128_16 -x -d -t 1 -X 2 -M 2 -o 3 -e 1 -q patterns.fa -f chm13v2.0.fa -v -V
 time ./parasail_aligner -a sg_dx_striped_avx2_256_8   -x -d -t 1 -X 2 -M 2 -o 3 -e 1 -q patterns.fa -f chm13v2.0.fa -v -V
