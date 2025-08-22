@@ -1,6 +1,5 @@
 name: Build and publish sassy-rs wheels
 
-# Just run for each new v tag we see pushed
 on:
   push:
     tags:
@@ -23,7 +22,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Build a single ABI3 wheel (cp38-abi3) that works on every Python ≥3.8
       - name: Set up Python (ABI-stable build)
         uses: actions/setup-python@v5
         with:
@@ -44,7 +42,6 @@ jobs:
           sccache: 'true'
           manylinux: auto
         env:
-          # Produce a single cp38-abi3 wheel that is usable on all later versions
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: 1
 
       - name: Upload wheel
@@ -58,7 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      id-token: write  # For trusted publishing
+      id-token: write
 
     steps:
       - name: Download built artifacts
@@ -69,11 +66,17 @@ jobs:
 
       - run: ls -R dist
 
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+
       - name: Install upload dependencies
         run: pip install --upgrade "packaging>=24.2" twine
 
       - name: Publish to PyPI
         env:
           TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: twine upload  --skip-existing dist/*
+          TWINE_PASSWORD: ${{ secrets.PYPI_TEST_API_TOKEN }}
+        run: twine upload --skip-existing dist/*
