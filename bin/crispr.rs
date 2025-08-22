@@ -161,7 +161,7 @@ pub fn crispr(args: &CrisprArgs) {
     // Write header
     let header = format!(
         "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-        "guide_id", "text_id", "cost", "strand", "start", "end", "match_region", "cigar"
+        "guide", "text_id", "cost", "strand", "start", "end", "match_region", "cigar"
     );
     writer.lock().unwrap().write_all(header.as_bytes()).unwrap();
 
@@ -207,6 +207,7 @@ pub fn crispr(args: &CrisprArgs) {
                 while let Some(batch) = task_iter.next_batch() {
                     for item in batch {
                         let guide_sequence = &item.pattern.seq;
+                        let guide_string = String::from_utf8_lossy(guide_sequence);
                         let id_text = &item.text;
 
                         let id = &id_text.id;
@@ -255,7 +256,7 @@ pub fn crispr(args: &CrisprArgs) {
                             };
                             writeln!(
                                 writer_guard,
-                                "{id}\t{cost}\t{strand}\t{start}\t{end}\t{match_region}\t{cigar}"
+                                "{guide_string}\t{id}\t{cost}\t{strand}\t{start}\t{end}\t{match_region}\t{cigar}"
                             )
                             .unwrap();
                         }
