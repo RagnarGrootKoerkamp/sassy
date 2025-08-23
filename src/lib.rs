@@ -51,7 +51,7 @@
 //! assert_eq!(fwd_match.text_end, 7);
 //! assert_eq!(fwd_match.cost, 1);
 //! assert_eq!(fwd_match.strand, Strand::Fwd);
-//! assert_eq!(fwd_match.cigar.to_string(), "3=X");
+//! assert_eq!(fwd_match.cigar.to_string(), "3=1X");
 //!
 //! // --- FWD + RC search ---
 //! /*
@@ -75,7 +75,7 @@
 //! assert_eq!(rc_match.text_end, 5);
 //! assert_eq!(rc_match.cost, 1);
 //! assert_eq!(rc_match.strand, Strand::Rc);
-//! assert_eq!(rc_match.cigar.to_string(), "2=X=");
+//! assert_eq!(rc_match.cigar.to_string(), "2=1X1=");
 //!
 //! // --- FWD + RC search with overhang ---
 //! /*

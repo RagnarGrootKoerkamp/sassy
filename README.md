@@ -56,7 +56,7 @@ assert_eq!(matches[0].text_start, 3);
 assert_eq!(matches[0].text_end, 7);
 assert_eq!(matches[0].cost, 1);
 assert_eq!(matches[0].strand, Strand::Fwd);
-assert_eq!(matches[0].cigar.to_string(), "2=X=");
+assert_eq!(matches[0].cigar.to_string(), "2=1X1=");
 ```
 
 ### 1. Command-line interface (CLI)
