@@ -1,4 +1,3 @@
-#![feature(portable_simd)]
 //! # Sassy: fast approximate string matching
 //!
 //! Sassy is a library for searching approximate matches of short patterns/queries in longer texts.
@@ -144,14 +143,15 @@ mod c;
 
 // TYPEDEFS
 
-use std::simd::Simd;
+#[cfg(not(feature = "avx512"))]
+const LANES: usize = 4;
+#[cfg(not(feature = "avx512"))]
+type S = wide::u64x4;
 
 #[cfg(feature = "avx512")]
 const LANES: usize = 8;
-#[cfg(not(feature = "avx512"))]
-const LANES: usize = 4;
-
-type S = Simd<u64, LANES>;
+#[cfg(feature = "avx512")]
+type S = wide::u64x8;
 
 // TESTS
 

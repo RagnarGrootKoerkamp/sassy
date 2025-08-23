@@ -5,6 +5,7 @@ mod iupac;
 pub use ascii::{Ascii, CaseInsensitiveAscii, CaseSensitiveAscii};
 pub use dna::Dna;
 pub use iupac::Iupac;
+use wide::u8x32;
 
 use std::ops::{Index, IndexMut};
 
@@ -40,5 +41,27 @@ pub trait Profile: Clone + std::fmt::Debug {
     }
     fn supports_overhang() -> bool {
         unimplemented!("Profile does not support overhang");
+    }
+}
+
+// Simd helper
+
+#[inline(always)]
+fn u8x32_gt(a: u8x32, b: u8x32) -> u8x32 {
+    unsafe {
+        use std::mem::transmute;
+        use wide::i8x32;
+        let a: i8x32 = transmute(a);
+        let b: i8x32 = transmute(b);
+        let mask = i8x32::splat(1 << 7);
+        transmute(wide::CmpGt::cmp_gt(a ^ mask, b ^ mask))
+    }
+}
+
+#[inline(always)]
+fn u8x32_shr(a: u8x32, shift: u8) -> u8x32 {
+    unsafe {
+        use std::mem::transmute;
+        transmute(transmute::<_, wide::u16x16>(a) >> shift)
     }
 }
