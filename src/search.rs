@@ -5,7 +5,6 @@ use crate::trace::{CostMatrix, fill, get_trace, simd_fill};
 use crate::{LANES, S};
 use crate::{bitpacking::compute_block_simd, delta_encoding::V};
 use pa_types::{Cigar, CigarOp, Cost, Pos};
-use std::simd::cmp::SimdPartialOrd;
 
 /// A match of the pattern against the text.
 ///
@@ -485,7 +484,7 @@ impl<P: Profile> Searcher<P> {
                 dist_to_start_of_lane -= self.hm[j];
 
                 let pattern_char = unsafe { pattern_profile.get_unchecked(j) };
-                let eq: std::simd::Simd<u64, 4> = S::from(std::array::from_fn(|lane| {
+                let eq = S::from(std::array::from_fn(|lane| {
                     P::eq(pattern_char, &self.lanes[lane].text_profile)
                 }));
 
@@ -498,8 +497,11 @@ impl<P: Profile> Searcher<P> {
                     dist_to_end_of_lane -= self.hm[j];
 
                     // Check if any lane has cost <= k at the current row
-                    let cmp = dist_to_end_of_lane.simd_le(S::splat(k as u64));
-                    let bitmask = cmp.to_bitmask();
+                    let cmp = dist_to_end_of_lane.simd_lt(S::splat(k as u64 + 1));
+                    // u64x4 does not have to_bitmask :(
+                    // FIXME: Update after wide PR 229.
+                    let bitmask =
+                        unsafe { std::mem::transmute::<S, wide::i64x4>(cmp) }.to_bitmask() as u32;
                     let end_leq_k = bitmask != 0;
 
                     // Track the highest row where we found any promising matches
@@ -534,7 +536,7 @@ impl<P: Profile> Searcher<P> {
 
             // Save positions with cost <= k directly after processing each row
             for lane in 0..LANES {
-                let v = V::from(vp[lane], vm[lane]);
+                let v = V::from(vp.as_array()[lane], vm.as_array()[lane]);
                 let base_pos = self.lanes[lane].chunk_offset * 64 + 64 * i;
                 let cost = dist_to_start_of_lane.as_array()[lane] as Cost;
 

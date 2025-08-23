@@ -122,7 +122,7 @@ pub fn simd_fill<P: Profile>(
         let mut vp = S::splat(0);
         let mut vm = S::splat(0);
         for lane in 0..lanes {
-            let v = V::from(vp[lane], vm[lane]);
+            let v = V::from(vp.as_array()[lane], vm.as_array()[lane]);
             m[lane].deltas.push(v);
         }
         // FIXME: for large queries, use the SIMD within this single block, rather than spreading it thin over LANES 'matches' when there is only a single candidate match.
@@ -130,7 +130,7 @@ pub fn simd_fill<P: Profile>(
             let eq = from_fn(|lane| P::eq(&query_profile[j], &text_profile[lane])).into();
             compute_block_simd(&mut hp[j], &mut hm[j], &mut vp, &mut vm, eq);
             for lane in 0..lanes {
-                let v = V::from(vp[lane], vm[lane]);
+                let v = V::from(vp.as_array()[lane], vm.as_array()[lane]);
                 m[lane].deltas.push(v);
             }
         }

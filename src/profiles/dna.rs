@@ -1,8 +1,8 @@
 use crate::profiles::Profile;
-use std::{
-    simd::cmp::SimdPartialEq,
-    simd::{Simd, u8x32},
-};
+
+use wide::{CmpEq, u8x32};
+
+use super::u8x32_shr;
 
 /// DNA alphabet: ACGT.
 ///
@@ -26,17 +26,15 @@ impl Profile for Dna {
     #[inline(always)]
     fn encode_ref(&self, b: &[u8; 64], out: &mut Self::B) {
         unsafe {
-            let chunk0 = u8x32::from_array(b[0..32].try_into().unwrap());
-            let chunk1 = u8x32::from_array(b[32..64].try_into().unwrap());
-            let chunk0_shifted = chunk0 >> 1;
-            let chunk1_shifted = chunk1 >> 1;
-            let masked0 = chunk0_shifted & u8x32::splat(0x03);
-            let masked1 = chunk1_shifted & u8x32::splat(0x03);
+            let chunk0 = u8x32::from(&b[0..32]);
+            let chunk1 = u8x32::from(&b[32..64]);
+            let bases0 = bases(chunk0);
+            let bases1 = bases(chunk1);
             for (i, code) in CODES.iter().enumerate() {
-                let eq0 = masked0.simd_eq(*code);
-                let eq1 = masked1.simd_eq(*code);
-                let low = eq0.to_bitmask();
-                let high = eq1.to_bitmask();
+                let eq0 = bases0.simd_eq(*code);
+                let eq1 = bases1.simd_eq(*code);
+                let low = eq0.to_bitmask() as u32 as u64;
+                let high = eq1.to_bitmask() as u32 as u64;
                 *out.get_unchecked_mut(i) = (high << 32) | low;
             }
         };
@@ -66,21 +64,19 @@ impl Profile for Dna {
     fn valid_seq(seq: &[u8]) -> bool {
         // we’ll do 32-byte chunks
         const LANES: usize = 32;
-        type V = Simd<u8, LANES>;
-
         let len = seq.len();
         let mut i = 0;
 
         // Split in 32-byte chunks (u8 * 32)
         while i + LANES <= len {
-            let chunk = V::from_slice(&seq[i..i + LANES]);
+            let chunk = u8x32::from(&seq[i..i + LANES]);
             // lowercase, setting 5th bit, might transform some ascii to
             // other ascii but that's fine
-            let lowered = chunk | V::splat(0x20);
-            let is_a = lowered.simd_eq(V::splat(b'a'));
-            let is_c = lowered.simd_eq(V::splat(b'c'));
-            let is_g = lowered.simd_eq(V::splat(b'g'));
-            let is_t = lowered.simd_eq(V::splat(b't'));
+            let lowered = chunk | u8x32::splat(0x20);
+            let is_a = lowered.simd_eq(u8x32::splat(b'a'));
+            let is_c = lowered.simd_eq(u8x32::splat(b'c'));
+            let is_g = lowered.simd_eq(u8x32::splat(b'g'));
+            let is_t = lowered.simd_eq(u8x32::splat(b't'));
             let ok = is_a | is_c | is_g | is_t;
             if !ok.all() {
                 return false;
@@ -113,10 +109,10 @@ impl Profile for Dna {
 
 // Same order as iupac
 const CODES: [u8x32; 4] = [
-    u8x32::splat(0u8), // A
-    u8x32::splat(1u8), // C
-    u8x32::splat(2u8), // T
-    u8x32::splat(3u8), // G
+    u8x32::new([0u8; 32]), // A
+    u8x32::new([1u8; 32]), // C
+    u8x32::new([2u8; 32]), // T
+    u8x32::new([3u8; 32]), // G
 ];
 
 const RC: [u8; 256] = {
@@ -132,6 +128,10 @@ const RC: [u8; 256] = {
     rc[b'G' as usize] = b'C';
     rc
 };
+
+fn bases(chars: u8x32) -> u8x32 {
+    u8x32_shr(chars, 1) & u8x32::splat(3)
+}
 
 #[cfg(test)]
 mod test {
@@ -176,17 +176,15 @@ mod test {
             let seq: &[u8; 64] = &seq;
             let out: &mut [u64; 4] = &mut out;
             unsafe {
-                let chunk0 = u8x32::from_array(seq[0..32].try_into().unwrap());
-                let chunk1 = u8x32::from_array(seq[32..64].try_into().unwrap());
-                let chunk0_shifted = chunk0 >> 1;
-                let chunk1_shifted = chunk1 >> 1;
-                let masked0 = chunk0_shifted & u8x32::splat(0x03);
-                let masked1 = chunk1_shifted & u8x32::splat(0x03);
+                let chunk0 = u8x32::from(&seq[0..32]);
+                let chunk1 = u8x32::from(&seq[32..64]);
+                let bases0 = bases(chunk0);
+                let bases1 = bases(chunk1);
                 for (i, code) in CODES.iter().enumerate() {
-                    let eq0 = masked0.simd_eq(*code);
-                    let eq1 = masked1.simd_eq(*code);
-                    let low = eq0.to_bitmask();
-                    let high = eq1.to_bitmask();
+                    let eq0 = bases0.simd_eq(*code);
+                    let eq1 = bases1.simd_eq(*code);
+                    let low = eq0.to_bitmask() as u32 as u64;
+                    let high = eq1.to_bitmask() as u32 as u64;
                     *out.get_unchecked_mut(i) = (high << 32) | low;
                 }
             }
@@ -194,7 +192,7 @@ mod test {
         let positions = get_match_positions(&out);
         assert_eq!(positions[0], vec![0, 1]);
         assert_eq!(positions[1], vec![63]);
-        assert_eq!(positions[2], Vec::<usize>::new());
+        assert_eq!(positions[2], vec![]);
         assert_eq!(positions[3], (2..63).collect::<Vec<_>>());
     }
 
@@ -208,17 +206,15 @@ mod test {
             let seq: &[u8; 64] = &seq;
             let out: &mut [u64; 4] = &mut out;
             unsafe {
-                let chunk0 = u8x32::from_array(seq[0..32].try_into().unwrap());
-                let chunk1 = u8x32::from_array(seq[32..64].try_into().unwrap());
-                let chunk0_shifted = chunk0 >> 1;
-                let chunk1_shifted = chunk1 >> 1;
-                let masked0 = chunk0_shifted & u8x32::splat(0x03);
-                let masked1 = chunk1_shifted & u8x32::splat(0x03);
+                let chunk0 = u8x32::from(&seq[0..32]);
+                let chunk1 = u8x32::from(&seq[32..64]);
+                let bases0 = bases(chunk0);
+                let bases1 = bases(chunk1);
                 for (i, code) in CODES.iter().enumerate() {
-                    let eq0 = masked0.simd_eq(*code);
-                    let eq1 = masked1.simd_eq(*code);
-                    let low = eq0.to_bitmask();
-                    let high = eq1.to_bitmask();
+                    let eq0 = bases0.simd_eq(*code);
+                    let eq1 = bases1.simd_eq(*code);
+                    let low = eq0.to_bitmask() as u32 as u64;
+                    let high = eq1.to_bitmask() as u32 as u64;
                     *out.get_unchecked_mut(i) = (high << 32) | low;
                 }
             }

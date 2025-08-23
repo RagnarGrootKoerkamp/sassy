@@ -1,11 +1,5 @@
-use crate::profiles::Profile;
-use std::{
-    mem::transmute,
-    simd::{
-        cmp::{SimdPartialEq, SimdPartialOrd},
-        u8x32,
-    },
-};
+use crate::profiles::{Profile, u8x32_gt};
+use wide::{CmpEq, u8x32};
 
 /// Compare two sequences using the stancard ASCII alphabet.
 #[derive(Clone, Debug)]
@@ -75,15 +69,15 @@ impl<const CASE_SENSITIVE: bool> Profile for Ascii<CASE_SENSITIVE> {
 #[inline(always)]
 pub fn ascii_u64_search(seq: &[u8; 64], bases: &[u8], out: &mut [u64]) {
     unsafe {
-        let chunk0 = u8x32::from_array(seq[0..32].try_into().unwrap());
-        let chunk1 = u8x32::from_array(seq[32..64].try_into().unwrap());
+        let chunk0 = u8x32::new(seq[0..32].try_into().unwrap());
+        let chunk1 = u8x32::new(seq[32..64].try_into().unwrap());
 
         for (i, &base) in bases.iter().enumerate() {
             let m = u8x32::splat(base);
             let eq0 = chunk0.simd_eq(m);
             let eq1 = chunk1.simd_eq(m);
-            let low = eq0.to_bitmask();
-            let high = eq1.to_bitmask();
+            let low = eq0.to_bitmask() as u32 as u64;
+            let high = eq1.to_bitmask() as u32 as u64;
             *out.get_unchecked_mut(i) = (high << 32) | low;
         }
     }
@@ -93,26 +87,28 @@ pub fn ascii_u64_search(seq: &[u8; 64], bases: &[u8], out: &mut [u64]) {
 #[inline(always)]
 fn ascii_u64_search_case_insensitive(seq: &[u8; 64], bases: &[u8], out: &mut [u64]) {
     unsafe {
-        let chunk0 = u8x32::from_array(seq[0..32].try_into().unwrap());
-        let chunk1 = u8x32::from_array(seq[32..64].try_into().unwrap());
+        let chunk0 = u8x32::new(seq[0..32].try_into().unwrap());
+        let chunk1 = u8x32::new(seq[32..64].try_into().unwrap());
 
         const A: u8 = b'A';
         const Z: u8 = b'Z';
         let to_lowercase = b'a' - b'A';
-        let is_char0 = chunk0.simd_ge(u8x32::splat(A)) & chunk0.simd_le(u8x32::splat(Z));
-        let is_char1 = chunk1.simd_ge(u8x32::splat(A)) & chunk1.simd_le(u8x32::splat(Z));
+        // AVX2 does not have unsigned u8 compares for b'A' <= x <= b'Z'.
+        // Instead, we check `(x-b'A') <= b'Z'-b'A'
+        let is_char0 =
+            u8x32_gt(chunk0, u8x32::splat(A - 1)) & u8x32_gt(u8x32::splat(Z + 1), chunk0);
+        let is_char1 =
+            u8x32_gt(chunk1, u8x32::splat(A - 1)) & u8x32_gt(u8x32::splat(Z + 1), chunk1);
         // Transmute from i8x32 to u8x32
-        let lower0 =
-            chunk0 | (u8x32::splat(to_lowercase) & transmute::<_, u8x32>(is_char0.to_int()));
-        let lower1 =
-            chunk1 | (u8x32::splat(to_lowercase) & transmute::<_, u8x32>(is_char1.to_int()));
+        let lower0 = chunk0 | (u8x32::splat(to_lowercase) & is_char0);
+        let lower1 = chunk1 | (u8x32::splat(to_lowercase) & is_char1);
 
         for (i, &base) in bases.iter().enumerate() {
             let m = u8x32::splat(base | 0x20);
             let eq0 = lower0.simd_eq(m);
             let eq1 = lower1.simd_eq(m);
-            let low = eq0.to_bitmask();
-            let high = eq1.to_bitmask();
+            let low = eq0.to_bitmask() as u32 as u64;
+            let high = eq1.to_bitmask() as u32 as u64;
             *out.get_unchecked_mut(i) = (high << 32) | low;
         }
     }

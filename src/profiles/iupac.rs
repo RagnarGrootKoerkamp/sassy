@@ -1,8 +1,6 @@
-use crate::profiles::Profile;
-use std::{
-    mem::transmute,
-    simd::{cmp::SimdPartialOrd, u8x32},
-};
+use crate::profiles::{Profile, u8x32_gt, u8x32_shr};
+use std::mem::transmute;
+use wide::{CmpEq, u8x32};
 
 /// IUPAC alphabet: ACGT + NYR...
 ///
@@ -46,18 +44,18 @@ impl Profile for Iupac {
             let mask4 = u8x32::splat(0x0F);
             let mask5 = u8x32::splat(0x1F);
 
-            let chunk0 = u8x32::from_array(b[0..32].try_into().unwrap());
-            let chunk1 = u8x32::from_array(b[32..64].try_into().unwrap());
+            let chunk0 = u8x32::from(&b[0..32]);
+            let chunk1 = u8x32::from(&b[32..64]);
 
             let low4_0 = chunk0 & mask4;
             let low4_1 = chunk1 & mask4;
             let idx5_0 = chunk0 & mask5;
             let idx5_1 = chunk1 & mask5;
 
-            let is_hi_0 = idx5_0.simd_gt(u8x32::splat(15));
-            let is_hi_1 = idx5_1.simd_gt(u8x32::splat(15));
+            let is_hi_0 = u8x32_gt(idx5_0, u8x32::splat(15));
+            let is_hi_1 = u8x32_gt(idx5_1, u8x32::splat(15));
 
-            let tbl256 = u8x32::from_array(transmute([PACKED_NIBBLES, PACKED_NIBBLES]));
+            let tbl256 = u8x32::from(transmute::<_, [u8; 32]>([PACKED_NIBBLES, PACKED_NIBBLES]));
 
             let shuffled0 = half_shuffle(tbl256, low4_0);
             let shuffled1 = half_shuffle(tbl256, low4_1);
@@ -65,20 +63,23 @@ impl Profile for Iupac {
             let lo_nib0 = shuffled0 & mask4;
             let lo_nib1 = shuffled1 & mask4;
 
-            let hi_nib0 = shuffled0 >> 4;
-            let hi_nib1 = shuffled1 >> 4;
+            // Shift as u16 because AVX2 does not have u8 shifts.
+            // This 'leaks' bits into high half of each byte, but we only ever
+            // read the low half via `m=get_encoded(base)`, so that's ok.
+            let hi_nib0 = u8x32_shr(shuffled0, 4);
+            let hi_nib1 = u8x32_shr(shuffled1, 4);
 
-            let nib0 = is_hi_0.select(hi_nib0, lo_nib0);
-            let nib1 = is_hi_1.select(hi_nib1, lo_nib1);
+            let nib0 = is_hi_0.blend(hi_nib0, lo_nib0);
+            let nib1 = is_hi_1.blend(hi_nib1, lo_nib1);
 
             for (i, &base) in [b'A', b'C', b'T', b'G'].iter().enumerate() {
                 let m = u8x32::splat(get_encoded(base));
 
-                let match0 = (nib0 & m).simd_gt(zero);
-                let match1 = (nib1 & m).simd_gt(zero);
+                let match0 = !(nib0 & m).simd_eq(zero);
+                let match1 = !(nib1 & m).simd_eq(zero);
 
-                let low = match0.to_bitmask() as u64;
-                let high = match1.to_bitmask() as u64;
+                let low = match0.to_bitmask() as u32 as u64;
+                let high = match1.to_bitmask() as u32 as u64;
 
                 *out.get_unchecked_mut(i) = (high << 32) | low;
             }
@@ -86,11 +87,11 @@ impl Profile for Iupac {
             for (i, &base) in extra_bases.iter().enumerate() {
                 let m = u8x32::splat(get_encoded(base));
 
-                let match0 = (nib0 & m).simd_gt(zero);
-                let match1 = (nib1 & m).simd_gt(zero);
+                let match0 = !(nib0 & m).simd_eq(zero);
+                let match1 = !(nib1 & m).simd_eq(zero);
 
-                let low = match0.to_bitmask() as u64;
-                let high = match1.to_bitmask() as u64;
+                let low = match0.to_bitmask() as u32 as u64;
+                let high = match1.to_bitmask() as u32 as u64;
 
                 *out.get_unchecked_mut(i + 4) = (high << 32) | low;
             }
@@ -120,34 +121,36 @@ impl Profile for Iupac {
     #[inline(always)]
     fn valid_seq(seq: &[u8]) -> bool {
         const LANES: usize = 32;
-        type V = u8x32;
         let len = seq.len();
         let mut i = 0;
         unsafe {
-            let mask4 = V::splat(0x0F);
-            let tbl256 = V::from_array(transmute([
+            let mask4 = u8x32::splat(0x0F);
+            let high4 = u8x32::splat(0xF0);
+            let tbl256 = u8x32::from(transmute::<_, [u8; 32]>([
                 PACKED_NIBBLES_INDICATOR,
                 PACKED_NIBBLES_INDICATOR,
             ]));
             while i + LANES <= len {
-                let chunk = V::from_slice(&seq[i..i + LANES]);
-                let upper = chunk & V::splat(!0x20);
+                let chunk = u8x32::from(&seq[i..i + LANES]);
+                let upper = chunk & u8x32::splat(!0x20);
 
-                // Check if >= '@' (64) (=b'A'-1) and < 128.
-                let in_range = upper.simd_ge(V::splat(64)) & upper.simd_lt(V::splat(128));
+                // Check if > '@' (64) (=b'A'-1) and < 128.
+                let in_range =
+                    u8x32_gt(upper, u8x32::splat(64)) & u8x32_gt(u8x32::splat(128), upper);
                 if !in_range.all() {
                     return false;
                 }
 
-                let idx5 = upper & V::splat(0x1F);
+                let idx5 = upper & u8x32::splat(0x1F);
                 let low4 = idx5 & mask4;
-                let is_hi = idx5.simd_ge(V::splat(16));
-                let shuffled: V = half_shuffle(tbl256, low4);
+                let is_hi = u8x32_gt(idx5, u8x32::splat(15));
+                let shuffled = half_shuffle(tbl256, low4);
                 let lo_nib = shuffled & mask4;
-                let hi_nib = shuffled >> 4;
-                let nib = is_hi.select(hi_nib, lo_nib);
+                let hi_nib = shuffled & high4;
+                let nib = is_hi.blend(hi_nib, lo_nib);
 
-                if !nib.simd_gt(V::splat(0)).all() {
+                // nibbles are 0 for IUPAC.
+                if nib.simd_eq(u8x32::splat(0)).any() {
                     return false;
                 }
 
@@ -188,25 +191,7 @@ impl Profile for Iupac {
 /// Matching `__mm256_shuffle_epi8`.
 #[inline(always)]
 fn half_shuffle(table: u8x32, idx: u8x32) -> u8x32 {
-    // For AVX2, use the dedicated 32-lane instruction.
-    #[cfg(target_feature = "avx2")]
-    unsafe {
-        use std::arch::x86_64::_mm256_shuffle_epi8;
-        transmute(_mm256_shuffle_epi8(transmute(table), transmute(idx)))
-    }
-    // Otherwise, fall back to doing two 16-lane shuffles.
-    // For x86: I'm assuming x86-v3 which already has AVX2. Otherwise, this will give a scalar version.
-    // For arm: NEON is enabled by default, so you get that.
-    // Otherwise, whatever the standard library was compiled with, or scalar fallback.
-    #[cfg(not(target_feature = "avx2"))]
-    unsafe {
-        use std::simd::u8x16;
-        let (tbl0, tbl1): (u8x16, u8x16) = transmute(table);
-        let (idx0, idx1): (u8x16, u8x16) = transmute(idx);
-        let shuf0 = tbl0.swizzle_dyn(idx0);
-        let shuf1 = tbl1.swizzle_dyn(idx1);
-        transmute((shuf0, shuf1))
-    }
+    table.swizzle_half_relaxed(idx)
 }
 
 const RC: [u8; 256] = {
@@ -455,13 +440,26 @@ mod test {
 
     #[test]
     fn test_iupac_valid_seq_all() {
-        let all_codes = b"ACTUGNRYSWKMBDHVX";
+        // long enough to trigger the SIMD path.
+        let all_codes = b"ACTUGNRYSWKMBDHVXACTUGNRYSWKMBDHVX";
         for &c in all_codes {
             assert!(Iupac::valid_seq(&[c]));
             assert!(Iupac::valid_seq(&[c.to_ascii_lowercase()]));
         }
+        assert!(Iupac::valid_seq(all_codes));
+        assert!(Iupac::valid_seq(&all_codes.to_ascii_lowercase()));
+        let mut mixed_codes = all_codes.to_vec();
+        mixed_codes.extend_from_slice(&all_codes.to_ascii_lowercase());
+        assert!(Iupac::valid_seq(&mixed_codes));
+        assert!(Iupac::valid_seq(&all_codes.to_ascii_lowercase()));
         // Mixed case should also be valid
         assert!(Iupac::valid_seq(b"AaCcTtUuGgNnRrYySsWwKkMmBbDdHhVvXx"));
+        // Adding one bad character should make it invalid
+        assert!(!Iupac::valid_seq(b"_aCcTtUuGgNnRrYySsWwKkMmBbDdHhVvXx"));
+        assert!(!Iupac::valid_seq(b"AaCcTtUuGgNnRrYySsWwKkMmBbDdH_VvXx"));
+        assert!(!Iupac::valid_seq(b"AaCcTtUuGgN@RrYySsWwKkMmBbDdHhVvXx"));
+        assert!(!Iupac::valid_seq(b"AaEcTtUuGgNnRrYySsWwKkMmBbDdHhVvXx"));
+        assert!(!Iupac::valid_seq(b"AaCeTtUuGgNnRrYySsWwKkMmBbDdHhVvXx"));
     }
 
     #[test]

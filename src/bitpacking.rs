@@ -1,7 +1,6 @@
 //! The basic bitpacking algorithm from Myers'99.
-use std::simd::{LaneCount, Simd, SupportedLaneCount};
-
 use crate::{
+    S,
     delta_encoding::{H, V},
     profiles::Profile,
 };
@@ -61,15 +60,7 @@ pub fn compute_block<P: Profile>(h0: &mut H, v: &mut V, ca: &P::A, cb: &P::B) {
 
 /// Simd version of `compute_block`.
 #[inline(always)]
-pub fn compute_block_simd<const L: usize>(
-    hp0: &mut Simd<u64, L>,
-    hm0: &mut Simd<u64, L>,
-    vp: &mut Simd<u64, L>,
-    vm: &mut Simd<u64, L>,
-    eq: Simd<u64, L>,
-) where
-    LaneCount<L>: SupportedLaneCount,
-{
+pub fn compute_block_simd(hp0: &mut S, hm0: &mut S, vp: &mut S, vm: &mut S, eq: S) {
     let vx = eq | *vm;
     let eq = eq | *hm0;
     // The add here contains the 'folding' magic that makes this algorithm
@@ -88,6 +79,7 @@ pub fn compute_block_simd<const L: usize>(
 
     *hp0 = hpw;
     *hm0 = hmw;
-    *vp = hm | !(vx | hp);
+    let tmp: S = vx | hp;
+    *vp = hm | !tmp;
     *vm = hp & vx;
 }
