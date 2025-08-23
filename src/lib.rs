@@ -106,16 +106,16 @@
 //! assert_eq!(matches[1].strand, Strand::Fwd);
 //! assert_eq!(matches[1].cigar.to_string(), "3=");
 //! ```
-#![cfg_attr(
-    not(any(
-        doc,
-        debug_assertions,
-        all(target_feature = "avx2", target_feature = "bmi2",)
-    )),
-    deprecated(
-        note = "Sassy currently requires x86-64 with AVX2 and BMI2 instructions. Compile using `-C target-cpu=x64-64-v3`."
-    )
-)]
+#[cfg(not(any(
+    doc,
+    debug_assertions,
+    target_feature = "avx2",
+    target_feature = "neon",
+    feature = "scalar"
+)))]
+compile_error!(
+    "Sassy uses AVX2 or NEON SIMD instructions. Compile using `-C target-cpu=native` to get the expected performance. Silence this error using the `scalar` feature."
+);
 
 // INTERNAL MODS
 mod bitpacking;
