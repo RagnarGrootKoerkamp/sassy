@@ -83,9 +83,8 @@ pub fn compute_block_simd<const L: usize>(
     let hmw = hm >> right_shift;
 
     // Push `hw` out of `ph` and `mh` and shift in `h0`.
-    let left_shift = Simd::splat(1);
-    let hp = (hp << left_shift) | *hp0;
-    let hm = (hm << left_shift) | *hm0;
+    let hp = (hp << 1) | *hp0;
+    let hm = (hm << 1) | *hm0;
 
     *hp0 = hpw;
     *hm0 = hmw;
