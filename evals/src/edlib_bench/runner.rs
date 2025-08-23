@@ -47,7 +47,7 @@ macro_rules! time_it {
         }
 
         // Then we also subtract the plus one from base times to get the extra time for one more match
-        let mut base_minus_plus_one: Vec<f64> = base_times.iter().zip(plus_one_times.iter()).map(|(b, p)| b - p).collect();
+        let mut base_minus_plus_one: Vec<f64> = base_times.iter().zip(plus_one_times.iter()).map(|(b, p)| p - b).collect();
 
         // For the base times we remove the top and bottom 10% outliers
         remove_10_percent_outliers(&mut base_times);
