@@ -1,6 +1,7 @@
 use crate::profiles::Profile;
 use std::{
-    arch::x86_64::_mm256_shuffle_epi8, mem::transmute, simd::{cmp::SimdPartialOrd, u8x32}
+    mem::transmute,
+    simd::{cmp::SimdPartialOrd, u8x32},
 };
 
 /// IUPAC alphabet: ACGT + NYR...
@@ -50,10 +51,8 @@ impl Profile for Iupac {
 
             let tbl256 = u8x32::from_array(transmute([PACKED_NIBBLES, PACKED_NIBBLES]));
 
-            let shuffled0: u8x32 =
-                transmute(_mm256_shuffle_epi8(transmute(tbl256), transmute(low4_0)));
-            let shuffled1: u8x32 =
-                transmute(_mm256_shuffle_epi8(transmute(tbl256), transmute(low4_1)));
+            let shuffled0 = half_shuffle(tbl256, low4_0);
+            let shuffled1 = half_shuffle(tbl256, low4_1);
 
             let lo_nib0 = shuffled0 & mask4;
             let lo_nib1 = shuffled1 & mask4;
@@ -135,8 +134,7 @@ impl Profile for Iupac {
                 let idx5 = upper & V::splat(0x1F);
                 let low4 = idx5 & mask4;
                 let is_hi = idx5.simd_ge(V::splat(16));
-                let shuffled: V =
-                    transmute(_mm256_shuffle_epi8(transmute(tbl256), transmute(low4)));
+                let shuffled: V = half_shuffle(tbl256, low4);
                 let lo_nib = shuffled & mask4;
                 let hi_nib = shuffled >> 4;
                 let nib = is_hi.select(hi_nib, lo_nib);
@@ -175,6 +173,31 @@ impl Profile for Iupac {
     #[inline(always)]
     fn supports_overhang() -> bool {
         true
+    }
+}
+
+/// Do a shuffle within each half of table.
+/// Matching `__mm256_shuffle_epi8`.
+#[inline(always)]
+fn half_shuffle(table: u8x32, idx: u8x32) -> u8x32 {
+    // For AVX2, use the dedicated 32-lane instruction.
+    #[cfg(target_feature = "avx2")]
+    unsafe {
+        use std::arch::x86_64::_mm256_shuffle_epi8;
+        transmute(_mm256_shuffle_epi8(transmute(table), transmute(idx)))
+    }
+    // Otherwise, fall back to doing two 16-lane shuffles.
+    // For x86: I'm assuming x86-v3 which already has AVX2. Otherwise, this will give a scalar version.
+    // For arm: NEON is enabled by default, so you get that.
+    // Otherwise, whatever the standard library was compiled with, or scalar fallback.
+    #[cfg(not(target_feature = "avx2"))]
+    unsafe {
+        use std::simd::u8x16;
+        let (tbl0, tbl1): (u8x16, u8x16) = transmute(table);
+        let (idx0, idx1): (u8x16, u8x16) = transmute(idx);
+        let shuf0 = tbl0.swizzle_dyn(idx0);
+        let shuf1 = tbl1.swizzle_dyn(idx1);
+        transmute((shuf0, shuf1))
     }
 }
 
