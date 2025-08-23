@@ -1,8 +1,6 @@
 use crate::profiles::Profile;
 use std::{
-    arch::x86_64::*,
-    mem::transmute,
-    simd::{cmp::SimdPartialOrd, u8x32},
+    arch::x86_64::_mm256_shuffle_epi8, mem::transmute, simd::{cmp::SimdPartialOrd, u8x32}
 };
 
 /// IUPAC alphabet: ACGT + NYR...
@@ -37,18 +35,20 @@ impl Profile for Iupac {
         unsafe {
             let zero = u8x32::splat(0);
             let mask4 = u8x32::splat(0x0F);
-            let tbl256 = u8x32::from_array(transmute([PACKED_NIBBLES, PACKED_NIBBLES]));
+            let mask5 = u8x32::splat(0x1F);
 
             let chunk0 = u8x32::from_array(b[0..32].try_into().unwrap());
             let chunk1 = u8x32::from_array(b[32..64].try_into().unwrap());
 
-            let idx5_0 = chunk0 & u8x32::splat(0x1F);
-            let idx5_1 = chunk1 & u8x32::splat(0x1F);
-            let low4_0 = idx5_0 & mask4;
-            let low4_1 = idx5_1 & mask4;
+            let low4_0 = chunk0 & mask4;
+            let low4_1 = chunk1 & mask4;
+            let idx5_0 = chunk0 & mask5;
+            let idx5_1 = chunk1 & mask5;
 
-            let is_hi_0 = idx5_0.simd_ge(u8x32::splat(15));
-            let is_hi_1 = idx5_1.simd_ge(u8x32::splat(15));
+            let is_hi_0 = idx5_0.simd_gt(u8x32::splat(15));
+            let is_hi_1 = idx5_1.simd_gt(u8x32::splat(15));
+
+            let tbl256 = u8x32::from_array(transmute([PACKED_NIBBLES, PACKED_NIBBLES]));
 
             let shuffled0: u8x32 =
                 transmute(_mm256_shuffle_epi8(transmute(tbl256), transmute(low4_0)));
