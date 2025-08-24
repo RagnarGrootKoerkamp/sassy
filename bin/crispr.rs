@@ -30,8 +30,8 @@ pub struct CrisprArgs {
     output: Option<PathBuf>,
 
     /// Allow at most max_n_frac of N characters in the target sequence.
-    #[arg(long)]
-    max_n_frac: Option<f32>,
+    #[arg(long, default_value = "0.1")]
+    max_n_frac: f32,
 
     /// Number of threads to use. All CPUs by default.
     #[arg(short = 'j', long)]
@@ -68,11 +68,9 @@ fn check_n_frac(max_n_frac: f32, match_slice: &[u8]) -> bool {
 }
 
 fn print_and_check_params(args: &CrisprArgs, guide_sequences: &[Vec<u8>]) -> (String, f32) {
-    let max_n_frac = args.max_n_frac.unwrap_or(1.0); // Allow all to be N by default
-
     // Check if n frac is within valid range
-    if !(0.0..=1.0).contains(&max_n_frac) {
-        eprintln!("[N-chars] Error: max_n_frac must be between 0 and 100");
+    if !(0.0..=1.0).contains(&args.max_n_frac) {
+        eprintln!("[N-chars] Error: max_n_frac must be between 0 and 1.0");
         std::process::exit(1);
     }
 
@@ -120,10 +118,10 @@ fn print_and_check_params(args: &CrisprArgs, guide_sequences: &[Vec<u8>]) -> (St
     println!("[PAM] Edits in PAM are allowed: {}", args.allow_pam_edits);
     println!(
         "[N-chars] Allowing up to {}% N characters",
-        max_n_frac * 100.0
+        args.max_n_frac * 100.0
     );
 
-    (String::from_utf8_lossy(pam).into_owned(), max_n_frac)
+    (String::from_utf8_lossy(pam).into_owned(), args.max_n_frac)
 }
 
 pub fn read_guide_sequences(path: &str) -> Vec<Vec<u8>> {
