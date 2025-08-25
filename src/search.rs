@@ -1494,7 +1494,7 @@ mod tests {
     }
 
     #[test]
-    fn test_random_patterns_60_range() {
+    fn test_random_patterns_60_range_fuzz() {
         use rand::Rng;
         let mut rng = rand::rng();
         let mut i = 0;
@@ -1686,7 +1686,7 @@ mod tests {
 
     #[test]
     #[ignore = "expected fail; planed match is part of another extending local minima"]
-    fn search_fuzz_bug() {
+    fn search_bug() {
         /*
         edits 2
         pattern q=11 AGCTAGCTCTC
@@ -1728,7 +1728,7 @@ mod tests {
     }
 
     #[test]
-    fn search_fuzz_bug_2() {
+    fn search_bug_2() {
         /*
         edits 2
         edits 1
@@ -1765,7 +1765,7 @@ mod tests {
     }
 
     #[test]
-    fn search_fuzz_bug_3() {
+    fn search_bug_3() {
         /*
         edits 18
         pattern q=61 CGATCGGAATCTCTTTGTTCATGATCCAAAGCCCAGCCATCAGCCCGAACGGTGGTTCGCG
