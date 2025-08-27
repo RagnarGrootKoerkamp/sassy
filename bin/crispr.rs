@@ -25,7 +25,7 @@ pub struct CrisprArgs {
     k: usize,
 
     // optional
-    /// Output file, otherwise stdout
+    /// Output file, otherwise stdout.
     #[arg(short = 'o', long)]
     output: Option<PathBuf>,
 
@@ -40,11 +40,11 @@ pub struct CrisprArgs {
     threads: Option<usize>,
 
     // Flags
-    /// Allow edits in PAM sequence
+    /// Allow edits in PAM sequence.
     #[arg(long)]
     allow_pam_edits: bool,
 
-    /// Disable reverse complement search”
+    /// Disable reverse complement search.
     #[arg(long)]
     no_rc: bool,
 

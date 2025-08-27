@@ -15,11 +15,11 @@ use std::{
 #[derive(clap::Parser, Clone)]
 pub struct SearchArgs {
     // Named args
-    /// Pattern to search for (cannot be used with -f)
+    /// Pattern to search for (cannot be used with -f).
     #[arg(short = 'p', long, conflicts_with = "pattern_fasta")]
     pattern: Option<String>,
 
-    /// Fasta file with multiple patterns (cannot be used with -p)
+    /// Fasta file with multiple patterns (cannot be used with -p).
     #[arg(short = 'f', long, conflicts_with = "pattern")]
     pattern_fasta: Option<String>,
 
@@ -32,7 +32,7 @@ pub struct SearchArgs {
     #[arg(long, short = 'a', value_enum)]
     alphabet: Alphabet,
 
-    /// Disable reverse complement search (enabled by default for DNA and IUPAC)
+    /// Disable reverse complement search (enabled by default for DNA and IUPAC).
     #[arg(long)]
     no_rc: bool,
 
