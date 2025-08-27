@@ -75,12 +75,27 @@ or search all records of a fasta file with `--pattern-fasta <fasta-file>` instea
 
 For the alphabets see [supported alphabets](#supported-alphabets)
 
-**CRISPR off-target search** for guides in `guides.txt`:
+**CRISPR off-target search** for one or more guides in `guides.txt`:
 ```bash
-sassy crispr --guide guides.txt --k 1  text.fasta
+sassy crispr --threads 8 --guide guides.txt --k 5 --max-frac-ns 0.1 --output hits.txt hg38.fasta
 ```
-Allows `<= k` edits in the sgRNA, and the PAM has to match exactly, unless
-`--allow-pam-edits` is given.
+
+Allows `<= k` edits in the sgRNA, and the PAM has to match exactly, unless `--allow-pam-edits` is given.
+
+Output of the `crispr` command is a tab-delimited file with one row per hit, e.g.:
+
+```text
+guide                    text_id  cost  strand  start     end       match_region             cigar
+GAGTCCGAGCAGAAGAAGAANGG  chr21    5     +       5024135   5024154   GAGGCCACAGAGAAGAGGG      3=1X2=1D1=1D3=1D5=1D4=
+GAGTCCGAGCAGAAGAAGAANGG  chr21    3     +       21087337  21087359  gagaccgaggagaagaaaaagg   3=1X5=1X7=1D5=
+GAGTCCGAGCAGAAGAAGAANGG  chr21    3     -       9701297   9701320   GACTCGAGCATGAAGAAGAAAGG  2=1X1=1D6=1I12=
+GAGTCCGAGCAGAAGAAGAANGG  chr21    5     -       46396975  46396998  CAGTCCCAGCAGACGACGGACGG  1X5=1X6=1X2=1X1=1X4=
+```
+
+The `start` and `end` are 0-based open-ended (i.e. 0-based inclusive of the start, but exclusive of the end).  The 
+`match_region` reported will be the sequence from the target file when `strand` is `+`, or the reverse complement
+of the sequence from the target file when `strand` is `-` (to match the `guide` sequence).  The `cigar` is always
+oriented to read left-to-right with the provided guide and `match_region` sequences.
 
 ### 2. Python bindings
 
