@@ -77,10 +77,10 @@ For the alphabets see [supported alphabets](#supported-alphabets)
 
 **CRISPR off-target search** for one or more guides in `guides.txt`:
 ```bash
-sassy crispr --threads 8 --guide guides.txt --k 5 --max-frac-ns 0.1 --output hits.txt hg38.fasta
+sassy crispr --threads 8 --guide guides.txt --k 5 --max-n-frac 0.1 --output hits.tsv hg38.fasta
 ```
 
-Allows `<= k` edits in the sgRNA, and the PAM has to match exactly, unless `--allow-pam-edits` is given.
+Allows `<= k` edits in the sgRNA, and the PAM (the last 3 characters of each guide) has to match exactly, unless `--allow-pam-edits` is given.
 
 Output of the `crispr` command is a tab-delimited file with one row per hit, e.g.:
 
