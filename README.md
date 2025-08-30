@@ -16,7 +16,7 @@ Sassy generally works well for patterns/queries up to length 1000,
 and supports both ASCII and DNA.
 
 Highlights:
-- Sassy uses bitpacking and SIMD.
+- Sassy uses bitpacking and SIMD (both AVX and NEON supported).
   Its main novelty is tiling these in the text direction.
 - Support for _overhang_ alignments where the pattern extends beyond the text.
 - Support for (case-insensitive) ASCII, DNA (`ACGT`), and
@@ -31,8 +31,6 @@ See **the paper** below, and corresponding evals in [evals/](evals/).
 > bioRxiv, July 2025.
 > https://doi.org/10.1101/2025.07.22.666207.
 
-
-The main **limitation** is that currently **AVX2** and **BMI2** are required.
 
 ## Usage
 
