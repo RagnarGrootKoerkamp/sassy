@@ -92,10 +92,16 @@ GAGTCCGAGCAGAAGAAGAANGG  chr21    3     -       9701297   9701320   GACTCGAGCATG
 GAGTCCGAGCAGAAGAAGAANGG  chr21    5     -       46396975  46396998  CAGTCCCAGCAGACGACGGACGG  1X5=1X6=1X2=1X1=1X4=
 ```
 
-The `start` and `end` are 0-based open-ended (i.e. 0-based inclusive of the start, but exclusive of the end).  The 
+The `start` and `end` are 0-based open-ended (i.e. 0-based inclusive of the
+start, but exclusive of the end), and `start` is always less then `end`
+(regardless of the strand).  The 
 `match_region` reported will be the sequence from the target file when `strand` is `+`, or the reverse complement
-of the sequence from the target file when `strand` is `-` (to match the `guide` sequence).  The `cigar` is always
-oriented to read left-to-right with the provided guide and `match_region` sequences.
+of the sequence from the target file when `strand` is `-`, so that it matches the `guide` sequence.
+The `cigar` is always oriented to read left-to-right with the provided guide and `match_region` sequences.
+
+Note that this searches for approximate occurrences of the guide
+sequence itself, and _not_ for reverse-complement _binding_ sites.
+If binding sites are to be found, please reverse-complement the input or output manually.
 
 ### 2. Python bindings
 
