@@ -188,6 +188,7 @@ impl<P: Profile> LaneState<P> {
 /// This object caches internal buffers, so that reusing it avoids allocations.
 ///
 /// See the library documentation for examples.
+#[derive(Clone)]
 pub struct Searcher<P: Profile> {
     // Config
     /// Search reverse complement text?
