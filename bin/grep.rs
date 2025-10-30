@@ -119,10 +119,12 @@ impl GrepArgs {
         let task_iterator = &InputIterator::new(&args.path, &patterns, Some(100 * 1024 * 1024), rc);
 
         let output = Mutex::new((0, VecDeque::<Option<Vec<(Task<'_>, Vec<Match>)>>>::new()));
+        let global_histogram = Mutex::new(vec![0usize; k + 1]);
 
         std::thread::scope(|s| {
             for _ in 0..num_threads {
                 let output = &output;
+                let global_histogram = &global_histogram;
                 s.spawn(move || {
                     // Each thread has own searcher here
                     let mut searcher: SearchWrapper = match &args.alphabet {
@@ -140,10 +142,14 @@ impl GrepArgs {
                     };
 
                     let mut results: Vec<(Task<'_>, Vec<Match>)> = vec![];
+                    let mut local_histogram = vec![0usize; k + 1];
 
                     while let Some((batch_id, batch)) = task_iterator.next_batch() {
                         for item in batch {
                             let matches = searcher.search(&item.pattern.seq, &item.text.seq, k);
+                            for m in &matches {
+                                local_histogram[m.cost as usize] += 1;
+                            }
                             results.push((item, matches));
                         }
 
@@ -184,9 +190,23 @@ impl GrepArgs {
                             results = vec![];
                         }
                     }
+
+                    // Merge local histogram into global histogram.
+                    let mut global_hist = global_histogram.lock().unwrap();
+                    for dist in 0..=k {
+                        global_hist[dist] += local_histogram[dist];
+                    }
                 });
             }
         });
+
+        let global_hist = global_histogram.into_inner().unwrap();
+        eprintln!("\nStatistics:");
+        eprintln!("Dist  {:>10}", "Count");
+        for (dist, &count) in global_hist.iter().enumerate() {
+            eprintln!("{:>4}: {:>10}", dist, count);
+        }
+
         assert!(output.into_inner().unwrap().1.is_empty());
     }
 
