@@ -1,6 +1,6 @@
-use needletail::{FastxReader, parse_fastx_file};
+use needletail::{FastxReader, parse_fastx_file, parse_fastx_stdin};
 use sassy::CachedRev;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex; //Todo: could use parking_lot mutex - faster
 
 /// Each batch of text records will be at most this size if possible.
@@ -17,6 +17,7 @@ pub struct PatternRecord {
 }
 
 /// A text to be searched, with ID from fasta file.
+/// TODO: Reduce the number of allocations here.
 #[derive(Debug)]
 pub struct TextRecord {
     pub id: ID,
@@ -28,7 +29,7 @@ pub struct TextRecord {
 /// This avoids lock contention of sending too small items across threads.
 ///
 /// Each task represents searching _all_ patterns against _all_ text records.
-pub type TaskBatch<'a> = (&'a [PatternRecord], Vec<TextRecord>);
+pub type TaskBatch<'a> = (&'a Path, &'a [PatternRecord], Vec<TextRecord>);
 
 struct RecordState {
     /// The current fasta reader.
@@ -92,7 +93,8 @@ impl<'a> InputIterator<'a> {
         let mut state = self.state.lock().unwrap();
         let batch_id = state.next_batch_id;
         state.next_batch_id += 1;
-        let mut batch: TaskBatch<'a> = (self.patterns, Vec::new());
+        let mut batch: TaskBatch<'a> =
+            (&self.paths[state.cur_file_index], self.patterns, Vec::new());
         let mut bytes_in_batch = 0usize;
 
         // Effectively this gets a record, add all patterns, then tries
@@ -126,7 +128,7 @@ impl<'a> InputIterator<'a> {
                         }
 
                         // Return last batch for the current file.
-                        if !batch.1.is_empty() {
+                        if !batch.2.is_empty() {
                             return Some((batch_id, batch));
                         }
                         if end_of_files {
@@ -145,14 +147,14 @@ impl<'a> InputIterator<'a> {
             let record_len = current_record.as_ref().unwrap().seq.text.len();
 
             // If no space left for next record, we return current batch
-            if !batch.1.is_empty()
+            if !batch.2.is_empty()
                 && bytes_in_batch + record_len * self.patterns.len() > self.batch_byte_limit
             {
                 break; // return current batch, keep state for next call
             }
 
             // Add next pattern
-            batch.1.push(current_record.take().unwrap());
+            batch.2.push(current_record.take().unwrap());
             bytes_in_batch += record_len * self.patterns.len();
         }
 
@@ -214,14 +216,14 @@ mod tests {
             // Get unique texts, and then their length sum
             let unique_texts = batch
                 .1
-                .1
+                .2
                 .iter()
                 .map(|item| item.seq.text.clone())
                 .collect::<std::collections::HashSet<_>>();
             let text_len = unique_texts.iter().map(|text| text.len()).sum::<usize>();
             let n_patterns = batch
                 .1
-                .0
+                .1
                 .iter()
                 .map(|item| item.id.clone())
                 .collect::<std::collections::HashSet<_>>()

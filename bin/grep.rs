@@ -1,4 +1,9 @@
-use std::{collections::VecDeque, fmt::Write, path::PathBuf, sync::Mutex};
+use std::{
+    collections::VecDeque,
+    fmt::Write,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 
 use colored_text::Colorize;
 use pa_types::Cigar;
@@ -152,7 +157,7 @@ impl GrepArgs {
 
         let output = Mutex::new((
             0,
-            VecDeque::<Option<Vec<(TextRecord, Vec<(&PatternRecord, Match)>)>>>::new(),
+            VecDeque::<Option<Vec<(&Path, TextRecord, Vec<(&PatternRecord, Match)>)>>>::new(),
         ));
         let global_histogram = Mutex::new(vec![0usize; k + 1]);
 
@@ -188,13 +193,15 @@ impl GrepArgs {
                         ))),
                     };
 
-                    let mut results: Vec<(TextRecord, Vec<(&PatternRecord, Match)>)> = vec![];
+                    let mut results: Vec<(&Path, TextRecord, Vec<(&PatternRecord, Match)>)> =
+                        vec![];
                     let mut local_histogram = vec![0usize; k + 1];
 
                     while let Some((batch_id, batch)) = task_iterator.next_batch() {
-                        for text in batch.1 {
+                        let path = batch.0;
+                        for text in batch.2 {
                             let mut matches = vec![];
-                            for pattern in batch.0 {
+                            for pattern in batch.1 {
                                 matches.extend(
                                     searcher
                                         .search(&pattern.seq, &text.seq, k)
@@ -212,7 +219,7 @@ impl GrepArgs {
                             for (_pat, m) in &matches {
                                 local_histogram[m.cost as usize] += 1;
                             }
-                            results.push((text, matches));
+                            results.push((path, text, matches));
                         }
 
                         let (next_batch_id, output_buf) = &mut *output.lock().unwrap();
@@ -237,7 +244,7 @@ impl GrepArgs {
                         {
                             *next_batch_id += 1;
                             let front_results = output_buf.pop_front().unwrap().unwrap();
-                            for (text, mut matches) in front_results {
+                            for (path, text, mut matches) in front_results {
                                 if self.filter {
                                     let writer = &mut **writer.as_mut().unwrap();
                                     if !self.invert && !matches.is_empty() {
@@ -247,7 +254,7 @@ impl GrepArgs {
                                         args.print_matching_record(&text, writer);
                                     }
                                 } else {
-                                    args.print_matches_for_record(&text, &mut matches);
+                                    args.print_matches_for_record(path, &text, &mut matches);
                                 }
                             }
                         }
@@ -286,13 +293,17 @@ impl GrepArgs {
 
     fn print_matches_for_record(
         &self,
+        path: &Path,
         text: &TextRecord,
         matches: &mut Vec<(&PatternRecord, Match)>,
     ) {
         if matches.is_empty() {
             return;
         }
-        println!("{}", format!(">{}", text.id).bold());
+        println!(
+            "{}",
+            format!("{}>{}", path.display().cyan().bold(), text.id.bold()).bold()
+        );
         matches.sort_by_key(|m| m.1.text_start);
         for (pattern, match_record) in matches {
             let line = self.pretty_print_match_line(pattern, text, match_record);

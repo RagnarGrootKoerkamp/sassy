@@ -221,8 +221,8 @@ pub fn search(args: &SearchArgs) {
                 };
 
                 while let Some((_id, batch)) = task_iterator.next_batch() {
-                    for text in batch.1 {
-                        for pattern in batch.0 {
+                    for text in batch.2 {
+                        for pattern in batch.1 {
                             let matches = searcher.search(&pattern.seq, &text.seq, k);
                             if matches.is_empty() {
                                 continue;
