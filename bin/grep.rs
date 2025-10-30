@@ -156,38 +156,28 @@ impl GrepArgs {
                         // Wait until next_batch_id equals batch_id.
                         let (next_batch_id, output_buf) = &mut *output.lock().unwrap();
 
-                        if batch_id == *next_batch_id {
-                            // Print this and pending results.
-                            for (item, matches) in &mut results {
-                                args.print_matches_for_record(&item.pattern, &item.text, matches);
-                            }
-                            results.clear();
-                            *next_batch_id += 1;
-                            if !output_buf.is_empty() {
-                                assert!(output_buf.pop_front().unwrap().is_none());
-                            }
+                        // Push to buffer.
+                        let idx = batch_id - *next_batch_id;
+                        if output_buf.len() <= idx {
+                            output_buf.resize(idx + 1, None);
+                        }
+                        assert!(output_buf[idx].is_none());
+                        output_buf[idx] = Some(results);
+                        results = vec![];
 
-                            while let Some(front) = output_buf.front()
-                                && front.is_some()
-                            {
-                                *next_batch_id += 1;
-                                let front_results = output_buf.pop_front().unwrap().unwrap();
-                                for (item, mut matches) in front_results {
-                                    args.print_matches_for_record(
-                                        &item.pattern,
-                                        &item.text,
-                                        &mut matches,
-                                    );
-                                }
+                        // Print pending results.
+                        while let Some(front) = output_buf.front()
+                            && front.is_some()
+                        {
+                            *next_batch_id += 1;
+                            let front_results = output_buf.pop_front().unwrap().unwrap();
+                            for (item, mut matches) in front_results {
+                                args.print_matches_for_record(
+                                    &item.pattern,
+                                    &item.text,
+                                    &mut matches,
+                                );
                             }
-                        } else {
-                            // Push to buffer.
-                            let idx = batch_id - *next_batch_id;
-                            if output_buf.len() <= idx {
-                                output_buf.resize(idx + 1, None);
-                            }
-                            output_buf[idx] = Some(results);
-                            results = vec![];
                         }
                     }
 
