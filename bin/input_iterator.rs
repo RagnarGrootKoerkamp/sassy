@@ -53,6 +53,14 @@ pub struct InputIterator<'a> {
     rev: bool,
 }
 
+fn parse_file(path: &PathBuf) -> Box<dyn FastxReader> {
+    if path == Path::new("") || path == Path::new("-") {
+        return parse_fastx_stdin().unwrap();
+    } else {
+        return parse_fastx_file(path).unwrap();
+    }
+}
+
 impl<'a> InputIterator<'a> {
     /// Create a new iterator over `fasta_path`, going through `patterns`.
     /// `max_batch_bytes` controls how many texts are bundled together.
@@ -62,7 +70,7 @@ impl<'a> InputIterator<'a> {
         max_batch_bytes: Option<usize>,
         rev: bool,
     ) -> Self {
-        let reader = parse_fastx_file(&paths[0]).expect("valid fasta");
+        let reader = parse_file(&paths[0]);
         // Just empty state when we create the iterator
         let state = RecordState {
             reader,
@@ -113,8 +121,7 @@ impl<'a> InputIterator<'a> {
                         if !end_of_files {
                             state.cur_file_index += 1;
                             if state.cur_file_index < self.paths.len() {
-                                state.reader =
-                                    parse_fastx_file(&self.paths[state.cur_file_index]).unwrap();
+                                state.reader = parse_file(&self.paths[state.cur_file_index]);
                             }
                         }
 

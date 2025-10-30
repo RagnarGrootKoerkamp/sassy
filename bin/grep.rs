@@ -128,6 +128,9 @@ impl GrepArgs {
     pub fn grep(mut self) {
         self.set_mode();
         self.set_context();
+        if self.paths.is_empty() {
+            self.paths = vec![PathBuf::from("")];
+        }
         let args = &self;
 
         // 1. iterate over files
