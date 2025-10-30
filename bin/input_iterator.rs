@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::Mutex; //Todo: could use parking_lot mutex - faster
 
 /// Each batch of text records will be at most this size if possible.
-const DEFAULT_BATCH_BYTES: usize = 256 * 1024; // 256 KB
+const DEFAULT_BATCH_BYTES: usize = 1024 * 1024; // 1 MiB
 
 /// Type alias for fasta record IDs.
 pub type ID = String;
