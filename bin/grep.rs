@@ -138,12 +138,6 @@ impl GrepArgs {
         }
         let args = &self;
 
-        // 1. iterate over files
-        // 2. iterate over records in file
-        // 3. iterate over patterns
-
-        // Copied from search::search
-
         let patterns = get_patterns(&args.pattern, &args.pattern_file, &args.pattern_fasta);
         assert!(!patterns.is_empty(), "No pattern sequences found");
 
@@ -270,11 +264,11 @@ impl GrepArgs {
         });
 
         let global_hist = global_histogram.into_inner().unwrap();
-        eprintln!("\nStatistics:");
-        eprintln!("Dist  {:>10}", "Count");
+        eprint!("\nStatistics: ");
         for (dist, &count) in global_hist.iter().enumerate() {
-            eprintln!("{:>4}: {:>10}", dist, count);
+            eprint!("dist {dist} => {count}, ");
         }
+        eprintln!();
 
         assert!(output.into_inner().unwrap().1.is_empty());
     }
@@ -300,14 +294,14 @@ impl GrepArgs {
         if matches.is_empty() {
             return;
         }
-        println!(
+        eprintln!(
             "{}",
             format!("{}>{}", path.display().cyan().bold(), text.id.bold()).bold()
         );
         matches.sort_by_key(|m| m.1.text_start);
         for (pattern, match_record) in matches {
             let line = self.pretty_print_match_line(pattern, text, match_record);
-            print!("{}", line);
+            eprint!("{}", line);
         }
     }
 
@@ -358,17 +352,17 @@ impl GrepArgs {
         };
         let suffix_skip = format_skip(suffix_skip, false);
 
+        let strand = match m.strand {
+            Strand::Fwd => "+",
+            Strand::Rc => "-",
+        };
+
         format!(
-            "{} {} d={} @ {}-{}\n{}{}{}{}{}\n",
-            match m.strand {
-                Strand::Fwd => "fwd",
-                Strand::Rc => "rc ",
-            }
-            .bold(),
+            "{} ({}) {} @ {} | {}{:>context$}{}{}{}\n",
             pattern.id,
+            strand.bold(),
             m.cost.bold(),
-            m.text_start.dim(),
-            m.text_end.dim(),
+            format!("{:<19}", format!("{}-{}", m.text_start, m.text_end)).dim(),
             prefix_skip.dim(),
             String::from_utf8_lossy(prefix),
             match_string,
