@@ -89,6 +89,8 @@ pub struct GrepArgs {
     filter: bool,
 
     /// Output file, otherwise stdout. Must be a directory when multiple input paths are given.
+    ///
+    /// - for explicit stdout.
     #[arg(short = 'o', long)]
     output: Option<PathBuf>,
 
@@ -130,10 +132,22 @@ impl GrepArgs {
         ));
         let global_histogram = Mutex::new(vec![0usize; k + 1]);
 
+        let writer = if let Some(output) = &args.output
+            && output != "-"
+        {
+            let path = PathBuf::from(output);
+            Box::new(std::fs::File::create(path).expect("create output file"))
+                as Box<dyn std::io::Write + Send>
+        } else {
+            Box::new(std::io::stdout()) as Box<dyn std::io::Write + Send>
+        };
+        let writer = Mutex::new(writer);
+
         std::thread::scope(|s| {
             for _ in 0..num_threads {
                 let output = &output;
                 let global_histogram = &global_histogram;
+                let writer = &writer;
                 s.spawn(move || {
                     // Each thread has own searcher here
                     let mut searcher: SearchWrapper = match &args.alphabet {
@@ -178,6 +192,11 @@ impl GrepArgs {
                         }
 
                         let (next_batch_id, output_buf) = &mut *output.lock().unwrap();
+                        let mut writer = if self.filter {
+                            Some(writer.lock().unwrap())
+                        } else {
+                            None
+                        };
 
                         // Push to buffer.
                         let idx = batch_id - *next_batch_id;
@@ -196,11 +215,12 @@ impl GrepArgs {
                             let front_results = output_buf.pop_front().unwrap().unwrap();
                             for (text, mut matches) in front_results {
                                 if self.filter {
+                                    let writer = &mut **writer.as_mut().unwrap();
                                     if !self.invert && !matches.is_empty() {
-                                        args.print_matching_record(&text);
+                                        args.print_matching_record(&text, writer);
                                     }
                                     if self.invert && matches.is_empty() {
-                                        args.print_matching_record(&text);
+                                        args.print_matching_record(&text, writer);
                                     }
                                 } else {
                                     args.print_matches_for_record(&text, &mut matches);
@@ -246,16 +266,15 @@ impl GrepArgs {
             }
         }
     }
-
-    fn print_matching_record(&self, text: &TextRecord) {
+    fn print_matching_record(&self, text: &TextRecord, writer: &mut (dyn std::io::Write + Send)) {
         if !text.quality.is_empty() {
-            println!("@{}", text.id);
-            println!("{}", String::from_utf8_lossy(&text.seq.text));
-            println!("+");
-            println!("{}", String::from_utf8_lossy(&text.quality));
+            writeln!(writer, "@{}", text.id).unwrap();
+            writeln!(writer, "{}", String::from_utf8_lossy(&text.seq.text)).unwrap();
+            writeln!(writer, "+").unwrap();
+            writeln!(writer, "{}", String::from_utf8_lossy(&text.quality)).unwrap();
         } else {
-            println!(">{}", text.id);
-            println!("{}", String::from_utf8_lossy(&text.seq.text));
+            writeln!(writer, ">{}", text.id).unwrap();
+            writeln!(writer, "{}", String::from_utf8_lossy(&text.seq.text)).unwrap();
         }
     }
 
