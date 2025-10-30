@@ -106,7 +106,6 @@ impl GrepArgs {
     pub fn grep(mut self) {
         self.set_mode();
         self.set_context();
-        assert!(!self.filter);
         let args = &self;
 
         // 1. iterate over files
@@ -196,7 +195,16 @@ impl GrepArgs {
                             *next_batch_id += 1;
                             let front_results = output_buf.pop_front().unwrap().unwrap();
                             for (text, mut matches) in front_results {
-                                args.print_matches_for_record(&text, &mut matches);
+                                if self.filter {
+                                    if !self.invert && !matches.is_empty() {
+                                        args.print_matching_record(&text);
+                                    }
+                                    if self.invert && matches.is_empty() {
+                                        args.print_matching_record(&text);
+                                    }
+                                } else {
+                                    args.print_matches_for_record(&text, &mut matches);
+                                }
                             }
                         }
                     }
@@ -237,6 +245,11 @@ impl GrepArgs {
                 self.context = Some(20);
             }
         }
+    }
+
+    fn print_matching_record(&self, text: &TextRecord) {
+        println!(">{}", text.id);
+        println!("{}", String::from_utf8_lossy(&text.seq.text));
     }
 
     fn print_matches_for_record(
