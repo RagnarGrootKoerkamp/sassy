@@ -205,62 +205,67 @@ pub fn crispr(args: &CrisprArgs) {
                 };
 
                 while let Some((_batch_id, batch)) = task_iter.next_batch() {
-                    for item in batch {
-                        let guide_sequence = &item.pattern.seq;
-                        let guide_string = String::from_utf8_lossy(guide_sequence);
-                        let id_text = &item.text;
+                    for text in batch.1 {
+                        for pattern in batch.0 {
+                            let guide_sequence = &pattern.seq;
+                            let guide_string = String::from_utf8_lossy(guide_sequence);
+                            let id_text = &text;
 
-                        let id = &id_text.id;
-                        let text = &id_text.seq;
+                            let id = &id_text.id;
+                            let text = &id_text.seq;
 
-                        let matches = if !args.allow_pam_edits {
-                            searcher.search_with_fn(guide_sequence, text, args.k, true, filter_fn)
-                        } else {
-                            searcher.search_all(guide_sequence, text, args.k)
-                        };
-
-                        total_found.fetch_add(matches.len(), Ordering::Relaxed);
-
-                        let mut writer_guard = writer.lock().unwrap();
-
-                        for m in matches {
-                            let start = m.text_start;
-                            let end = m.text_end;
-                            let text = text.text();
-                            let slice = &text.as_ref()[start..end];
-
-                            // Check if satisfies user max N cut off
-                            let n_ok = if max_n_frac < 100.0 {
-                                check_n_frac(max_n_frac, slice)
+                            let matches = if !args.allow_pam_edits {
+                                searcher.search_with_fn(guide_sequence, text, args.k, true, filter_fn)
                             } else {
-                                true
+                                searcher.search_all(guide_sequence, text, args.k)
                             };
-
-                            if !n_ok {
+                            if matches.is_empty() {
                                 continue;
                             }
 
-                            total_found.fetch_add(1, Ordering::Relaxed);
+                            total_found.fetch_add(matches.len(), Ordering::Relaxed);
 
-                            let match_region = if m.strand == Strand::Rc {
-                                let rc = <Iupac as Profile>::reverse_complement(slice);
-                                String::from_utf8_lossy(&rc).into_owned()
-                            } else {
-                                String::from_utf8_lossy(slice).into_owned()
-                            };
-                            let cost = m.cost;
-                            let cigar = m.cigar.to_string();
-                            let strand = match m.strand {
-                                Strand::Fwd => "+",
-                                Strand::Rc => "-",
-                            };
-                            writeln!(
-                                writer_guard,
-                                "{guide_string}\t{id}\t{cost}\t{strand}\t{start}\t{end}\t{match_region}\t{cigar}"
-                            )
-                            .unwrap();
+                            let mut writer_guard = writer.lock().unwrap();
+
+                            for m in matches {
+                                let start = m.text_start;
+                                let end = m.text_end;
+                                let text = text.text();
+                                let slice = &text.as_ref()[start..end];
+
+                                // Check if satisfies user max N cut off
+                                let n_ok = if max_n_frac < 100.0 {
+                                    check_n_frac(max_n_frac, slice)
+                                } else {
+                                    true
+                                };
+
+                                if !n_ok {
+                                    continue;
+                                }
+
+                                total_found.fetch_add(1, Ordering::Relaxed);
+
+                                let match_region = if m.strand == Strand::Rc {
+                                    let rc = <Iupac as Profile>::reverse_complement(slice);
+                                    String::from_utf8_lossy(&rc).into_owned()
+                                } else {
+                                    String::from_utf8_lossy(slice).into_owned()
+                                };
+                                let cost = m.cost;
+                                let cigar = m.cigar.to_string();
+                                let strand = match m.strand {
+                                    Strand::Fwd => "+",
+                                    Strand::Rc => "-",
+                                };
+                                writeln!(
+                                    writer_guard,
+                                    "{guide_string}\t{id}\t{cost}\t{strand}\t{start}\t{end}\t{match_region}\t{cigar}"
+                                )
+                                    .unwrap();
+                            }
+                            drop(writer_guard);
                         }
-                        drop(writer_guard);
                     }
                 }
             });

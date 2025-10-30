@@ -8,7 +8,7 @@ use sassy::{
 };
 
 use crate::{
-    input_iterator::{InputIterator, PatternRecord, Task, TextRecord},
+    input_iterator::{InputIterator, PatternRecord, TextRecord},
     search::{Alphabet, SearchWrapper, get_patterns},
 };
 
@@ -118,7 +118,10 @@ impl GrepArgs {
         let num_threads = args.threads.unwrap_or_else(num_cpus::get);
         let task_iterator = &InputIterator::new(&args.path, &patterns, Some(100 * 1024 * 1024), rc);
 
-        let output = Mutex::new((0, VecDeque::<Option<Vec<(Task<'_>, Vec<Match>)>>>::new()));
+        let output = Mutex::new((
+            0,
+            VecDeque::<Option<Vec<(TextRecord, Vec<(&PatternRecord, Match)>)>>>::new(),
+        ));
         let global_histogram = Mutex::new(vec![0usize; k + 1]);
 
         std::thread::scope(|s| {
@@ -141,42 +144,45 @@ impl GrepArgs {
                         ))),
                     };
 
-                    let mut results: Vec<(Task<'_>, Vec<Match>)> = vec![];
+                    let mut results: Vec<(TextRecord, Vec<(&PatternRecord, Match)>)> = vec![];
                     let mut local_histogram = vec![0usize; k + 1];
 
                     while let Some((batch_id, batch)) = task_iterator.next_batch() {
-                        for item in batch {
-                            let matches = searcher.search(&item.pattern.seq, &item.text.seq, k);
-                            for m in &matches {
+                        for text in batch.1 {
+                            let mut matches = vec![];
+                            for pattern in batch.0 {
+                                matches.extend(
+                                    searcher
+                                        .search(&pattern.seq, &text.seq, k)
+                                        .into_iter()
+                                        .map(|m| (pattern, m)),
+                                );
+                            }
+                            for (_pat, m) in &matches {
                                 local_histogram[m.cost as usize] += 1;
                             }
-                            results.push((item, matches));
+                            results.push((text, matches));
                         }
 
-                        // Wait until next_batch_id equals batch_id.
                         let (next_batch_id, output_buf) = &mut *output.lock().unwrap();
 
                         // Push to buffer.
                         let idx = batch_id - *next_batch_id;
                         if output_buf.len() <= idx {
-                            output_buf.resize(idx + 1, None);
+                            output_buf.resize_with(idx + 1, || None);
                         }
                         assert!(output_buf[idx].is_none());
                         output_buf[idx] = Some(results);
                         results = vec![];
 
-                        // Print pending results.
+                        // Print pending results once ready.
                         while let Some(front) = output_buf.front()
                             && front.is_some()
                         {
                             *next_batch_id += 1;
                             let front_results = output_buf.pop_front().unwrap().unwrap();
-                            for (item, mut matches) in front_results {
-                                args.print_matches_for_record(
-                                    &item.pattern,
-                                    &item.text,
-                                    &mut matches,
-                                );
+                            for (text, mut matches) in front_results {
+                                args.print_matches_for_record(&text, &mut matches);
                             }
                         }
                     }
@@ -221,16 +227,15 @@ impl GrepArgs {
 
     fn print_matches_for_record(
         &self,
-        pattern: &PatternRecord,
         text: &TextRecord,
-        matches: &mut Vec<Match>,
+        matches: &mut Vec<(&PatternRecord, Match)>,
     ) {
         if matches.is_empty() {
             return;
         }
         println!("{}", format!(">{}", text.id).bold());
-        matches.sort_by_key(|m| m.text_start);
-        for match_record in matches {
+        matches.sort_by_key(|m| m.1.text_start);
+        for (pattern, match_record) in matches {
             let line = self.pretty_print_match_line(pattern, text, match_record);
             print!("{}", line);
         }

@@ -220,20 +220,25 @@ pub fn search(args: &SearchArgs) {
                 };
 
                 while let Some((_id, batch)) = task_iterator.next_batch() {
-                    for item in batch {
-                        let matches = searcher.search(&item.pattern.seq, &item.text.seq, k);
-                        let mut writer_guard = output_writer.lock().unwrap();
-                        for m in matches {
-                            let line = as_output_line(
-                                &m,
-                                &item.pattern.id,
-                                &item.text.id,
-                                &item.text.seq,
-                                &args.alphabet,
-                            );
-                            writer_guard.write_all(line.as_bytes()).unwrap();
+                    for text in batch.1 {
+                        for pattern in batch.0 {
+                            let matches = searcher.search(&pattern.seq, &text.seq, k);
+                            if matches.is_empty() {
+                                continue;
+                            }
+                            let mut writer_guard = output_writer.lock().unwrap();
+                            for m in matches {
+                                let line = as_output_line(
+                                    &m,
+                                    &pattern.id,
+                                    &text.id,
+                                    &text.seq,
+                                    &args.alphabet,
+                                );
+                                writer_guard.write_all(line.as_bytes()).unwrap();
+                            }
+                            drop(writer_guard);
                         }
-                        drop(writer_guard);
                     }
                 }
             });

@@ -1,7 +1,7 @@
 use needletail::{FastxReader, parse_fastx_file};
 use sassy::CachedRev;
 use std::path::Path;
-use std::sync::{Arc, Mutex}; //Todo: could use parking_lot mutex - faster
+use std::sync::Mutex; //Todo: could use parking_lot mutex - faster
 
 /// Each batch of text records will be at most this size if possible.
 const DEFAULT_BATCH_BYTES: usize = 256 * 1024; // 256 KB
@@ -23,26 +23,19 @@ pub struct TextRecord {
     pub seq: CachedRev<Vec<u8>>,
 }
 
-/// A single alignment task, consisting of a pattern and text.
-#[derive(Clone, Debug)]
-pub struct Task<'a> {
-    pub pattern: &'a PatternRecord,
-    pub text: Arc<TextRecord>,
-}
-
 /// A batch of alignment tasks, with total text size around `DEFAULT_BATCH_BYTES`.
 /// This avoids lock contention of sending too small items across threads.
-pub type TaskBatch<'a> = Vec<Task<'a>>;
+///
+/// Each task represents searching _all_ patterns against _all_ text records.
+pub type TaskBatch<'a> = (&'a [PatternRecord], Vec<TextRecord>);
 
 struct RecordState {
     /// The fasta reader.
     reader: Box<dyn FastxReader + Send>,
     /// The next batch id.
     next_batch_id: usize,
-    /// Index of the next pattern for the current record.
-    next_pattern_idx: usize,
     /// Current text record, that can be send to multiple threads.
-    current_record: Option<Arc<TextRecord>>,
+    current_record: Option<TextRecord>,
 }
 
 /// Thread-safe iterator giving *batches* of (pattern, text) pairs.
@@ -70,7 +63,6 @@ impl<'a> InputIterator<'a> {
         let state = RecordState {
             reader,
             next_batch_id: 0,
-            next_pattern_idx: 0,
             current_record: None,
         };
         Self {
@@ -86,7 +78,7 @@ impl<'a> InputIterator<'a> {
         let mut state = self.state.lock().unwrap();
         let batch_id = state.next_batch_id;
         state.next_batch_id += 1;
-        let mut batch: TaskBatch<'a> = Vec::new();
+        let mut batch: TaskBatch<'a> = (self.patterns, Vec::new());
         let mut bytes_in_batch = 0usize;
 
         // Effectively this gets a record, add all patterns, then tries
@@ -101,16 +93,15 @@ impl<'a> InputIterator<'a> {
                         let id = String::from_utf8(rec.id().to_vec()).unwrap().to_string();
                         let seq = rec.seq().into_owned();
                         let static_text = CachedRev::new(seq, self.rev);
-                        state.current_record = Some(Arc::new(TextRecord {
+                        state.current_record = Some(TextRecord {
                             id,
                             seq: static_text,
-                        }));
-                        state.next_pattern_idx = 0; // fresh record -> pattern index reset
+                        });
                     }
                     Some(Err(e)) => panic!("Error reading FASTA record: {e}"),
                     None => {
                         // Done, reached end
-                        return if batch.is_empty() {
+                        return if batch.1.is_empty() {
                             None
                         } else {
                             Some((batch_id, batch))
@@ -119,30 +110,21 @@ impl<'a> InputIterator<'a> {
                 }
             }
 
+            let current_record = &mut state.current_record;
+
             // We get the ref to the current record we have available
-            let record = state.current_record.as_ref().unwrap().clone();
-            let record_len = record.seq.text.len();
+            let record_len = current_record.as_ref().unwrap().seq.text.len();
 
             // If no space left for next record, we return current batch
-            if !batch.is_empty() && bytes_in_batch + record_len > self.batch_byte_limit {
+            if !batch.1.is_empty()
+                && bytes_in_batch + record_len * self.patterns.len() > self.batch_byte_limit
+            {
                 break; // return current batch, keep state for next call
             }
 
             // Add next pattern
-            let pattern = &self.patterns[state.next_pattern_idx];
-            let task = Task {
-                pattern,
-                text: record,
-            };
-            batch.push(task);
-            bytes_in_batch += record_len;
-
-            // Advance pattern index, but if we dont have more patterns we reset to empty
-            // record so we pull new sequence in next batch (line 74)
-            state.next_pattern_idx += 1;
-            if state.next_pattern_idx == self.patterns.len() {
-                state.current_record = None;
-            }
+            batch.1.push(current_record.take().unwrap());
+            bytes_in_batch += record_len * self.patterns.len();
         }
 
         Some((batch_id, batch))
@@ -202,14 +184,16 @@ mod tests {
             // Get unique texts, and then their length sum
             let unique_texts = batch
                 .1
+                .1
                 .iter()
-                .map(|item| item.text.seq.text.clone())
+                .map(|item| item.seq.text.clone())
                 .collect::<std::collections::HashSet<_>>();
             let text_len = unique_texts.iter().map(|text| text.len()).sum::<usize>();
             let n_patterns = batch
                 .1
+                .0
                 .iter()
-                .map(|item| item.pattern.id.clone())
+                .map(|item| item.id.clone())
                 .collect::<std::collections::HashSet<_>>()
                 .len();
             let n_texts = unique_texts.len();
