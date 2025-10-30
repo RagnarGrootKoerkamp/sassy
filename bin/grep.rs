@@ -248,8 +248,15 @@ impl GrepArgs {
     }
 
     fn print_matching_record(&self, text: &TextRecord) {
-        println!(">{}", text.id);
-        println!("{}", String::from_utf8_lossy(&text.seq.text));
+        if !text.quality.is_empty() {
+            println!("@{}", text.id);
+            println!("{}", String::from_utf8_lossy(&text.seq.text));
+            println!("+");
+            println!("{}", String::from_utf8_lossy(&text.quality));
+        } else {
+            println!(">{}", text.id);
+            println!("{}", String::from_utf8_lossy(&text.seq.text));
+        }
     }
 
     fn print_matches_for_record(

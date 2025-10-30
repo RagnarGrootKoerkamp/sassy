@@ -21,6 +21,7 @@ pub struct PatternRecord {
 pub struct TextRecord {
     pub id: ID,
     pub seq: CachedRev<Vec<u8>>,
+    pub quality: Vec<u8>,
 }
 
 /// A batch of alignment tasks, with total text size around `DEFAULT_BATCH_BYTES`.
@@ -96,6 +97,7 @@ impl<'a> InputIterator<'a> {
                         state.current_record = Some(TextRecord {
                             id,
                             seq: static_text,
+                            quality: rec.qual().unwrap_or(&[]).to_vec(),
                         });
                     }
                     Some(Err(e)) => panic!("Error reading FASTA record: {e}"),
