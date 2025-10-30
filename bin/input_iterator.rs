@@ -1,6 +1,6 @@
 use needletail::{FastxReader, parse_fastx_file};
 use sassy::CachedRev;
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Mutex; //Todo: could use parking_lot mutex - faster
 
 /// Each batch of text records will be at most this size if possible.
@@ -31,8 +31,10 @@ pub struct TextRecord {
 pub type TaskBatch<'a> = (&'a [PatternRecord], Vec<TextRecord>);
 
 struct RecordState {
-    /// The fasta reader.
+    /// The current fasta reader.
     reader: Box<dyn FastxReader + Send>,
+    /// The next file index.
+    cur_file_index: usize,
     /// The next batch id.
     next_batch_id: usize,
     /// Current text record, that can be send to multiple threads.
@@ -45,6 +47,7 @@ struct RecordState {
 /// Created using `TaskIterator::new` from a list of patterns and a path to a Fasta file to be searched.
 pub struct InputIterator<'a> {
     patterns: &'a [PatternRecord],
+    paths: &'a Vec<PathBuf>,
     state: Mutex<RecordState>,
     batch_byte_limit: usize,
     rev: bool,
@@ -54,20 +57,22 @@ impl<'a> InputIterator<'a> {
     /// Create a new iterator over `fasta_path`, going through `patterns`.
     /// `max_batch_bytes` controls how many texts are bundled together.
     pub fn new(
-        fasta_path: &Path,
+        paths: &'a Vec<PathBuf>,
         patterns: &'a [PatternRecord],
         max_batch_bytes: Option<usize>,
         rev: bool,
     ) -> Self {
-        let reader = parse_fastx_file(fasta_path).expect("valid fasta");
+        let reader = parse_fastx_file(&paths[0]).expect("valid fasta");
         // Just empty state when we create the iterator
         let state = RecordState {
             reader,
+            cur_file_index: 0,
             next_batch_id: 0,
             current_record: None,
         };
         Self {
             patterns,
+            paths,
             state: Mutex::new(state),
             batch_byte_limit: max_batch_bytes.unwrap_or(DEFAULT_BATCH_BYTES),
             rev,
@@ -88,7 +93,7 @@ impl<'a> InputIterator<'a> {
 
         loop {
             // Make sure we have a current record, just so we can unwrap
-            if state.current_record.is_none() {
+            loop {
                 match state.reader.next() {
                     Some(Ok(rec)) => {
                         let id = String::from_utf8(rec.id().to_vec()).unwrap().to_string();
@@ -99,15 +104,30 @@ impl<'a> InputIterator<'a> {
                             seq: static_text,
                             quality: rec.qual().unwrap_or(&[]).to_vec(),
                         });
+                        break;
                     }
                     Some(Err(e)) => panic!("Error reading FASTA record: {e}"),
                     None => {
-                        // Done, reached end
-                        return if batch.1.is_empty() {
-                            None
-                        } else {
-                            Some((batch_id, batch))
-                        };
+                        // Reached end of reader, initialize for next file.
+                        let end_of_files = state.cur_file_index + 1 >= self.paths.len();
+                        if !end_of_files {
+                            state.cur_file_index += 1;
+                            if state.cur_file_index < self.paths.len() {
+                                state.reader =
+                                    parse_fastx_file(&self.paths[state.cur_file_index]).unwrap();
+                            }
+                        }
+
+                        // Return last batch for the current file.
+                        if !batch.1.is_empty() {
+                            return Some((batch_id, batch));
+                        }
+                        if end_of_files {
+                            return None;
+                        }
+
+                        // Start reading next file.
+                        continue;
                     }
                 }
             }
@@ -177,7 +197,8 @@ mod tests {
         }
 
         // Create the iterator
-        let iter = InputIterator::new(file.path(), &patterns, Some(500), true);
+        let paths = vec![file.path().to_path_buf()];
+        let iter = InputIterator::new(&paths, &patterns, Some(500), true);
 
         // Pull 10 batches
         let mut batch_id = 0;

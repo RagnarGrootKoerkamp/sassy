@@ -97,7 +97,7 @@ pub struct GrepArgs {
     // Positional
     /// Fasta files to search. May be gzipped.
     /// TODO: Support searching multiple files.
-    path: PathBuf,
+    paths: Vec<PathBuf>,
 }
 
 impl GrepArgs {
@@ -144,7 +144,8 @@ impl GrepArgs {
             (args.alphabet == Alphabet::Dna || args.alphabet == Alphabet::Iupac) && !args.no_rc;
 
         let num_threads = args.threads.unwrap_or_else(num_cpus::get);
-        let task_iterator = &InputIterator::new(&args.path, &patterns, Some(100 * 1024 * 1024), rc);
+        let task_iterator =
+            &InputIterator::new(&args.paths, &patterns, Some(100 * 1024 * 1024), rc);
 
         let output = Mutex::new((
             0,

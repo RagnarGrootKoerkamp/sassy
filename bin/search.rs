@@ -204,7 +204,8 @@ pub fn search(args: &SearchArgs) {
     let rc = (args.alphabet == Alphabet::Dna || args.alphabet == Alphabet::Iupac) && !args.no_rc;
 
     let num_threads = args.threads.unwrap_or_else(num_cpus::get);
-    let task_iterator = &InputIterator::new(&args.path, &patterns, None, rc);
+    let paths = vec![args.path.clone()];
+    let task_iterator = &InputIterator::new(&paths, &patterns, None, rc);
     std::thread::scope(|s| {
         for _ in 0..num_threads {
             s.spawn(move || {
