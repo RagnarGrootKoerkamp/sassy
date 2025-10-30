@@ -105,6 +105,26 @@ impl GrepArgs {
         self.filter = true;
         self.grep();
     }
+
+    fn set_mode(&mut self) {
+        if self.output.is_some() {
+            self.filter = true;
+        }
+        if self.invert {
+            self.filter = true;
+        }
+    }
+
+    fn set_context(&mut self) {
+        if self.context.is_none() {
+            if self.alphabet == Alphabet::Ascii {
+                self.context = Some(0);
+            } else {
+                self.context = Some(20);
+            }
+        }
+    }
+
     pub fn grep(mut self) {
         self.set_mode();
         self.set_context();
@@ -248,24 +268,6 @@ impl GrepArgs {
         assert!(output.into_inner().unwrap().1.is_empty());
     }
 
-    fn set_mode(&mut self) {
-        if self.output.is_some() {
-            self.filter = true;
-        }
-        if self.invert {
-            self.filter = true;
-        }
-    }
-
-    fn set_context(&mut self) {
-        if self.context.is_none() {
-            if self.alphabet == Alphabet::Ascii {
-                self.context = Some(0);
-            } else {
-                self.context = Some(20);
-            }
-        }
-    }
     fn print_matching_record(&self, text: &TextRecord, writer: &mut (dyn std::io::Write + Send)) {
         if !text.quality.is_empty() {
             writeln!(writer, "@{}", text.id).unwrap();
