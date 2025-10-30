@@ -137,7 +137,7 @@ impl<'a> InputIterator<'a> {
             batch.push(task);
             bytes_in_batch += record_len;
 
-            // Advance pattern index, but if we don't have more patterns we reset to empty
+            // Advance pattern index, but if we dont have more patterns we reset to empty
             // record so we pull new sequence in next batch (line 74)
             state.next_pattern_idx += 1;
             if state.next_pattern_idx == self.patterns.len() {

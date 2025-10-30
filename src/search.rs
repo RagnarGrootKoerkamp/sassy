@@ -260,6 +260,8 @@ impl<P: Profile> Searcher<P> {
 
     /// Returns a match for each *rightmost local minimum* end position with score <=k.
     ///
+    /// This avoids reporting matches that completely overlap apart from a few characters at the ends.
+    ///
     /// Searches the forward text, and optionally the reverse complement of the text.
     pub fn search<I: RcSearchAble>(&mut self, pattern: &[u8], input: &I, k: usize) -> Vec<Match> {
         self.search_handle_rc(
@@ -274,6 +276,8 @@ impl<P: Profile> Searcher<P> {
     /// Returns a match for *all* end positions with score <=k.
     ///
     /// Searches the forward text, and optionally the reverse complement of the text.
+    /// Only use this instead of [`search`] if you know what you are doing,
+    /// which typically means there is some postprocessing step to filter overlapping matches.
     pub fn search_all<I: RcSearchAble>(
         &mut self,
         pattern: &[u8],
