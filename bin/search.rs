@@ -6,6 +6,7 @@ use sassy::{
     profiles::{Ascii, Dna, Iupac, Profile},
 };
 use std::fs::File;
+use std::io::BufRead;
 use std::{
     io::{BufWriter, Write},
     path::PathBuf,
@@ -16,12 +17,31 @@ use std::{
 pub struct SearchArgs {
     // Named args
     /// Pattern to search for (cannot be used with -f).
-    #[arg(short = 'p', long, conflicts_with = "pattern_fasta")]
+    #[arg(
+        short = 'p',
+        long,
+        conflicts_with = "pattern_fasta",
+        conflicts_with = "pattern_file"
+    )]
     pattern: Option<String>,
 
-    /// Fasta file with multiple patterns (cannot be used with -p).
-    #[arg(short = 'f', long, conflicts_with = "pattern")]
-    pattern_fasta: Option<String>,
+    /// Search each line of the file (cannot be used with -p).
+    #[arg(
+        short = 'f',
+        long,
+        conflicts_with = "pattern",
+        conflicts_with = "pattern_fasta"
+    )]
+    pattern_file: Option<PathBuf>,
+
+    /// Search each record in the file (cannot be used with -p).
+    #[arg(
+        short = 'f',
+        long,
+        conflicts_with = "pattern",
+        conflicts_with = "pattern_file"
+    )]
+    pattern_fasta: Option<PathBuf>,
 
     /// Report matches up to (and including) this distance threshold.
     #[arg(short)]
@@ -58,14 +78,33 @@ pub enum Alphabet {
     Iupac,
 }
 
-fn get_patterns(args: &SearchArgs) -> Vec<PatternRecord> {
-    if let Some(p) = &args.pattern {
+pub fn get_patterns(
+    pattern: &Option<String>,
+    pattern_file: &Option<PathBuf>,
+    pattern_fasta: &Option<PathBuf>,
+) -> Vec<PatternRecord> {
+    if let Some(p) = pattern {
         // Single inline pattern; give it a dummy id
-        vec![PatternRecord {
+        return vec![PatternRecord {
             id: "pattern".to_string(),
             seq: p.as_bytes().to_vec(),
-        }]
-    } else if let Some(pattern_fasta) = &args.pattern_fasta {
+        }];
+    }
+    if let Some(pattern_file) = pattern_file {
+        // Read all lines of the file.
+        let file = File::open(pattern_file).expect("valid pattern file");
+        let reader = std::io::BufReader::new(file);
+
+        let mut patterns = Vec::new();
+        for line in reader.lines() {
+            patterns.push(PatternRecord {
+                id: format!("{}", patterns.len() + 1),
+                seq: line.unwrap().into(),
+            });
+        }
+        return patterns;
+    }
+    if let Some(pattern_fasta) = pattern_fasta {
         // Pull all sequences and ids from the FASTA file
         let mut reader = parse_fastx_file(pattern_fasta).expect("valid path/file");
         let mut patterns = Vec::new();
@@ -77,10 +116,9 @@ fn get_patterns(args: &SearchArgs) -> Vec<PatternRecord> {
                 seq: seqrec.seq().into_owned(),
             });
         }
-        patterns
-    } else {
-        panic!("No --pattern or --pattern-fasta provided!");
+        return patterns;
     }
+    panic!("No --pattern, --pattern-file, or --pattern-fasta provided!");
 }
 
 fn get_output_writer(args: &SearchArgs) -> Box<dyn Write + Send> {
@@ -127,14 +165,14 @@ fn as_output_line(
 }
 
 // To create a fixed type, cost of match should be neglible
-enum SearchWrapper {
+pub enum SearchWrapper {
     Ascii(Box<Searcher<Ascii>>),
     Dna(Box<Searcher<Dna>>),
     Iupac(Box<Searcher<Iupac>>),
 }
 
 impl SearchWrapper {
-    fn search<I: RcSearchAble>(&mut self, pattern: &[u8], input: &I, k: usize) -> Vec<Match> {
+    pub fn search<I: RcSearchAble>(&mut self, pattern: &[u8], input: &I, k: usize) -> Vec<Match> {
         match self {
             SearchWrapper::Ascii(s) => s.search(pattern, input, k),
             SearchWrapper::Dna(s) => s.search(pattern, input, k),
@@ -145,7 +183,7 @@ impl SearchWrapper {
 
 pub fn search(args: &SearchArgs) {
     // Get queries based on `pattern` or `pattern_fasta`
-    let patterns = get_patterns(args);
+    let patterns = get_patterns(&args.pattern, &args.pattern_file, &args.pattern_fasta);
     assert!(!patterns.is_empty(), "No pattern sequences found");
 
     // Create output writer, stdout by default (or user provided), and share it safely across threads
@@ -181,7 +219,7 @@ pub fn search(args: &SearchArgs) {
                     }
                 };
 
-                while let Some(batch) = task_iterator.next_batch() {
+                while let Some((_id, batch)) = task_iterator.next_batch() {
                     for item in batch {
                         let matches = searcher.search(&item.pattern.seq, &item.text.seq, k);
                         let mut writer_guard = output_writer.lock().unwrap();
@@ -252,6 +290,7 @@ mod test {
             alphabet: Alphabet::Dna,
             no_rc: true,
             threads: Some(1),
+            pattern_file: None,
             pattern_fasta: None,
             output: None,
         };

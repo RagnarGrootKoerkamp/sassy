@@ -37,10 +37,12 @@ pub type TaskBatch<'a> = Vec<Task<'a>>;
 struct RecordState {
     /// The fasta reader.
     reader: Box<dyn FastxReader + Send>,
-    /// Current text record, that can be send to multiple threads.
-    current_record: Option<Arc<TextRecord>>,
+    /// The next batch id.
+    next_batch_id: usize,
     /// Index of the next pattern for the current record.
     next_pattern_idx: usize,
+    /// Current text record, that can be send to multiple threads.
+    current_record: Option<Arc<TextRecord>>,
 }
 
 /// Thread-safe iterator giving *batches* of (pattern, text) pairs.
@@ -57,8 +59,8 @@ pub struct InputIterator<'a> {
 impl<'a> InputIterator<'a> {
     /// Create a new iterator over `fasta_path`, going through `patterns`.
     /// `max_batch_bytes` controls how many texts are bundled together.
-    pub fn new<P: AsRef<Path>>(
-        fasta_path: P,
+    pub fn new(
+        fasta_path: &Path,
         patterns: &'a [PatternRecord],
         max_batch_bytes: Option<usize>,
         rev: bool,
@@ -67,6 +69,7 @@ impl<'a> InputIterator<'a> {
         // Just empty state when we create the iterator
         let state = RecordState {
             reader,
+            next_batch_id: 0,
             next_pattern_idx: 0,
             current_record: None,
         };
@@ -79,8 +82,10 @@ impl<'a> InputIterator<'a> {
     }
 
     /// Get the next batch, or returns None when done.
-    pub fn next_batch(&self) -> Option<TaskBatch<'a>> {
+    pub fn next_batch(&self) -> Option<(usize, TaskBatch<'a>)> {
         let mut state = self.state.lock().unwrap();
+        let batch_id = state.next_batch_id;
+        state.next_batch_id += 1;
         let mut batch: TaskBatch<'a> = Vec::new();
         let mut bytes_in_batch = 0usize;
 
@@ -105,7 +110,11 @@ impl<'a> InputIterator<'a> {
                     Some(Err(e)) => panic!("Error reading FASTA record: {e}"),
                     None => {
                         // Done, reached end
-                        return if batch.is_empty() { None } else { Some(batch) };
+                        return if batch.is_empty() {
+                            None
+                        } else {
+                            Some((batch_id, batch))
+                        };
                     }
                 }
             }
@@ -128,7 +137,7 @@ impl<'a> InputIterator<'a> {
             batch.push(task);
             bytes_in_batch += record_len;
 
-            // Advance pattern index, but if we dont have more patterns we reset to empty
+            // Advance pattern index, but if we don't have more patterns we reset to empty
             // record so we pull new sequence in next batch (line 74)
             state.next_pattern_idx += 1;
             if state.next_pattern_idx == self.patterns.len() {
@@ -136,7 +145,7 @@ impl<'a> InputIterator<'a> {
             }
         }
 
-        Some(batch)
+        Some((batch_id, batch))
     }
 }
 
@@ -192,11 +201,13 @@ mod tests {
             batch_id += 1;
             // Get unique texts, and then their length sum
             let unique_texts = batch
+                .1
                 .iter()
                 .map(|item| item.text.seq.text.clone())
                 .collect::<std::collections::HashSet<_>>();
             let text_len = unique_texts.iter().map(|text| text.len()).sum::<usize>();
             let n_patterns = batch
+                .1
                 .iter()
                 .map(|item| item.pattern.id.clone())
                 .collect::<std::collections::HashSet<_>>()

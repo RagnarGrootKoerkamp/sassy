@@ -204,7 +204,7 @@ pub fn crispr(args: &CrisprArgs) {
                     }
                 };
 
-                while let Some(batch) = task_iter.next_batch() {
+                while let Some((_batch_id, batch)) = task_iter.next_batch() {
                     for item in batch {
                         let guide_sequence = &item.pattern.seq;
                         let guide_string = String::from_utf8_lossy(guide_sequence);

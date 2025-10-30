@@ -235,6 +235,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
 
 [[package]]
+name = "colored_text"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a62f25f939069d43c25a069fde8e1dcfee5f0aaaaaee12a89f49adb9b68ac08f"
+
+[[package]]
 name = "crc32fast"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -602,9 +608,8 @@ checksum = "a4895175b425cb1f87721b59f0f286c2092bd4af812243672510e1ac53e2e0ad"
 
 [[package]]
 name = "pa-types"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f33ced13e6583732fdad9693bef54a584fa8bd5e0fa55602fe393d4bd51ecf33"
+version = "1.2.0"
+source = "git+https://github.com/pairwise-alignment/pa-types#c878261b883c6385b9b721374d3b7d9962a01edf"
 dependencies = [
  "derive_more",
  "itertools",
@@ -838,6 +843,7 @@ name = "sassy"
 version = "0.1.4"
 dependencies = [
  "clap",
+ "colored_text",
  "env_logger",
  "log",
  "needletail",
