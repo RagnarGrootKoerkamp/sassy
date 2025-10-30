@@ -60,7 +60,7 @@ fn get_output_writer(args: &CrisprArgs) -> Box<dyn Write + Send> {
     }
 }
 
-fn check_n_frac(max_n_frac: f32, match_slice: &[u8]) -> bool {
+pub fn check_n_frac(max_n_frac: f32, match_slice: &[u8]) -> bool {
     let n_count = match_slice
         .iter()
         .filter(|c| (**c & 0xDF) == b'N') // Convert to uppercase check against N

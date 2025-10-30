@@ -8,6 +8,7 @@ use sassy::{
 };
 
 use crate::{
+    crispr::check_n_frac,
     input_iterator::{InputIterator, PatternRecord, TextRecord},
     search::{Alphabet, SearchWrapper, get_patterns},
 };
@@ -68,6 +69,12 @@ pub struct GrepArgs {
     /// Disable reverse complement search (enabled by default for DNA and IUPAC).
     #[arg(long)]
     no_rc: bool,
+
+    /// Allow at most max_n_frac of N bases in the target sequence. Values must be in the
+    /// range [0. 1].  A value of 0 will allow only hits where the target sequence contains no
+    /// Ns. A value of 0.1-0.2 will allow for matches that include a small number of Ns.
+    #[arg(long, default_value_t = 0.2)]
+    max_n_frac: f32,
 
     /// Number of characters (or lines, for ASCII) to print before/after each match.
     #[arg(short = 'C', long)]
@@ -155,6 +162,13 @@ impl GrepArgs {
                                     searcher
                                         .search(&pattern.seq, &text.seq, k)
                                         .into_iter()
+                                        .filter(|m| {
+                                            // Check max-n-frac.
+                                            check_n_frac(
+                                                args.max_n_frac,
+                                                &text.seq.text[m.text_start..m.text_end],
+                                            )
+                                        })
                                         .map(|m| (pattern, m)),
                                 );
                             }
