@@ -43,7 +43,7 @@ pub struct GrepArgs {
 
     /// Search each line of the file (cannot be used with -p).
     #[arg(
-        short = 'f',
+        short = 'l',
         long,
         conflicts_with = "pattern",
         conflicts_with = "pattern_fasta"
@@ -59,7 +59,7 @@ pub struct GrepArgs {
     )]
     pattern_fasta: Option<PathBuf>,
 
-    /// Only report non-matching records. Implies `--filter`.
+    /// Only report non-matching records. Only works in `filter` mode.
     #[arg(short = 'v', long)]
     invert: bool,
 
@@ -147,8 +147,8 @@ impl GrepArgs {
         if self.output.is_some() {
             self.filter = true;
         }
-        if self.invert {
-            assert!(self.filter, "--invert only works in filter mode.");
+        if self.invert && !self.filter {
+            panic!("--invert/-v only works in filter mode.");
         }
 
         // Enable search mode when matches is given.
