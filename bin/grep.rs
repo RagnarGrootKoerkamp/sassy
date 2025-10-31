@@ -6,7 +6,7 @@ use std::{
 };
 
 use colored_text::Colorize;
-use pa_types::Cigar;
+use pa_types::{Cigar, CigarElem, CigarOp};
 use sassy::{
     Match, Searcher, Strand,
     profiles::{Ascii, Dna, Iupac, Profile},
@@ -315,12 +315,40 @@ impl GrepArgs {
         m: &mut Match,
     ) -> String {
         let rc_pattern;
+        let mut cigar = m.cigar.clone();
         let matching_pattern = match m.strand {
-            Strand::Fwd => &pattern.seq[m.pattern_start..m.pattern_end],
+            Strand::Fwd => {
+                if m.pattern_start > 0 {
+                    eprintln!("insert DEL at start");
+                    cigar
+                        .ops
+                        .insert(0, CigarElem::new(CigarOp::Del, m.pattern_start as i32));
+                }
+                if m.pattern_end < pattern.seq.len() {
+                    cigar.ops.push(CigarElem::new(
+                        CigarOp::Del,
+                        (pattern.seq.len() - m.pattern_end) as i32,
+                    ));
+                }
+                &pattern.seq
+            }
             Strand::Rc => {
                 rc_pattern = Iupac::reverse_complement(&pattern.seq);
-                m.cigar.reverse();
-                &rc_pattern[pattern.seq.len() - m.pattern_end..pattern.seq.len() - m.pattern_start]
+                cigar.reverse();
+                let rc_start = pattern.seq.len() - m.pattern_end;
+                let rc_end = pattern.seq.len() - m.pattern_start;
+                if m.pattern_start > 0 {
+                    cigar
+                        .ops
+                        .insert(0, CigarElem::new(CigarOp::Del, rc_start as i32));
+                }
+                if rc_end < pattern.seq.len() {
+                    cigar.ops.push(CigarElem::new(
+                        CigarOp::Del,
+                        (pattern.seq.len() - rc_end) as i32,
+                    ));
+                }
+                &rc_pattern[rc_start..rc_end]
             }
         };
         let (matching_text, mut suffix) = text.seq.text.split_at(m.text_end);
@@ -344,8 +372,7 @@ impl GrepArgs {
             }
         }
         let prefix_skip = format_skip(prefix_skip, true);
-        let (match_len, match_string) =
-            pretty_print_match(matching_pattern, matching_text, &m.cigar);
+        let (match_len, match_string) = pretty_print_match(matching_pattern, matching_text, &cigar);
 
         let suffix_skip =
             (suffix.len() + match_len - matching_pattern.len()) as isize - context as isize;
