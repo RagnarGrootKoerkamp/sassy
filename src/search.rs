@@ -375,6 +375,21 @@ impl<P: Profile> Searcher<P> {
         self.process_matches(pattern, text, k as Cost)
     }
 
+    /// Check if any value in the lane is <= k.
+    #[inline(always)]
+    fn min_in_lane(&self, v: V, lane: usize, dist_to_start_of_lane: &S) -> Cost {
+        // Get the current cost state for this lane
+
+        // Calculate the minimum possible cost in this lane
+        // This is the best case scenario - if even this minimum is > k,
+        // then no matches are possible in this lane
+        let min_in_lane =
+            prefix_min(v.0, v.1).0 as Cost + dist_to_start_of_lane.as_array()[lane] as Cost;
+
+        min_in_lane
+    }
+
+    /// Check if any value in any lane is <= k.
     #[inline(always)]
     fn check_lanes(
         &self,
@@ -385,15 +400,8 @@ impl<P: Profile> Searcher<P> {
         j: usize,
     ) -> Option<usize> {
         for lane in 0..LANES {
-            // Get the current cost state for this lane
             let v = V(vp.as_array()[lane], vm.as_array()[lane]);
-
-            // Calculate the minimum possible cost in this lane
-            // This is the best case scenario - if even this minimum is > k,
-            // then no matches are possible in this lane
-            let min_in_lane =
-                prefix_min(v.0, v.1).0 as Cost + dist_to_start_of_lane.as_array()[lane] as Cost;
-
+            let min_in_lane = self.min_in_lane(v, lane, dist_to_start_of_lane);
             if min_in_lane <= k {
                 // Promising lane, we "estimate" how many rows more we need to check
                 // as the difference between the minimum in the lane and the maximum edits
@@ -521,12 +529,20 @@ impl<P: Profile> Searcher<P> {
                     }
                 }
             }
+            // We made it to the end of the pattern here.
 
             // Save positions with cost <= k directly after processing each row
             for lane in 0..LANES {
                 let v = V::from(vp[lane], vm[lane]);
                 let base_pos = self.lanes[lane].chunk_offset * 64 + 64 * i;
                 let cost = dist_to_start_of_lane.as_array()[lane] as Cost;
+
+                // `check_lanes` only happens at most every 8 rows,
+                // so for short patterns there's a good chance things are bad by now.
+                let min_in_lane = self.min_in_lane(v, lane, &dist_to_start_of_lane);
+                if min_in_lane > k {
+                    continue;
+                }
 
                 self.find_minima_with_overhang(
                     v,
@@ -669,7 +685,7 @@ impl<P: Profile> Searcher<P> {
 
             if all_minima {
                 if total_cost <= k {
-                    log::trace!("lane {lane} push {prev_pos} {prev_cost}");
+                    log::trace!("MATCH: lane {lane} push {prev_pos} {prev_cost}");
                     self.lanes[lane].matches.push((pos, total_cost));
                 }
             } else {
@@ -682,7 +698,7 @@ impl<P: Profile> Searcher<P> {
 
                 // Found a local minimum if we were decreasing and now costs are increasing
                 if self.lanes[lane].decreasing && costs_are_increasing && prev_cost <= k {
-                    log::trace!("lane {lane} push {prev_pos} {prev_cost}");
+                    log::trace!("MATCH: lane {lane} push {prev_pos} {prev_cost}");
                     self.lanes[lane].matches.push((prev_pos, prev_cost));
                 }
 
