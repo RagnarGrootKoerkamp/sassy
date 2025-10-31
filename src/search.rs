@@ -610,7 +610,11 @@ impl<P: Profile> Searcher<P> {
     #[inline(always)]
     fn add_overshoot_cost(&self, cost: Cost, pos: usize, text_len: usize) -> Cost {
         let overshoot = pos.saturating_sub(text_len);
-        let overshoot_cost = (self.alpha.unwrap_or(0.0) * overshoot as f32).floor() as Cost;
+        let overshoot_cost = if self.alpha.is_none() || overshoot == 0 {
+            0
+        } else {
+            (self.alpha.unwrap() * overshoot as f32).floor() as Cost
+        };
         cost + overshoot_cost
     }
 
