@@ -34,11 +34,15 @@ See **the paper** below, and corresponding evals in [evals/](evals/).
 
 ## Usage
 
+Sassy can be used via the CLI, or as Rust, Python, or C library.
+
 ### 0. Rust library
 
+The library can be used to search for ASCII or DNA strings.
 A larger example can be found in [`src/lib.rs`](src/lib.rs).
 
 ```rust
+// cargo add sassy
 use sassy::{Searcher, Match, profiles::{Dna}, Strand};
 
 let pattern = b"ATCG";
@@ -59,21 +63,82 @@ assert_eq!(matches[0].cigar.to_string(), "2=1X1=");
 
 ### 1. Command-line interface (CLI)
 
-**Build and install** using `cargo`:
+**Build and install** using `cargo
 
 ```bash
 cargo install sassy
 ```
 
+The CLI can be used via:
+1. `sassy grep`: to show nicely coloured output.
+2. `sassy search`: to write a `.tsv` of matching locations.
+3. `sassy filter`: to write a `.fasta`/`.fastq` of (non)-matching records.
+4. `sassy crispr`: to search for CRISPR guides.
+
+`grep`, `search`, and `filter` all take the same arguments, and are implemented
+by forwarding to `grep`. Thus, they can all be combined via e.g.
+
+```sh
+sassy grep -p ACGTCAAACCTA -k 3 --matches matches.tsv --output filtered.fastq reads.fastq.gz
+```
+
+#### 1.1: Grep for a pattern
+
 **Search a pattern** `ATGAGCA` in `text.fasta` with ≤1 edit:
 ```bash
-sassy search --pattern ATGAGCA --alphabet dna -k 1 text.fasta
+sassy search --pattern ATGAGCA -k 1 text.fasta
 ```
 or search all records of a fasta file with `--pattern-fasta <fasta-file>` instead of `--pattern`.
 
-For the alphabets see [supported alphabets](#supported-alphabets)
+The `grep` output is coloured:
+- green shows matching characters,
+- orange shows mismatches,
+- red shows deletec characters (in pattern but not in text),
+- blue shows inserted charactes (in text but not in pattern).
+![screenshot of sassy grep output](fig/grep.png)
 
-**CRISPR off-target search** for one or more guides in `guides.txt`:
+#### 1.2: TSV output for matches
+
+```sh
+sassy search -p GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG -k 2 reads.fa > matches.tsv
+# or
+sassy search -p GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG -k 2 reads.fa --matches matches.tsv
+# or
+sassy grep   -p GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG -k 2 reads.fa --matches matches.tsv
+```
+gives `.tsv` output like the this:
+
+```tsv
+pat_id	text_id	cost	strand	start	end	match_region	cigar
+pattern	AC_000001.1__1_1	0	+	6	48	GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG	42=
+pattern	AC_000001.1__1_35	0	+	897	939	GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG	42=
+pattern	AC_000001.1__1_49	1	+	866	908	GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCGCGCG	37=1X4=
+pattern	AC_000001.1__1_64	0	-	1267	1309	GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG	42=
+pattern	AC_000001.1__1_67	0	+	600	642	GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG	42=
+pattern	AC_000001.1__1_68	0	-	1826	1868	GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG	42=
+pattern	AC_000001.1__1_78	3	-	4381	4425	GTACAGAAACGAGCGGATGGAAAATAGTAGTGAGCGGCCTCGCG	23=1X1I10=1I8=
+pattern	AC_000001.1__1_92	0	-	6554	6596	GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG	42=
+pattern	AC_000001.1__1_94	0	-	6413	6455	GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG	42=
+pattern	AC_000001.1__1_115	2	+	2091	2131	GTACAGAAACGAGCATGGAAAGAGTAGTGAGCGCCTCGCG	14=2D26=
+pattern	AC_000001.1__1_118	0	-	3062	3104	GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG	42=
+pattern	AC_000001.1__1_123	0	+	1416	1458	GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG	42=
+pattern	AC_000001.1__1_127	0	+	27	69	GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG	42=
+```
+
+#### 1.3: Filter matching records
+```sh
+sassy filter -p GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG -k 2 reads.fq > filtered.fq
+# or
+sassy filter -p GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG -k 2 reads.fq -o filtered.fq
+# or
+sassy grep   -p GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG -k 2 reads.fq -o filtered.fq
+```
+gives writes a file containing only matching records. Use `--invert` to only
+write non-matching records.
+
+#### 1.4: CRISPR off-target search
+
+Sarch for one or more guides in `guides.txt`:
 ```bash
 sassy crispr --threads 8 --guide guides.txt --k 5 --max-n-frac 0.1 --output hits.tsv hg38.fasta
 ```
