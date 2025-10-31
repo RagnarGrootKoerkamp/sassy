@@ -116,7 +116,7 @@ pub struct GrepArgs {
     #[arg(long, default_missing_value = "-", num_args(0..=1))]
     matches: Option<PathBuf>,
 
-    /// Filtered output file, otherwise stdout. Must be a directory when multiple input paths are given.
+    /// Filtered output file, otherwise stdout.
     ///
     /// use "-" for explicit stdout.
     #[arg(short = 'o', long)]
@@ -148,15 +148,12 @@ impl GrepArgs {
             self.filter = true;
         }
         if self.invert {
-            self.filter = true;
+            assert!(self.filter, "--invert only works in filter mode.");
         }
 
         // Enable search mode when matches is given.
         if self.matches.is_some() {
             self.search = true;
-        }
-        if self.search && self.matches.is_none() {
-            self.matches = Some(PathBuf::from("-"));
         }
     }
 
