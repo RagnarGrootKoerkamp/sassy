@@ -56,13 +56,14 @@ pub struct GrepArgs {
     #[arg(short)]
     k: usize,
 
-    /// The alphabet to use. DNA=ACTG, or default IUPAC=ACTG+NYR... -a for ASCII.
-    /// TODO: Infer alphabet from input file types.
+    /// The alphabet to use. DNA=ACTG, or default IUPAC=ACTG+NYR....
+    ///
+    /// ASCII is not yet supported.
     #[arg(
         long,
         short = 'a',
         default_value_t = Alphabet::Iupac,
-        default_missing_value = "Alphabet::Ascii",
+        // default_missing_value = "Alphabet::Ascii",
         value_enum
     )]
     alphabet: Alphabet,
@@ -137,6 +138,12 @@ impl GrepArgs {
             self.paths = vec![PathBuf::from("")];
         }
         let args = &self;
+
+        if args.alphabet == Alphabet::Ascii {
+            unimplemented!(
+                "ASCII alphabet is not yet supported. Please comment on https://github.com/RagnarGrootKoerkamp/sassy/issues/35 if you're interested."
+            );
+        }
 
         let patterns = get_patterns(&args.pattern, &args.pattern_file, &args.pattern_fasta);
         assert!(!patterns.is_empty(), "No pattern sequences found");
