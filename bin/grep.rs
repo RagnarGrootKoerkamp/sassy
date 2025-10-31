@@ -6,7 +6,7 @@ use std::{
     sync::Mutex,
 };
 
-use colored_text::Colorize;
+use colored::Colorize;
 use pa_types::{Cigar, CigarElem, CigarOp};
 use sassy::{
     Match, Searcher, Strand,
@@ -322,7 +322,11 @@ impl GrepArgs {
         eprint!("\nStatistics: ");
         for (dist, &count) in global_hist.iter().enumerate() {
             if count > 0 {
-                eprint!("dist {} => {}, ", dist.bold(), count.bold());
+                eprint!(
+                    "dist {} => {}, ",
+                    dist.to_string().bold(),
+                    count.to_string().bold()
+                );
             }
         }
         eprintln!();
@@ -354,7 +358,12 @@ impl GrepArgs {
         }
         eprintln!(
             "{}",
-            format!("{}>{}", path.display().cyan().bold(), text.id.bold()).bold()
+            format!(
+                "{}>{}",
+                path.display().to_string().cyan().bold(),
+                text.id.bold()
+            )
+            .bold()
         );
         matches.sort_by_key(|m| m.1.text_start);
         for (pattern, m) in matches {
@@ -445,12 +454,12 @@ impl GrepArgs {
             pattern.id,
             strand.bold(),
             format!("{:>2}", m.cost).bold(),
-            prefix_skip.dim(),
+            prefix_skip.dimmed(),
             String::from_utf8_lossy(prefix),
             String::from_utf8_lossy(suffix),
             "",
-            suffix_skip.dim(),
-            format!("{:<19}", format!("{}-{}", m.text_start, m.text_end)).dim(),
+            suffix_skip.dimmed(),
+            format!("{:<19}", format!("{}-{}", m.text_start, m.text_end)).dimmed(),
         );
     }
 
@@ -506,13 +515,17 @@ fn pretty_print_match(pattern: &[u8], text: &[u8], cigar: &Cigar) -> (usize, Str
         len += 1;
         match pair {
             pa_types::CigarOpChars::Match(c) => {
-                write!(out, "{}", (c as char).green().bold()).unwrap()
+                write!(out, "{}", (c as char).to_string().green().bold()).unwrap()
             }
             pa_types::CigarOpChars::Sub(_old, new) => {
-                write!(out, "{}", (new as char).yellow().bold()).unwrap()
+                write!(out, "{}", (new as char).to_string().yellow().bold()).unwrap()
             }
-            pa_types::CigarOpChars::Del(c) => write!(out, "{}", (c as char).red().bold()).unwrap(),
-            pa_types::CigarOpChars::Ins(c) => write!(out, "{}", (c as char).cyan().bold()).unwrap(),
+            pa_types::CigarOpChars::Del(c) => {
+                write!(out, "{}", (c as char).to_string().red().bold()).unwrap()
+            }
+            pa_types::CigarOpChars::Ins(c) => {
+                write!(out, "{}", (c as char).to_string().cyan().bold()).unwrap()
+            }
         }
     }
     (len, out)
