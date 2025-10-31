@@ -138,7 +138,7 @@ write non-matching records.
 
 #### 1.4: CRISPR off-target search
 
-Searrch for one or more guides in `guides.txt`:
+Search for one or more guides in `guides.txt`:
 ```bash
 sassy crispr --threads 8 --guide guides.txt --k 5 --max-n-frac 0.1 --output hits.tsv hg38.fasta
 ```
