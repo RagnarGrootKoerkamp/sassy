@@ -266,7 +266,9 @@ impl GrepArgs {
         let global_hist = global_histogram.into_inner().unwrap();
         eprint!("\nStatistics: ");
         for (dist, &count) in global_hist.iter().enumerate() {
-            eprint!("dist {dist} => {count}, ");
+            if count > 0 {
+                eprint!("dist {} => {}, ", dist.bold(), count.bold());
+            }
         }
         eprintln!();
 
@@ -358,16 +360,16 @@ impl GrepArgs {
         };
 
         format!(
-            "{} ({}) {} @ {} | {}{:>context$}{}{}{}\n",
+            "{} ({}) {} | {}{:>context$}{}{}{} @ {}\n",
             pattern.id,
             strand.bold(),
-            m.cost.bold(),
-            format!("{:<19}", format!("{}-{}", m.text_start, m.text_end)).dim(),
+            format!("{:>2}", m.cost).bold(),
             prefix_skip.dim(),
             String::from_utf8_lossy(prefix),
             match_string,
             String::from_utf8_lossy(suffix),
-            suffix_skip.dim()
+            suffix_skip.dim(),
+            format!("{:<19}", format!("{}-{}", m.text_start, m.text_end)).dim(),
         )
     }
 }
