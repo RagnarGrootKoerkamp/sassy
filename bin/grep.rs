@@ -1,6 +1,7 @@
 use std::{
     collections::VecDeque,
-    fmt::Write,
+    fmt::Write as _,
+    io::Write,
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -94,9 +95,13 @@ pub struct GrepArgs {
     #[arg(long)]
     filter: bool,
 
-    /// Output file, otherwise stdout. Must be a directory when multiple input paths are given.
+    /// TSV output file to write all matches. Empty or "-" for stdout.
+    #[arg(long, default_missing_value = "-", num_args(0..=1))]
+    matches: Option<PathBuf>,
+
+    /// Filtered output file, otherwise stdout. Must be a directory when multiple input paths are given.
     ///
-    /// - for explicit stdout.
+    /// use "-" for explicit stdout.
     #[arg(short = 'o', long)]
     output: Option<PathBuf>,
 
@@ -162,22 +167,47 @@ impl GrepArgs {
         ));
         let global_histogram = Mutex::new(vec![0usize; k + 1]);
 
-        let writer = if let Some(output) = &args.output
-            && output != "-"
-        {
-            let path = PathBuf::from(output);
-            Box::new(std::fs::File::create(path).expect("create output file"))
-                as Box<dyn std::io::Write + Send>
+        // Filter writer
+        let filter_writer = self.filter.then(|| {
+            let writer = if let Some(output) = &args.output
+                && output != "-"
+            {
+                let path = PathBuf::from(output);
+                Box::new(std::fs::File::create(path).expect("create output file"))
+                    as Box<dyn std::io::Write + Send>
+            } else {
+                Box::new(std::io::stdout()) as Box<dyn std::io::Write + Send>
+            };
+            Mutex::new(writer)
+        });
+
+        // Match writer
+        let match_writer = if let Some(output) = &args.matches {
+            let mut writer = if output == "" || output == "-" {
+                Box::new(std::io::stdout()) as Box<dyn std::io::Write + Send>
+            } else {
+                let path = PathBuf::from(output);
+                Box::new(std::fs::File::create(path).expect("create output file"))
+                    as Box<dyn std::io::Write + Send>
+            };
+
+            let header = format!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "pat_id", "text_id", "cost", "strand", "start", "end", "match_region", "cigar"
+            );
+            write!(writer, "{header}").unwrap();
+
+            Some(Mutex::new(writer))
         } else {
-            Box::new(std::io::stdout()) as Box<dyn std::io::Write + Send>
+            None
         };
-        let writer = Mutex::new(writer);
 
         std::thread::scope(|s| {
             for _ in 0..num_threads {
                 let output = &output;
                 let global_histogram = &global_histogram;
-                let writer = &writer;
+                let filter_writer = filter_writer.as_ref();
+                let match_writer = match_writer.as_ref();
                 s.spawn(move || {
                     // Each thread has own searcher here
                     let mut searcher: SearchWrapper = match &args.alphabet {
@@ -224,11 +254,8 @@ impl GrepArgs {
                         }
 
                         let (next_batch_id, output_buf) = &mut *output.lock().unwrap();
-                        let mut writer = if self.filter {
-                            Some(writer.lock().unwrap())
-                        } else {
-                            None
-                        };
+                        let mut filter_writer = filter_writer.map(|w| w.lock().unwrap());
+                        let mut match_writer = match_writer.map(|w| w.lock().unwrap());
 
                         // Push to buffer.
                         let idx = batch_id - *next_batch_id;
@@ -246,16 +273,37 @@ impl GrepArgs {
                             *next_batch_id += 1;
                             let front_results = output_buf.pop_front().unwrap().unwrap();
                             for (path, text, mut matches) in front_results {
-                                if self.filter {
-                                    let writer = &mut **writer.as_mut().unwrap();
-                                    if !self.invert && !matches.is_empty() {
-                                        args.print_matching_record(&text, writer);
+                                match self.filter {
+                                    // If filter mode, print full records.
+                                    true => {
+                                        let writer = &mut **filter_writer.as_mut().unwrap();
+                                        if !self.invert && !matches.is_empty() {
+                                            args.print_matching_record(&text, writer);
+                                        }
+                                        if self.invert && matches.is_empty() {
+                                            args.print_matching_record(&text, writer);
+                                        }
+                                        // Write matches.
+                                        if let Some(match_writer) = match_writer.as_mut() {
+                                            for (pattern, m) in &matches {
+                                                args.print_match_tsv(
+                                                    pattern,
+                                                    &text,
+                                                    m,
+                                                    &mut **match_writer,
+                                                );
+                                            }
+                                        }
                                     }
-                                    if self.invert && matches.is_empty() {
-                                        args.print_matching_record(&text, writer);
+                                    // If grep mode, print matches.
+                                    false => {
+                                        args.print_matches_for_record(
+                                            path,
+                                            &text,
+                                            &mut matches,
+                                            match_writer.as_deref_mut(),
+                                        );
                                     }
-                                } else {
-                                    args.print_matches_for_record(path, &text, &mut matches);
                                 }
                             }
                         }
@@ -299,6 +347,7 @@ impl GrepArgs {
         path: &Path,
         text: &TextRecord,
         matches: &mut Vec<(&PatternRecord, Match)>,
+        mut match_writer: Option<&mut impl std::io::Write>,
     ) {
         if matches.is_empty() {
             return;
@@ -308,19 +357,16 @@ impl GrepArgs {
             format!("{}>{}", path.display().cyan().bold(), text.id.bold()).bold()
         );
         matches.sort_by_key(|m| m.1.text_start);
-        for (pattern, match_record) in matches {
-            let line = self.pretty_print_match_line(pattern, text, match_record);
-            eprint!("{}", line);
+        for (pattern, m) in matches {
+            if let Some(match_writer) = match_writer.as_mut() {
+                self.print_match_tsv(pattern, text, m, match_writer);
+            }
+            self.pretty_print_match_line(pattern, text, m);
         }
     }
 
     /// Pretty print the context of a match.
-    fn pretty_print_match_line(
-        &self,
-        pattern: &PatternRecord,
-        text: &TextRecord,
-        m: &mut Match,
-    ) -> String {
+    fn pretty_print_match_line(&self, pattern: &PatternRecord, text: &TextRecord, m: &mut Match) {
         let rc_pattern;
         let mut cigar = m.cigar.clone();
         let matching_pattern = match m.strand {
@@ -394,7 +440,7 @@ impl GrepArgs {
             Strand::Rc => "-",
         };
 
-        format!(
+        eprintln!(
             "{} ({}) {} | {}{:>context$}{match_string}{}{:>suffix_padding$}{} @ {}\n",
             pattern.id,
             strand.bold(),
@@ -405,7 +451,50 @@ impl GrepArgs {
             "",
             suffix_skip.dim(),
             format!("{:<19}", format!("{}-{}", m.text_start, m.text_end)).dim(),
+        );
+    }
+
+    fn print_match_tsv(
+        &self,
+        pattern: &PatternRecord,
+        text: &TextRecord,
+        m: &Match,
+        writer: &mut impl std::io::Write,
+    ) {
+        let cost = m.cost;
+        let start = m.text_start;
+        let end = m.text_end;
+        let slice = &text.seq.text[start..end];
+
+        // If we match reverse complement, reverse complement the slice to make it easier to read
+        let slice_str = if m.strand == Strand::Rc {
+            match self.alphabet {
+                Alphabet::Dna => {
+                    String::from_utf8_lossy(&<Dna as Profile>::reverse_complement(slice))
+                        .into_owned()
+                }
+                Alphabet::Iupac => {
+                    String::from_utf8_lossy(&<Iupac as Profile>::reverse_complement(slice))
+                        .into_owned()
+                }
+                Alphabet::Ascii => unreachable!("no rc for ascii"), // Guarded against above
+            }
+        } else {
+            String::from_utf8_lossy(slice).into_owned()
+        };
+
+        let pat_id = &pattern.id;
+        let text_id = &text.id;
+        let cigar = m.cigar.to_string();
+        let strand = match m.strand {
+            Strand::Fwd => "+",
+            Strand::Rc => "-",
+        };
+        writeln!(
+            writer,
+            "{pat_id}\t{text_id}\t{cost}\t{strand}\t{start}\t{end}\t{slice_str}\t{cigar}"
         )
+        .unwrap();
     }
 }
 
