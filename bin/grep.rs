@@ -93,16 +93,24 @@ pub struct GrepArgs {
     max_n_frac: f32,
 
     /// Number of characters (or lines, for ASCII) to print before/after each match.
-    #[arg(short = 'C', long)]
-    context: Option<usize>,
+    #[arg(short = 'C', long, default_value_t = 20)]
+    context: usize,
 
     /// Number of threads to use. All CPUs by default.
     #[arg(short = 'j', long)]
     threads: Option<usize>,
 
     /// Force full-record output, even when no output files are given. Aliased to `sassy filter`.
-    #[arg(long)]
+    #[arg(skip)]
     filter: bool,
+
+    /// Only output TSV of matches, hide coloured grep output.
+    #[arg(skip)]
+    search: bool,
+
+    /// Grep mode. Only disabled when calling `sassy search`.
+    #[arg(skip)]
+    grep: bool,
 
     /// TSV output file to write all matches. Empty or "-" for stdout.
     #[arg(long, default_missing_value = "-", num_args(0..=1))]
@@ -121,29 +129,39 @@ pub struct GrepArgs {
 }
 
 impl GrepArgs {
+    pub fn grep(mut self) {
+        self.grep = true;
+        self.run();
+    }
+    pub fn search(mut self) {
+        self.search = true;
+        self.run();
+    }
     pub fn filter(mut self) {
         self.filter = true;
-        self.grep();
+        self.run();
     }
 
     fn set_mode(&mut self) {
+        // Enable filter mode when output is given.
         if self.output.is_some() {
             self.filter = true;
         }
         if self.invert {
             self.filter = true;
         }
-    }
 
-    fn set_context(&mut self) {
-        if self.context.is_none() {
-            self.context = Some(20);
+        // Enable search mode when matches is given.
+        if self.matches.is_some() {
+            self.search = true;
+        }
+        if self.search && self.matches.is_none() {
+            self.matches = Some(PathBuf::from("-"));
         }
     }
 
-    pub fn grep(mut self) {
+    fn run(mut self) {
         self.set_mode();
-        self.set_context();
         if self.paths.is_empty() {
             self.paths = vec![PathBuf::from("")];
         }
@@ -170,29 +188,42 @@ impl GrepArgs {
         // Ensure colours are always used.
         colored::control::set_override(true);
 
+        let mut filter_to_stdout = false;
+        let mut matches_to_stdout = false;
+
         // Filter writer
         let filter_writer = self.filter.then(|| {
             let writer = if let Some(output) = &args.output
+                && output != ""
                 && output != "-"
             {
                 let path = PathBuf::from(output);
                 Box::new(std::fs::File::create(path).expect("create output file"))
                     as Box<dyn std::io::Write + Send>
             } else {
+                filter_to_stdout = true;
                 Box::new(std::io::stdout()) as Box<dyn std::io::Write + Send>
             };
             Mutex::new(writer)
         });
 
         // Match writer
-        let match_writer = if let Some(output) = &args.matches {
-            let mut writer = if output == "" || output == "-" {
-                Box::new(std::io::stdout()) as Box<dyn std::io::Write + Send>
-            } else {
+        let match_writer = args.search.then(|| {
+            let mut writer = if let Some(output) = &args.matches
+                && output != ""
+                && output != "-"
+            {
                 let path = PathBuf::from(output);
-                Box::new(std::fs::File::create(path).expect("create output file"))
+                Box::new(std::fs::File::create(path).expect("create matches file"))
                     as Box<dyn std::io::Write + Send>
+            } else {
+                matches_to_stdout = true;
+                Box::new(std::io::stdout()) as Box<dyn std::io::Write + Send>
             };
+
+            if matches_to_stdout && filter_to_stdout {
+                panic!("Cannot write both filtered records and matches to stdout");
+            }
 
             let header = format!(
                 "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
@@ -200,10 +231,8 @@ impl GrepArgs {
             );
             write!(writer, "{header}").unwrap();
 
-            Some(Mutex::new(writer))
-        } else {
-            None
-        };
+            Mutex::new(writer)
+        });
 
         std::thread::scope(|s| {
             for _ in 0..num_threads {
@@ -268,39 +297,14 @@ impl GrepArgs {
                         {
                             *next_batch_id += 1;
                             let front_results = output_buf.pop_front().unwrap().unwrap();
-                            for (path, text, mut matches) in front_results {
-                                match self.filter {
-                                    // If filter mode, print full records.
-                                    true => {
-                                        let writer = &mut **filter_writer.as_mut().unwrap();
-                                        if !self.invert && !matches.is_empty() {
-                                            args.print_matching_record(&text, writer);
-                                        }
-                                        if self.invert && matches.is_empty() {
-                                            args.print_matching_record(&text, writer);
-                                        }
-                                        // Write matches.
-                                        if let Some(match_writer) = match_writer.as_mut() {
-                                            for (pattern, m) in &matches {
-                                                args.print_match_tsv(
-                                                    pattern,
-                                                    &text,
-                                                    m,
-                                                    &mut **match_writer,
-                                                );
-                                            }
-                                        }
-                                    }
-                                    // If grep mode, print matches.
-                                    false => {
-                                        args.print_matches_for_record(
-                                            path,
-                                            &text,
-                                            &mut matches,
-                                            match_writer.as_deref_mut(),
-                                        );
-                                    }
-                                }
+                            for (path, text, matches) in front_results {
+                                args.output(
+                                    path,
+                                    text,
+                                    matches,
+                                    &mut filter_writer,
+                                    &mut match_writer,
+                                );
                             }
                         }
                     }
@@ -328,6 +332,45 @@ impl GrepArgs {
         eprintln!();
 
         assert!(output.into_inner().unwrap().1.is_empty());
+    }
+
+    /// Output all matches for a single text record.
+    fn output(
+        &self,
+        path: &Path,
+        text: TextRecord,
+        mut matches: Vec<(&PatternRecord, Match)>,
+        filter_writer: &mut Option<std::sync::MutexGuard<'_, Box<dyn Write + Send>>>,
+        match_writer: &mut Option<std::sync::MutexGuard<'_, Box<dyn Write + Send>>>,
+    ) {
+        matches.sort_by_key(|m| m.1.text_start);
+        // 1. Print filter output.
+        if self.filter {
+            let writer = &mut **filter_writer.as_mut().unwrap();
+            if !self.invert && !matches.is_empty() {
+                self.print_matching_record(&text, writer);
+            }
+            if self.invert && matches.is_empty() {
+                self.print_matching_record(&text, writer);
+            }
+        }
+
+        match (self.grep, self.search) {
+            // 2. If grep, interleave with search output if needed.
+            (true, _) => self.print_matches_for_record(
+                path,
+                &text,
+                &mut matches,
+                match_writer.as_deref_mut(),
+            ),
+            // 3. Just write the search output.
+            (false, true) => {
+                for (pattern, m) in &matches {
+                    self.print_match_tsv(pattern, &text, m, match_writer.as_deref_mut().unwrap());
+                }
+            }
+            (false, false) => {}
+        };
     }
 
     fn get_patterns(&self) -> Vec<PatternRecord> {
@@ -385,7 +428,7 @@ impl GrepArgs {
         &self,
         path: &Path,
         text: &TextRecord,
-        matches: &mut Vec<(&PatternRecord, Match)>,
+        matches: &Vec<(&PatternRecord, Match)>,
         mut match_writer: Option<&mut impl std::io::Write>,
     ) {
         if matches.is_empty() {
@@ -400,7 +443,6 @@ impl GrepArgs {
             )
             .bold()
         );
-        matches.sort_by_key(|m| m.1.text_start);
         for (pattern, m) in matches {
             if let Some(match_writer) = match_writer.as_mut() {
                 self.print_match_tsv(pattern, text, m, match_writer);
@@ -410,7 +452,7 @@ impl GrepArgs {
     }
 
     /// Pretty print the context of a match.
-    fn pretty_print_match_line(&self, pattern: &PatternRecord, text: &TextRecord, m: &mut Match) {
+    fn pretty_print_match_line(&self, pattern: &PatternRecord, text: &TextRecord, m: &Match) {
         let rc_pattern;
         let mut cigar = m.cigar.clone();
         let matching_pattern = match m.strand {
@@ -451,10 +493,9 @@ impl GrepArgs {
         let (matching_text, mut suffix) = text.seq.text.split_at(m.text_end);
         let (mut prefix, matching_text) = matching_text.split_at(m.text_start);
 
-        let context = self.context.unwrap();
         let mut prefix_skip = 0;
-        if prefix.len() > context {
-            prefix_skip = prefix.len() - context;
+        if prefix.len() > self.context {
+            prefix_skip = prefix.len() - self.context;
             prefix = &prefix[prefix_skip..];
         };
         fn format_skip(skip: usize, prefix: bool) -> String {
@@ -472,7 +513,7 @@ impl GrepArgs {
         let (match_len, match_string) = pretty_print_match(matching_pattern, matching_text, &cigar);
 
         let suffix_skip =
-            (suffix.len() + match_len - matching_pattern.len()) as isize - context as isize;
+            (suffix.len() + match_len - matching_pattern.len()) as isize - self.context as isize;
         if suffix_skip > 0 {
             suffix = &suffix[..suffix.len() - suffix_skip as usize];
         };
@@ -484,6 +525,7 @@ impl GrepArgs {
             Strand::Rc => "-",
         };
 
+        let context = self.context;
         eprintln!(
             "{} ({}) {} | {}{:>context$}{match_string}{}{:>suffix_padding$}{} @ {}\n",
             pattern.id,
