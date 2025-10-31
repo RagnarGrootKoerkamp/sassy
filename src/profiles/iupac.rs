@@ -27,6 +27,7 @@ impl Profile for Iupac {
         let mut bases = vec![b'A', b'C', b'T', b'G'];
         let mut query_profile = Vec::with_capacity(a.len());
         for &c in a {
+            let c = c & !0x20; // to uppercase
             if !bases.contains(&c) {
                 bases.push(c);
             }
@@ -496,6 +497,18 @@ mod test {
         for case in invalid_cases {
             assert!(!Iupac::valid_seq(case));
         }
+    }
+
+    #[test]
+    fn test_alloc_out() {
+        let pattern = b"actgryswkmbdhvnx";
+        assert!(Iupac::valid_seq(pattern));
+        // Fill first 16 with pattern, rest with 'a'
+        let mut text = [b'a'; 64];
+        text[..16].copy_from_slice(pattern);
+        let (profiler, _) = Iupac::encode_pattern(pattern);
+        let mut out = Iupac::alloc_out();
+        profiler.encode_ref(&text, &mut out);
     }
 
     #[test]
