@@ -17,6 +17,13 @@ impl Profile for Iupac {
     type B = [u64; 16];
 
     fn encode_pattern(a: &[u8]) -> (Self, Vec<Self::A>) {
+        if !Self::valid_seq(a) {
+            panic!(
+                "Pattern is not valid IUPAC: {:?}",
+                String::from_utf8_lossy(a)
+            );
+        }
+
         let mut bases = vec![b'A', b'C', b'T', b'G'];
         let mut query_profile = Vec::with_capacity(a.len());
         for &c in a {
@@ -101,7 +108,7 @@ impl Profile for Iupac {
 
     #[inline(always)]
     fn alloc_out() -> Self::B {
-        [0; 16] //FIME: is this always valid?
+        [0; 16] //FIXME: is this always valid?
     }
 
     #[inline(always)]
