@@ -455,7 +455,6 @@ impl GrepArgs {
         let matching_pattern = match m.strand {
             Strand::Fwd => {
                 if m.pattern_start > 0 {
-                    eprintln!("insert DEL at start");
                     cigar
                         .ops
                         .insert(0, CigarElem::new(CigarOp::Del, m.pattern_start as i32));
@@ -524,7 +523,7 @@ impl GrepArgs {
 
         let context = self.context;
         eprintln!(
-            "{} ({}) {} | {}{:>context$}{match_string}{}{:>suffix_padding$}{} @ {}\n",
+            "{} ({}) {} | {}{:>context$}{match_string}{}{:>suffix_padding$}{} @ {}",
             pattern.id,
             strand.bold(),
             format!("{:>2}", m.cost).bold(),
