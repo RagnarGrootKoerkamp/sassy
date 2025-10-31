@@ -167,6 +167,10 @@ impl GrepArgs {
         ));
         let global_histogram = Mutex::new(vec![0usize; k + 1]);
 
+        // Grep writer is stderr
+        // Ensure colours are always used.
+        colored::control::set_override(true);
+
         // Filter writer
         let filter_writer = self.filter.then(|| {
             let writer = if let Some(output) = &args.output
