@@ -347,12 +347,13 @@ impl GrepArgs {
         let (match_len, match_string) =
             pretty_print_match(matching_pattern, matching_text, &m.cigar);
 
-        let mut suffix_skip = 0;
-        if (suffix.len() + match_len).saturating_sub(matching_pattern.len()) > context {
-            suffix_skip = suffix.len() + match_len - matching_pattern.len() - context;
-            suffix = &suffix[..suffix.len() - suffix_skip];
+        let suffix_skip =
+            (suffix.len() + match_len - matching_pattern.len()) as isize - context as isize;
+        if suffix_skip > 0 {
+            suffix = &suffix[..suffix.len() - suffix_skip as usize];
         };
-        let suffix_skip = format_skip(suffix_skip, false);
+        let suffix_padding = (-suffix_skip.min(0)) as usize;
+        let suffix_skip = format_skip(suffix_skip.max(0) as usize, false);
 
         let strand = match m.strand {
             Strand::Fwd => "+",
@@ -360,14 +361,14 @@ impl GrepArgs {
         };
 
         format!(
-            "{} ({}) {} | {}{:>context$}{}{}{} @ {}\n",
+            "{} ({}) {} | {}{:>context$}{match_string}{}{:>suffix_padding$}{} @ {}\n",
             pattern.id,
             strand.bold(),
             format!("{:>2}", m.cost).bold(),
             prefix_skip.dim(),
             String::from_utf8_lossy(prefix),
-            match_string,
             String::from_utf8_lossy(suffix),
+            "",
             suffix_skip.dim(),
             format!("{:<19}", format!("{}-{}", m.text_start, m.text_end)).dim(),
         )
