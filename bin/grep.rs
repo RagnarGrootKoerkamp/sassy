@@ -10,14 +10,22 @@ use colored::Colorize;
 use pa_types::{Cigar, CigarElem, CigarOp};
 use sassy::{
     Match, Searcher, Strand,
-    profiles::{Ascii, Dna, Iupac, Profile},
+    profiles::{Dna, Iupac, Profile},
 };
 
 use crate::{
     crispr::check_n_frac,
     input_iterator::{InputIterator, PatternRecord, TextRecord},
-    search::{Alphabet, SearchWrapper, get_patterns},
+    search::get_patterns,
 };
+
+// TODO: Support ASCII alphabet.
+#[derive(clap::ValueEnum, Default, Clone, Copy, PartialEq)]
+enum Alphabet {
+    Dna,
+    #[default]
+    Iupac,
+}
 
 #[derive(clap::Parser, Clone)]
 pub struct GrepArgs {
@@ -64,7 +72,6 @@ pub struct GrepArgs {
         long,
         short = 'a',
         default_value_t = Alphabet::Iupac,
-        // default_missing_value = "Alphabet::Ascii",
         value_enum
     )]
     alphabet: Alphabet,
@@ -128,11 +135,7 @@ impl GrepArgs {
 
     fn set_context(&mut self) {
         if self.context.is_none() {
-            if self.alphabet == Alphabet::Ascii {
-                self.context = Some(0);
-            } else {
-                self.context = Some(20);
-            }
+            self.context = Some(20);
         }
     }
 
@@ -143,12 +146,6 @@ impl GrepArgs {
             self.paths = vec![PathBuf::from("")];
         }
         let args = &self;
-
-        if args.alphabet == Alphabet::Ascii {
-            unimplemented!(
-                "ASCII alphabet is not yet supported. Please comment on https://github.com/RagnarGrootKoerkamp/sassy/issues/35 if you're interested."
-            );
-        }
 
         let patterns = get_patterns(&args.pattern, &args.pattern_file, &args.pattern_fasta);
         assert!(!patterns.is_empty(), "No pattern sequences found");
@@ -214,18 +211,9 @@ impl GrepArgs {
                 let match_writer = match_writer.as_ref();
                 s.spawn(move || {
                     // Each thread has own searcher here
-                    let mut searcher: SearchWrapper = match &args.alphabet {
-                        Alphabet::Ascii => SearchWrapper::Ascii(Box::new(Searcher::<Ascii>::new(
-                            false,
-                            args.overhang,
-                        ))),
-                        Alphabet::Dna => {
-                            SearchWrapper::Dna(Box::new(Searcher::<Dna>::new(rc, args.overhang)))
-                        }
-                        Alphabet::Iupac => SearchWrapper::Iupac(Box::new(Searcher::<Iupac>::new(
-                            rc,
-                            args.overhang,
-                        ))),
+                    let mut searcher = match &args.alphabet {
+                        Alphabet::Dna => Either::Left(Searcher::<Dna>::new(rc, args.overhang)),
+                        Alphabet::Iupac => Either::Right(Searcher::<Iupac>::new(rc, args.overhang)),
                     };
 
                     let mut results: Vec<(&Path, TextRecord, Vec<(&PatternRecord, Match)>)> =
@@ -235,14 +223,16 @@ impl GrepArgs {
                     while let Some((batch_id, batch)) = task_iterator.next_batch() {
                         let path = batch.0;
                         for text in batch.2 {
-                            let mut matches = vec![];
+                            let mut batch_matches = vec![];
                             for pattern in batch.1 {
-                                matches.extend(
-                                    searcher
-                                        .search(&pattern.seq, &text.seq, k)
+                                let record_matches = match &mut searcher {
+                                    Either::Left(s) => s.search(&pattern.seq, &text.seq, k),
+                                    Either::Right(s) => s.search(&pattern.seq, &text.seq, k),
+                                };
+                                batch_matches.extend(
+                                    record_matches
                                         .into_iter()
                                         .filter(|m| {
-                                            // Check max-n-frac.
                                             check_n_frac(
                                                 args.max_n_frac,
                                                 &text.seq.text[m.text_start..m.text_end],
@@ -251,10 +241,10 @@ impl GrepArgs {
                                         .map(|m| (pattern, m)),
                                 );
                             }
-                            for (_pat, m) in &matches {
+                            for (_pat, m) in &batch_matches {
                                 local_histogram[m.cost as usize] += 1;
                             }
-                            results.push((path, text, matches));
+                            results.push((path, text, batch_matches));
                         }
 
                         let (next_batch_id, output_buf) = &mut *output.lock().unwrap();
@@ -490,7 +480,6 @@ impl GrepArgs {
                     String::from_utf8_lossy(&<Iupac as Profile>::reverse_complement(slice))
                         .into_owned()
                 }
-                Alphabet::Ascii => unreachable!("no rc for ascii"), // Guarded against above
             }
         } else {
             String::from_utf8_lossy(slice).into_owned()

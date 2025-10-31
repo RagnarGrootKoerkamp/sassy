@@ -847,6 +847,7 @@ version = "0.1.4"
 dependencies = [
  "clap",
  "colored",
+ "either",
  "env_logger",
  "log",
  "needletail",
