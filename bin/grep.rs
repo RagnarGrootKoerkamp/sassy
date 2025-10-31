@@ -1,12 +1,15 @@
 use std::{
     collections::VecDeque,
     fmt::Write as _,
-    io::Write,
+    fs::File,
+    io::{BufRead, Write},
     path::{Path, PathBuf},
     sync::Mutex,
 };
 
 use colored::Colorize;
+use either::Either;
+use needletail::parse_fastx_file;
 use pa_types::{Cigar, CigarElem, CigarOp};
 use sassy::{
     Match, Searcher, Strand,
@@ -16,7 +19,6 @@ use sassy::{
 use crate::{
     crispr::check_n_frac,
     input_iterator::{InputIterator, PatternRecord, TextRecord},
-    search::get_patterns,
 };
 
 // TODO: Support ASCII alphabet.
@@ -147,7 +149,7 @@ impl GrepArgs {
         }
         let args = &self;
 
-        let patterns = get_patterns(&args.pattern, &args.pattern_file, &args.pattern_fasta);
+        let patterns = args.get_patterns();
         assert!(!patterns.is_empty(), "No pattern sequences found");
 
         let k = args.k;
@@ -326,6 +328,45 @@ impl GrepArgs {
         eprintln!();
 
         assert!(output.into_inner().unwrap().1.is_empty());
+    }
+
+    fn get_patterns(&self) -> Vec<PatternRecord> {
+        if let Some(p) = &self.pattern {
+            // Single inline pattern; give it a dummy id
+            return vec![PatternRecord {
+                id: "pattern".to_string(),
+                seq: p.as_bytes().to_vec(),
+            }];
+        }
+        if let Some(pattern_file) = &self.pattern_file {
+            // Read all lines of the file.
+            let file = File::open(pattern_file).expect("valid pattern file");
+            let reader = std::io::BufReader::new(file);
+
+            let mut patterns = Vec::new();
+            for line in reader.lines() {
+                patterns.push(PatternRecord {
+                    id: format!("{}", patterns.len() + 1),
+                    seq: line.unwrap().into(),
+                });
+            }
+            return patterns;
+        }
+        if let Some(pattern_fasta) = &self.pattern_fasta {
+            // Pull all sequences and ids from the FASTA file
+            let mut reader = parse_fastx_file(pattern_fasta).expect("valid path/file");
+            let mut patterns = Vec::new();
+            while let Some(record) = reader.next() {
+                let seqrec = record.expect("invalid record");
+                let id = String::from_utf8(seqrec.id().to_vec()).unwrap();
+                patterns.push(PatternRecord {
+                    id,
+                    seq: seqrec.seq().into_owned(),
+                });
+            }
+            return patterns;
+        }
+        panic!("No --pattern, --pattern-file, or --pattern-fasta provided!");
     }
 
     fn print_matching_record(&self, text: &TextRecord, writer: &mut (dyn std::io::Write + Send)) {
