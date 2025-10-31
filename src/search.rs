@@ -158,6 +158,7 @@ impl<P: Profile> LaneState<P> {
         }
     }
 
+    #[inline(always)]
     fn update_and_encode(&mut self, text: &[u8], i: usize, profiler: &P, overhang: bool) {
         let start = self.chunk_offset * 64 + 64 * i;
         self.lane_end = start + 64;
