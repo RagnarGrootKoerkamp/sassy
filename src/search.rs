@@ -158,14 +158,14 @@ impl<P: Profile> LaneState<P> {
         }
     }
 
-    fn update_and_encode(&mut self, text: &[u8], i: usize, profiler: &P) {
+    fn update_and_encode(&mut self, text: &[u8], i: usize, profiler: &P, overhang: bool) {
         let start = self.chunk_offset * 64 + 64 * i;
         self.lane_end = start + 64;
         if start + 64 <= text.len() {
             self.text_slice.copy_from_slice(&text[start..start + 64]);
         } else {
             // Pad with N, so that costs at the end are diagonally preserved.
-            self.text_slice.fill(b'N');
+            self.text_slice.fill(if overhang { b'N' } else { b'X' });
             if start <= text.len() {
                 let slice = &text[start..];
                 self.text_slice[..slice.len()].copy_from_slice(slice);
@@ -463,7 +463,7 @@ impl<P: Profile> Searcher<P> {
 
             // Update text slices and profiles
             for lane in 0..LANES {
-                self.lanes[lane].update_and_encode(text, i, &profiler);
+                self.lanes[lane].update_and_encode(text, i, &profiler, self.alpha.is_some());
             }
 
             let mut dist_to_start_of_lane = S::splat(0);
