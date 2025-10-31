@@ -93,8 +93,8 @@ or search all records of a fasta file with `--pattern-fasta <fasta-file>` instea
 The `grep` output is coloured:
 - green shows matching characters,
 - orange shows mismatches,
-- red shows deletec characters (in pattern but not in text),
-- blue shows inserted charactes (in text but not in pattern).
+- red shows deleted characters (in pattern but not in text),
+- blue shows inserted characters (in text but not in pattern).
 ![screenshot of sassy grep output](fig/grep.png)
 
 #### 1.2: TSV output for matches
@@ -106,7 +106,7 @@ sassy search -p GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG -k 2 reads.fa --match
 # or
 sassy grep   -p GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG -k 2 reads.fa --matches matches.tsv
 ```
-gives `.tsv` output like the this:
+gives `.tsv` output like this:
 
 ```tsv
 pat_id	text_id	cost	strand	start	end	match_region	cigar
@@ -133,12 +133,12 @@ sassy filter -p GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG -k 2 reads.fq -o filt
 # or
 sassy grep   -p GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG -k 2 reads.fq -o filtered.fq
 ```
-gives writes a file containing only matching records. Use `--invert` to only
+Writes a file containing only matching records. Use `--invert` to only
 write non-matching records.
 
 #### 1.4: CRISPR off-target search
 
-Sarch for one or more guides in `guides.txt`:
+Searrch for one or more guides in `guides.txt`:
 ```bash
 sassy crispr --threads 8 --guide guides.txt --k 5 --max-n-frac 0.1 --output hits.tsv hg38.fasta
 ```
@@ -156,7 +156,7 @@ GAGTCCGAGCAGAAGAAGAANGG  chr21    5     -       46396975  46396998  CAGTCCCAGCAG
 ```
 
 The `start` and `end` are 0-based open-ended (i.e. 0-based inclusive of the
-start, but exclusive of the end), and `start` is always less then `end`
+start, but exclusive of the end), and `start` is always less than `end`
 (regardless of the strand).  The 
 `match_region` reported will be the sequence from the target file when `strand` is `+`, or the reverse complement
 of the sequence from the target file when `strand` is `-`, so that it matches the `guide` sequence.
