@@ -198,6 +198,15 @@ impl FilterArgs {
 
 impl Args {
     fn run(mut self) {
+        if self.base.invert && self.filter.is_none() {
+            eprintln!(
+                "{}",
+                "Warning: --invert/-v has no effect without --filter."
+                    .red()
+                    .bold()
+            );
+        }
+
         if self.base.paths.is_empty() {
             self.base.paths = vec![PathBuf::from("")];
         }
@@ -250,7 +259,12 @@ impl Args {
             };
 
             if matches_to_stdout && filter_to_stdout {
-                panic!("Cannot write both filtered records and matches to stdout");
+                eprintln!(
+                    "{}",
+                    "NOTE: Writing both filtered records *and* matching locations to stdout."
+                        .red()
+                        .bold()
+                );
             }
 
             let header = format!(
