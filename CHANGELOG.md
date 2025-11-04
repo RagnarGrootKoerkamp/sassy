@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.5
+- feat: Add `sassy search`, `sassy filter`, and `sassy grep` (#35, see updated readme).
+- perf: Improvements when searching short (len ~16) patterns, by avoiding
+  redundant expensive `find_mininima` call.
+- perf: Improvements when searching short texts without overhang, by avoiding redundant
+  floating point operations.
+- misc: Bump `pa-types` to `1.2.0` for `Cigar::to_char_pairs` to conveniently
+  iterate over corresponding characters.
+- misc: `derive(Clone)` for `Searcher` (#36)
+- misc: Bugfix for mixed-case IUPAC input.
+- docs: Minor documentation & readme fixes.
+
 ## 0.1.4
 - Improve docs for `sassy crispr` (#34 by @tfenne).
 - Require value for `--max-n-frac` (#33 by @tfenne).
