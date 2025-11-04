@@ -26,8 +26,7 @@ path = 'bin/main.rs'
 
 [dependencies]
 rand = "0.9.0"
-# pa-types = "1.2.0"
-pa-types.git = "https://github.com/pairwise-alignment/pa-types"
+pa-types = "1.2.0"
 clap = { version = "4.5.37", features = ["derive"] }
 log = "0.4.27"
 env_logger = "0.11.8"
