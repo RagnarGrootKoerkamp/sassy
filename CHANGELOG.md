@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.6
+- feat: Use `wide` instead of `portable-simd` so that `sassy` now works on
+  stable Rust (#26). It's slightly (<5%) slower and has slightly ugly code, but
+  good enough for now.
+
 ## 0.1.5
 - feat: Add `sassy search`, `sassy filter`, and `sassy grep` (#35, see updated readme).
 - perf: Improvements when searching short (len ~16) patterns, by avoiding
