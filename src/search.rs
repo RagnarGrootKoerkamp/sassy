@@ -246,6 +246,18 @@ impl<P: Profile> Searcher<P> {
     }
 
     /// Create a new `Searcher`.
+    #[cfg_attr(
+        all(
+            not(any(
+                doc,
+                debug_assertions,
+                target_feature = "avx2",
+                target_feature = "neon",
+            )),
+            feature = "scalar"
+        ),
+        deprecated = "Warning: Sassy uses AVX2 or NEON SIMD instructions. Compile using `-C target-cpu=native` to get the expected performance."
+    )]
     pub fn new(rc: bool, alpha: Option<f32>) -> Self {
         Self {
             rc,
