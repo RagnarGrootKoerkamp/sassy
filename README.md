@@ -63,7 +63,7 @@ assert_eq!(matches[0].cigar.to_string(), "2=1X1=");
 
 ### 1. Command-line interface (CLI)
 
-**Build and install** using `cargo
+**Build and install** using `cargo`
 
 ```bash
 cargo install sassy
