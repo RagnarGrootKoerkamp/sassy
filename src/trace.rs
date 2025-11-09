@@ -50,6 +50,12 @@ pub fn fill<P: Profile>(
     m: &mut CostMatrix,
     alpha: Option<f32>,
 ) {
+    if alpha.is_some() && !P::supports_overhang() {
+        panic!(
+            "Overhang is not supported for {:?}",
+            std::any::type_name::<P>()
+        );
+    }
     m.alpha = alpha;
     m.q = query.len();
     m.deltas.clear();
@@ -89,6 +95,12 @@ pub fn simd_fill<P: Profile>(
     alpha: Option<f32>,
 ) {
     assert!(texts.len() <= LANES);
+    if alpha.is_some() && !P::supports_overhang() {
+        panic!(
+            "Overhang is not supported for {:?}",
+            std::any::type_name::<P>()
+        );
+    }
     let lanes = texts.len();
 
     let (profiler, query_profile) = P::encode_pattern(query);
