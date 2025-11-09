@@ -132,6 +132,7 @@ pub use search::Match;
 pub use search::RcSearchAble;
 pub use search::Searcher;
 pub use search::Strand;
+pub use trace::{CostMatrix, fill, get_trace, simd_fill};
 
 // BINDINGS
 

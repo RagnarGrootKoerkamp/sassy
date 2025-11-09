@@ -19,7 +19,7 @@ pub struct CostMatrix {
     /// Query length.
     q: usize,
     deltas: Vec<V>,
-    pub(crate) alpha: Option<f32>,
+    pub alpha: Option<f32>,
 }
 
 impl CostMatrix {
