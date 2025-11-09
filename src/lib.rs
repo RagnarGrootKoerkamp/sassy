@@ -132,6 +132,8 @@ pub use search::Match;
 pub use search::RcSearchAble;
 pub use search::Searcher;
 pub use search::Strand;
+
+#[cfg(feature = "expose_trace_code")]
 pub use trace::{CostMatrix, fill, get_trace, simd_fill};
 
 // BINDINGS
