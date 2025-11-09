@@ -50,6 +50,7 @@ pub fn fill<P: Profile>(
     m: &mut CostMatrix,
     alpha: Option<f32>,
 ) {
+    m.alpha = alpha;
     m.q = query.len();
     m.deltas.clear();
     m.deltas.reserve((m.q + 1) * len.div_ceil(64));
@@ -94,6 +95,7 @@ pub fn simd_fill<P: Profile>(
     let num_chunks = max_len.div_ceil(64);
 
     for m in &mut *m {
+        m.alpha = alpha;
         m.q = query.len();
         m.deltas.clear();
         m.deltas.reserve((m.q + 1) * num_chunks);

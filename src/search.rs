@@ -734,10 +734,6 @@ impl<P: Profile> Searcher<P> {
         let mut traces = Vec::new();
         let fill_len = pattern.len() + k as usize;
 
-        for m in &mut self.cost_matrices {
-            m.alpha = self.alpha;
-        }
-
         // Collect slices to process in batches
         let mut batch = MatchBatch::new();
 
