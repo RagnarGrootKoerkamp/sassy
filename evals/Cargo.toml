@@ -2,6 +2,7 @@
 name = "evals"
 version = "0.1.2"
 edition = "2024"
+publish = false
 
 [dependencies]
 edlib_rs.git = "https://github.com/pairwise-alignment/edlib-rs"
