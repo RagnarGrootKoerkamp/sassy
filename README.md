@@ -13,7 +13,7 @@ a problem that goes by many names:
 The motivating application is searching short (length 20 to 100) DNA sequences
 in a human genome or e.g. in a set of reads.
 Sassy generally works well for patterns/queries up to length 1000,
-and supports both ASCII and DNA.
+and supports both ASCII, DNA, and IUPAC.
 
 Highlights:
 - Sassy uses bitpacking and SIMD (both AVX2 and NEON supported).
@@ -21,10 +21,10 @@ Highlights:
 - Support for _overhang_ alignments where the pattern extends beyond the text.
 - Support for (case-insensitive) ASCII, DNA (`ACGT`), and
   [IUPAC](https://www.bioinformatics.org/sms/iupac.html) (=`ACGT+NYR...`) alphabets.
-- Rust library (`cargo add sassy`), binary (`cargo install sassy`), Python
+- Rust library (`cargo add sassy`), binary (`cargo install sassy`, see details below), Python
   bindings (`pip install sassy-rs`), and C bindings (see below).
 
-See **the paper** below, and corresponding evals in [evals/](evals/).
+See **the paper**, and corresponding evals in [evals/](evals/):
 
 > Rick Beeloo and Ragnar Groot Koerkamp.  
 > Sassy: Searching Short DNA Strings in the 2020s.  
