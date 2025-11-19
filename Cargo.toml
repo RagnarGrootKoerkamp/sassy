@@ -20,6 +20,11 @@ incremental = true
 opt-level = 3
 debug = true
 
+[profile.dist]
+inherits = "release"
+lto = true
+debug = true
+
 [[bin]]
 name = 'sassy'
 path = 'bin/main.rs'
