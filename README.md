@@ -33,6 +33,8 @@ See **the paper** below, and corresponding evals in [evals/](evals/).
 
 ## Installation
 
+Prebuilt binaries can be found in the latest [release](https://github.com/RagnarGrootKoerkamp/sassy/releases).
+
 ### Building a binary with SIMD instructions
 
 Sassy uses AVX2 and NEON instructions performance reasons.
