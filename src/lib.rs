@@ -112,8 +112,12 @@
     target_feature = "neon",
     feature = "scalar"
 )))]
-compile_error!(
-    "Sassy uses AVX2 or NEON SIMD instructions. Compile using `-C target-cpu=native` to get the expected performance. Silence this error using the `scalar` feature."
+compile_error!("
+Sassy uses AVX2 or NEON SIMD instructions for performance.
+To get the expected performance, compile/install using eg:
+RUSTFLAGS=\"-C target-cpu=native\" cargo install sassy.
+Alternatively, silence this error by activating the `scalar` feature (eg `cargo install -F scalar ...`).
+See the sassy README for details."
 );
 
 // INTERNAL MODS
