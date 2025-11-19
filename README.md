@@ -55,6 +55,13 @@ When using the sassy library in a larger project, the same restrictions apply:
 you will either need to build/compile the final binary with `target-cpu=native`,
 or pass the `scalar` feature to the sassy dependency.
 
+### Rust version
+
+Sassy uses some recently stabilized Rust features, and so you will need at least
+1.91, typically via `rustup update`.
+If your system-wide Rust installation is older, consider switching to `rustup`:
+https://rustup.rs/.
+
 ## Usage
 
 Sassy can be used via the CLI, or as Rust, Python, or C library.

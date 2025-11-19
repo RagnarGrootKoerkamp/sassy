@@ -9,6 +9,7 @@ license = "MIT"
 keywords = ["bioinformatics", "string", "fuzzy", "search", "simd"]
 readme = "README.md"
 categories = ["science"]
+rust-version = "1.91"
 
 [lib]
 name = "sassy"
