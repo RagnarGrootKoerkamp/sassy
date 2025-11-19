@@ -31,6 +31,29 @@ See **the paper** below, and corresponding evals in [evals/](evals/).
 > bioRxiv, July 2025.
 > https://doi.org/10.1101/2025.07.22.666207.
 
+## Installation
+
+### Building a binary with SIMD instructions
+
+Sassy uses AVX2 and NEON instructions performance reasons.
+Unfortunately, _by default_ `cargo install` will not use these instructions for
+portability reasons, even though your system is very likely to support them.
+Thus, you will need to manually instruct `cargo` to use the instruction sets available on your architecture:
+
+``` sh
+RUSTFLAGS="-C target-cpu=native" cargo install sassy
+```
+
+Alternatively, enable the `-F scalar` feature flag to fall back to a scalar implementation with
+reduced performance:
+
+``` sh
+cargo install sassy -F scalar
+```
+
+When using the sassy library in a larger project, the same restrictions apply:
+you will either need to build/compile the final binary with `target-cpu=native`,
+or pass the `scalar` feature to the sassy dependency.
 
 ## Usage
 
@@ -62,12 +85,6 @@ assert_eq!(matches[0].cigar.to_string(), "2=1X1=");
 ```
 
 ### 1. Command-line interface (CLI)
-
-**Build and install** using `cargo`
-
-```bash
-cargo install sassy
-```
 
 The CLI can be used via:
 1. `sassy grep`: to show nicely coloured output.
