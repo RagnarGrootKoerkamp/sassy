@@ -137,8 +137,10 @@ pub use search::RcSearchAble;
 pub use search::Searcher;
 pub use search::Strand;
 
-#[cfg(feature = "expose_trace_code")]
-pub use trace::{CostMatrix, fill, get_trace, simd_fill};
+#[doc(hidden)]
+pub mod private {
+    pub use crate::trace::{CostMatrix, fill, get_trace, simd_fill};
+}
 
 // BINDINGS
 

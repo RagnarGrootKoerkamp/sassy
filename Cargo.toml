@@ -55,9 +55,6 @@ c = []
 # Without this, it requires either AVX2 or NEON to be available at compile time.
 scalar = []
 
-# Expose trace code: CostMatrix, fill, get_trace, and simd_fill.
-expose_trace_code = []
-
 default = []
 
 

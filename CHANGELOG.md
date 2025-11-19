@@ -5,7 +5,8 @@
 - Added installation section to README, explaining the use of `RUSTFLAGS` and
   minimal required rust version. (#37)
 - Assert whether the selected profile supports overhang.
-- Add `cargo-dist` for binary release artifacts.
+- Add `cargo-dist` for binary release artefacts.
+- Move some internal features from feature-gated to `#[doc(hidden)] mod private {}`.
 
 ## 0.1.6
 - feat: Use `wide` instead of `portable-simd` so that `sassy` now works on
