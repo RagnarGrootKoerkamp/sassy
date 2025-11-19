@@ -1,0 +1,2 @@
+- name: setup rustflags
+  run: echo RUSTFLAGS="$RUSTFLAGS -C target-cpu=native" >> "$GITHUB_ENV"
