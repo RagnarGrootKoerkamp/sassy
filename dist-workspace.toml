@@ -10,8 +10,7 @@ ci = "github"
 # The installers to generate for each app
 installers = []
 # Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]
-
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"]
 # Checksums to generate for each App
 checksum = "false"
 # Generate and dist a source tarball
