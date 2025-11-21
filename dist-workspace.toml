@@ -18,4 +18,4 @@ source-tarball = false
 # Whether to auto-include files like READMEs, LICENSEs, and CHANGELOGs (default true)
 auto-includes = false
 
-github-build-setup = "setup-rustflags"
+github-build-setup = "setup-portable-config"
