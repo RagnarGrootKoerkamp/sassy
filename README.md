@@ -33,44 +33,27 @@ See **the paper**, and corresponding evals in [evals/](evals/):
 
 ## Installation
 
-Prebuilt binaries can be found in the latest [release](https://github.com/RagnarGrootKoerkamp/sassy/releases).
+### Prebuilt binaries 
+See the latest [release](https://github.com/RagnarGrootKoerkamp/sassy/releases).
 
-### Building a binary with SIMD instructions
+You can also get these via
+``` sh
+cargo binstall sassy
+```
 
-Sassy uses AVX2 and NEON instructions performance reasons.
-While NEON is automatically enabled on aarch64 architectures, AVX2 is not
-enabled by default on x64,
-even though your system is very likely to support them.
-Thus, on x64 you will need to manually instruct `cargo` to use the instruction sets available on your architecture:
-
+### Build from source
 ``` sh
 RUSTFLAGS="-C target-cpu=native" cargo install sassy
 ```
 
-Alternatively, enable the `-F scalar` feature flag to fall back to a scalar implementation with
-reduced performance, but this is not recommended:
+Sassy uses AVX2 or NEON instructions performance reasons, which requires either
+`target-cpu=native` or `target-cpu=x86-64-v3` on x64 machines.
+See [this README](https://github.com/ragnargrootkoerkamp/ensure_simd) for details and [this
+blog](https://curiouscoding.nl/posts/distributing-rust-simd-binaries/) for background.
+The same restrictions apply when using the sassy library in a larger project.
 
-``` sh
-cargo install sassy -F scalar
-```
-
-When using the sassy library in a larger project, the same restrictions apply:
-you will either need to build/compile the final binary with `target-cpu=native`,
-or pass the `scalar` feature to the sassy dependency.
-
-See [`.cargo/config-portable.toml`](./.cargo/config-portable.toml) for a
-more conservative configuration that can be used to build distributed binaries.
-In particular, this targets `x86-64-v3` rather than `native`, to prevent
-including AVX512 instructions in the binary.
-
-See [this blog post](https://curiouscoding.nl/posts/distributing-rust-simd-binaries/) for some more background.
-
-### Rust version
-
-Sassy uses some recently stabilized Rust features, and so you will need at least
-1.91, typically via `rustup update`.
-If your system-wide Rust installation is older, consider switching to `rustup`:
-https://rustup.rs/.
+Sassy requires Rust 1.91 or newer. Get it via `rustup update`. (Switch to
+[rustup](https://rustup.rs) when your system installation is too old).
 
 ## Usage
 
