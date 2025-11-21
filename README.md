@@ -1,5 +1,6 @@
 [![crates.io](https://img.shields.io/crates/v/sassy.svg)](https://crates.io/crates/sassy)
-[![docs.rs](https://img.shields.io/docsrs/sassy.svg)](https://docs.rs/sassy)
+[![docs.rs](https://img.shields.io/docsrs/sassy.svg?label=docs.rs)](https://docs.rs/sassy)
+[![Conda version](https://img.shields.io/conda/v/bioconda/sassy?label=bioconda)](https://anaconda.org/bioconda/sassy)
 [![PyPI](https://img.shields.io/pypi/v/sassy-rs.svg)](https://pypi.org/project/sassy-rs/)
 
 # Sassy: SIMD-accelerated Approximate String Matching
@@ -39,6 +40,11 @@ See the latest [release](https://github.com/RagnarGrootKoerkamp/sassy/releases).
 You can also get these via
 ``` sh
 cargo binstall sassy
+```
+or via conda/mamba/pixi:
+
+``` sh
+conda install -c bioconda sassy
 ```
 
 ### Build from source

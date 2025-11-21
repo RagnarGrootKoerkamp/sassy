@@ -1,7 +1,8 @@
 # Changelog
 
 ## 0.1.8
-- ci: add aarch64-linux target for github releases, drop windows target
+- Sassy is now available on bioconda!
+- ci: add aarch64-linux target for github releases, drop windows targets
 - ci: by default `target-cpu=native`, but `config-portable.yaml` for CI builds
 - doc: readme updates for `target-cpu`
 - update to `ensure_simd` for compile-time AVX2 check and add a run-time check
