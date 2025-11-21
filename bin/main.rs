@@ -23,6 +23,8 @@ enum Args {
 }
 
 fn main() {
+    ensure_simd::ensure_simd();
+
     let args = Args::parse();
     env_logger::init();
 
