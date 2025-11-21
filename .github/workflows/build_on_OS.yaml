@@ -10,8 +10,6 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-    env:
-      RUSTFLAGS: "-C target-cpu=native"
 
     steps:
       - uses: actions/checkout@v4
@@ -28,6 +26,9 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Initialize portable config
+        run: mv .cargo/config-portable.toml .cargo/config.toml
 
       - name: Build
         run: cargo build --release --verbose
