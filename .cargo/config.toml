@@ -1,17 +1,6 @@
-[target.'cfg(target_arch="x86_64")']
-# v2 doesn't have AVX2
-# v4 has AVX512 which we don't explicitly use and don't want to include by
-# default.
-rustflags = ["-C", "target-cpu=x86-64-v3"]
-
-[target.'cfg(target_arch="aarch64")']
-# aarch64 includes NEON by default.
-rustflags = ["-C", "target-cpu=generic"]
-
 [build]
-# Otherwise, fall back to native CPU.
+# By default, we want maximum performance rather than portability.
 rustflags = ["-C", "target-cpu=native"]
-
 
 # Prevent pyo3 rebuilding all the time.
 [env]
