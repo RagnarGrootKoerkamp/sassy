@@ -205,7 +205,7 @@ pub fn test_cpu_features() {
     {
         use std::arch::is_aarch64_feature_detected;
 
-        eprintln!("Target architecture: aarch64 currently unsupported");
+        eprintln!("Target architecture: aarch64");
 
         let neon = if is_aarch64_feature_detected!("neon") {
             "+"
