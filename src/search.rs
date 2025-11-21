@@ -99,7 +99,7 @@ pub trait RcSearchAble {
 }
 
 /// Any text can be reversed on the fly.
-impl<T> RcSearchAble for T
+impl<T: ?Sized> RcSearchAble for T
 where
     T: AsRef<[u8]>,
 {
@@ -275,7 +275,12 @@ impl<P: Profile> Searcher<P> {
     /// This avoids reporting matches that completely overlap apart from a few characters at the ends.
     ///
     /// Searches the forward text, and optionally the reverse complement of the text.
-    pub fn search<I: RcSearchAble>(&mut self, pattern: &[u8], input: &I, k: usize) -> Vec<Match> {
+    pub fn search<I: RcSearchAble + ?Sized>(
+        &mut self,
+        pattern: &[u8],
+        input: &I,
+        k: usize,
+    ) -> Vec<Match> {
         self.search_handle_rc(
             pattern,
             input,
@@ -290,7 +295,7 @@ impl<P: Profile> Searcher<P> {
     /// Searches the forward text, and optionally the reverse complement of the text.
     /// Only use this instead of [`search`] if you know what you are doing,
     /// which typically means there is some postprocessing step to filter overlapping matches.
-    pub fn search_all<I: RcSearchAble>(
+    pub fn search_all<I: RcSearchAble + ?Sized>(
         &mut self,
         pattern: &[u8],
         input: &I,
@@ -313,7 +318,7 @@ impl<P: Profile> Searcher<P> {
     /// `filter_fn` is passed the pattern, the (rc) text up to the end position, and the strand.
     /// Note that due to the implementation, for rc searches,
     /// both the pattern and text are complemented from what you would expect.
-    pub fn search_with_fn<I: RcSearchAble>(
+    pub fn search_with_fn<I: RcSearchAble + ?Sized>(
         &mut self,
         pattern: &[u8],
         input: &I,
@@ -324,7 +329,7 @@ impl<P: Profile> Searcher<P> {
         self.search_handle_rc(pattern, input, k, all_minima, Some(filter_fn))
     }
 
-    fn search_handle_rc<I: RcSearchAble>(
+    fn search_handle_rc<I: RcSearchAble + ?Sized>(
         &mut self,
         pattern: &[u8],
         input: &I,
@@ -2159,6 +2164,25 @@ mod tests {
             matches.len(),
             matches_rev.len()
         );
+    }
+
+    #[test]
+    fn search_slice() {
+        let text = b"ACCAGATTGC";
+        let q = b"AATACAC";
+        let mut searcher = Searcher::<Iupac>::new_rc_with_overhang(0.5);
+        let _matches = searcher.search(q, text, 1);
+        let _matches = searcher.search(q, &text, 1);
+        let _matches = searcher.search(q, &&text, 1);
+        let _matches = searcher.search(&*q, text, 1);
+        let q = q.as_slice();
+        let _matches = searcher.search(q, text, 1);
+        let _matches = searcher.search(&q, text, 1);
+        let _matches = searcher.search(&&q, text, 1);
+        let text = text.as_slice();
+        let _matches = searcher.search(q, text, 1);
+        let _matches = searcher.search(q, &text, 1);
+        let _matches = searcher.search(q, &&text, 1);
     }
 }
 
