@@ -42,6 +42,7 @@ pyo3 = { version = "0.25", features = ["extension-module", "abi3-py38", "generat
 colored = "3.0.0"
 either = "1.15.0"
 wide = "0.8.1"
+ensure_simd = "0.1.0"
 
 [dev-dependencies]
 tempfile = "3.20.0"
@@ -53,7 +54,7 @@ c = []
 
 # Build the library with scalar types, with reduced performance.
 # Without this, it requires either AVX2 or NEON to be available at compile time.
-scalar = []
+scalar = ["ensure_simd/scalar"]
 
 default = []
 

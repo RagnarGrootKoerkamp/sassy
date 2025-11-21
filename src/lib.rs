@@ -105,20 +105,6 @@
 //! assert_eq!(matches[1].strand, Strand::Fwd);
 //! assert_eq!(matches[1].cigar.to_string(), "3=");
 //! ```
-#[cfg(not(any(
-    doc,
-    debug_assertions,
-    target_feature = "avx2",
-    target_feature = "neon",
-    feature = "scalar"
-)))]
-compile_error!("
-Sassy uses AVX2 or NEON SIMD instructions for performance.
-To get the expected performance, compile/install using eg:
-RUSTFLAGS=\"-C target-cpu=native\" cargo install sassy.
-Alternatively, silence this error by activating the `scalar` feature (eg `cargo install -F scalar ...`).
-See the sassy README for details."
-);
 
 // INTERNAL MODS
 mod bitpacking;
