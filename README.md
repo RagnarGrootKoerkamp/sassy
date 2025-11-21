@@ -38,16 +38,17 @@ Prebuilt binaries can be found in the latest [release](https://github.com/Ragnar
 ### Building a binary with SIMD instructions
 
 Sassy uses AVX2 and NEON instructions performance reasons.
-Unfortunately, _by default_ `cargo install` will not use these instructions for
-portability reasons, even though your system is very likely to support them.
-Thus, you will need to manually instruct `cargo` to use the instruction sets available on your architecture:
+While NEON is automatically enabled on aarch64 architectures, AVX2 is not
+enabled by default on x64,
+even though your system is very likely to support them.
+Thus, on x64 you will need to manually instruct `cargo` to use the instruction sets available on your architecture:
 
 ``` sh
 RUSTFLAGS="-C target-cpu=native" cargo install sassy
 ```
 
 Alternatively, enable the `-F scalar` feature flag to fall back to a scalar implementation with
-reduced performance:
+reduced performance, but this is not recommended:
 
 ``` sh
 cargo install sassy -F scalar
@@ -56,6 +57,13 @@ cargo install sassy -F scalar
 When using the sassy library in a larger project, the same restrictions apply:
 you will either need to build/compile the final binary with `target-cpu=native`,
 or pass the `scalar` feature to the sassy dependency.
+
+See [`.cargo/config-portable.toml`](./.cargo/config-portable.toml) for a
+more conservative configuration that can be used to build distributed binaries.
+In particular, this targets `x86-64-v3` rather than `native`, to prevent
+including AVX512 instructions in the binary.
+
+See [this blog post](https://curiouscoding.nl/posts/distributing-rust-simd-binaries/) for some more background.
 
 ### Rust version
 
