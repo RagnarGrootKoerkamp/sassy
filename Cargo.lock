@@ -555,6 +555,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34080505efa8e45a4b816c349525ebe327ceaa8559756f0356cba97ef3bf7432"
 
 [[package]]
+name = "mem_dbg"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "256baafaaed96f2358e588047add018b8e5f1fc58e1cb58deb026528dd42488e"
+dependencies = [
+ "bitflags 2.10.0",
+ "mem_dbg-derive",
+]
+
+[[package]]
+name = "mem_dbg-derive"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f266c6ba1558dee16c56363c3dc6093a97a2451ddf29f928d5da042ee330537b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.108",
+]
+
+[[package]]
 name = "memchr"
 version = "2.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -641,6 +662,19 @@ dependencies = [
  "derive_more",
  "itertools",
  "serde",
+]
+
+[[package]]
+name = "packed-seq"
+version = "4.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "022341af41fb83294e35dd52ad308ee76f779740d2abeeb96d2864cb273dd600"
+dependencies = [
+ "cfg-if",
+ "ensure_simd",
+ "mem_dbg",
+ "rand",
+ "wide 0.7.33",
 ]
 
 [[package]]
@@ -873,6 +907,15 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "safe_arch"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96b02de82ddbe1b636e6170c21be622223aea188ef2e139be0a5b219ec215323"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
+name = "safe_arch"
 version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3fb5032219cc30e5bb98749b19a18ceb2cf15e24ba8d517a7e64dff4f1f1eca5"
@@ -882,7 +925,7 @@ dependencies = [
 
 [[package]]
 name = "sassy"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "clap",
  "colored",
@@ -893,10 +936,11 @@ dependencies = [
  "needletail",
  "num_cpus",
  "pa-types",
+ "packed-seq",
  "pyo3",
  "rand",
  "tempfile",
- "wide",
+ "wide 0.8.1",
 ]
 
 [[package]]
@@ -1077,12 +1121,22 @@ dependencies = [
 
 [[package]]
 name = "wide"
+version = "0.7.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ce5da8ecb62bcd8ec8b7ea19f69a51275e91299be594ea5cc6ef7819e16cd03"
+dependencies = [
+ "bytemuck",
+ "safe_arch 0.7.4",
+]
+
+[[package]]
+name = "wide"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "01e9aba2ca45c04ecbf5c516b21b4a16ddb2cc43f69c10adb08956c2fe1ec081"
 dependencies = [
  "bytemuck",
- "safe_arch",
+ "safe_arch 0.9.2",
 ]
 
 [[package]]

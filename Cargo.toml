@@ -1,6 +1,6 @@
 [package]
 name = "sassy"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 authors = ["Rick Beeloo", "Ragnar Groot Koerkamp"]
 description = "Approximate string matching using SIMD"
@@ -46,6 +46,7 @@ ensure_simd = "0.1.0"
 
 [dev-dependencies]
 tempfile = "3.20.0"
+packed-seq = "4.3.0"
 
 [features]
 avx512 = []
