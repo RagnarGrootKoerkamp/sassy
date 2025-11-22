@@ -1,0 +1,81 @@
+name: Release
+
+permissions:
+  contents: write
+
+on:
+  pull_request:
+    # Run on PRs to master.
+    branches: ["master"]
+  push:
+    # Run on push to master.
+    branches: ["master"]
+    # Run on v* tags pushed.
+    tags:
+      - "v*"
+
+  # Allow manual triggering.
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-14
+            target: aarch64-apple-darwin
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Build & test in release mode
+      - name: Build & test (push)
+        if: "!startsWith(github.ref_name, 'v')"
+        run: |
+          cargo build -r
+          cargo test -r
+
+      # Build & test in dist mode, and upload binary.
+      - name: Build & test (release)
+        if: startsWith(github.ref_name, 'v')
+        run: |
+          mv .cargo/config-portable.toml .cargo/config.toml
+          cargo build --profile dist
+          cargo test --profile dist
+
+          mkdir artifacts
+          mv target/dist/sassy artifacts/sassy-${{ matrix.target }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        if: startsWith(github.ref_name, 'v')
+        with:
+          name: build-${{ matrix.os }}
+          path: artifacts
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref_name, 'v')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release_artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release_artifacts/**/*
+          draft: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -21,9 +21,12 @@ opt-level = 3
 debug = true
 
 [profile.dist]
-inherits = "release"
+inherits = 'release'
+incremental = false
 lto = true
-debug = true
+debug = false
+codegen-units = 1
+
 
 [[bin]]
 name = 'sassy'

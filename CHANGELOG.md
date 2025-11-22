@@ -1,5 +1,9 @@
 # Changelog
 
+## git
+- Implement `RcSearchable` for `?Sized` types such as `[u8]`, so that `seach(_, text, _)` now works for `text: &[u8]`, instead of only `text: &&[u8]`.
+- Migrate back from `cargo-dist` to a small manual `release.yaml`.
+
 ## 0.1.8
 - Sassy is now available on bioconda!
 - ci: add aarch64-linux target for github releases, drop windows targets
