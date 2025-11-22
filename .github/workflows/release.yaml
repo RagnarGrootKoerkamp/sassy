@@ -37,6 +37,9 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
       # Build & test in release mode
       - name: Build & test (push)
         if: "!startsWith(github.ref_name, 'v')"
