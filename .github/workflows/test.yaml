@@ -1,13 +1,9 @@
 name: Test
-
 on:
-  # Run on push and PRs to master.
   pull_request:
     branches: ["master"]
   push:
     branches: ["master"]
-
-  # Allow manual triggering.
   workflow_dispatch:
 
 jobs:
@@ -15,11 +11,9 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-
     runs-on: ${{ matrix.os }}
-
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build -r && cargo test -r
+      - run: cargo test -r
