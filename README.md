@@ -73,13 +73,15 @@ A larger example can be found in [`src/lib.rs`](src/lib.rs).
 
 ```rust
 // cargo add sassy
-use sassy::{Searcher, Match, profiles::{Dna}, Strand};
+use sassy::{Searcher, Match, profiles::Iupac, Strand};
 
 let pattern = b"ATCG";
 let text = b"AAAATTGAAA";
 let k = 1;
 
-let mut searcher = Searcher::<Dna>::new_fwd();
+// The Iupac profile supports N and YR... characters.
+// If you are sure you only have ACGT input, then `profiles::Dna` is slightly faster.
+let mut searcher = Searcher::<Iupac>::new_fwd();
 let matches = searcher.search(pattern, &text, k);
 
 assert_eq!(matches.len(), 1);

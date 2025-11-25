@@ -4,9 +4,9 @@ use wide::{CmpEq, u8x32};
 
 use super::u8x32_shr;
 
-/// DNA alphabet: ACGT.
+/// DNA alphabet: ACGT. Do you not want `profiles::Iupac` instead, with support for `N`?
 ///
-/// Input sequences are assuming to only consist of these bases.
+/// Input sequences are assumed to only consist of these bases.
 /// This can be verified using [`Dna::valid_seq`].
 #[derive(Clone, Debug)]
 pub struct Dna {
