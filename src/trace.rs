@@ -241,6 +241,24 @@ pub fn get_trace<P: Profile>(
             j -= 1;
             continue;
         }
+
+        if !P::valid_seq(&[query[j - 1]]) {
+            panic!(
+                "Trace failed, because the query contains non-{:?} character {} at position {}. (Use `profiles::Iupac` instead of `profiles::Dna`.)",
+                std::any::type_name::<P>(),
+                query[j - 1] as char,
+                j - 1
+            );
+        }
+        if !P::valid_seq(&[text[i - 1]]) {
+            panic!(
+                "Trace failed, because the text contains non-{:?} character {} at position {}. (Use `profiles::Iupac` instead of `profiles::Dna`.)",
+                std::any::type_name::<P>(),
+                text[i - 1] as char,
+                i - 1
+            );
+        }
+
         panic!(
             "Trace failed! No ancestor found of {j} {i} at distance {}",
             g + 1
