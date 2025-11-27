@@ -2186,7 +2186,7 @@ mod tests {
     }
 
     #[test]
-    fn doulbe_match_search_all() {
+    fn double_match_search_all() {
         let q = b"CAGTC".to_vec();
         let t = b"CGTGATAAAAAAGCAACGTCAGATAAATCATAGGCTGTAACCAAAACAAAACGGGAGTG".to_vec();
         let k = 3;
