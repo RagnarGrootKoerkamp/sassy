@@ -2,7 +2,7 @@
 [![Conda version](https://img.shields.io/conda/v/bioconda/sassy?label=bioconda)](https://anaconda.org/bioconda/sassy)
 [![PyPI](https://img.shields.io/pypi/v/sassy-rs.svg)](https://pypi.org/project/sassy-rs/)
 [![docs.rs](https://img.shields.io/docsrs/sassy.svg?label=docs.rs)](https://docs.rs/sassy)
-[![biorXiv preprint](https://img.shields.io/badge/biorXiv-10.1101/2025.07.22.666207-green)](https://doi.org/10.1101/2025.06.09.658732)
+[![biorXiv preprint](https://img.shields.io/badge/biorXiv-10.1101/2025.07.22.666207-green)](https://doi.org/10.1101/2025.07.22.666207)
 
 # Sassy: SIMD-accelerated Approximate String Matching
 
