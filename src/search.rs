@@ -2184,6 +2184,19 @@ mod tests {
         let _matches = searcher.search(q, &text, 1);
         let _matches = searcher.search(q, &&text, 1);
     }
+
+    #[test]
+    fn doulbe_match_search_all() {
+        let q = b"CAGTC".to_vec();
+        let t = b"CGTGATAAAAAAGCAACGTCAGATAAATCATAGGCTGTAACCAAAACAAAACGGGAGTG".to_vec();
+        let k = 3;
+        let alpha = 0.5;
+        let mut sassy_searcher = Searcher::<Iupac>::new_fwd_with_overhang(alpha);
+        let matches = sassy_searcher.search_all(&q, &t, k as usize);
+        for m in matches {
+            println!("m: {:?}", m.without_cigar());
+        }
+    }
 }
 
 /*
