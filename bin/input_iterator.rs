@@ -38,8 +38,6 @@ struct RecordState {
     cur_file_index: usize,
     /// The next batch id.
     next_batch_id: usize,
-    /// Current text record, that can be send to multiple threads.
-    current_record: Option<TextRecord>,
 }
 
 /// Thread-safe iterator giving *batches* of (pattern, text) pairs.
@@ -77,7 +75,6 @@ impl<'a> InputIterator<'a> {
             reader,
             cur_file_index: 0,
             next_batch_id: 0,
-            current_record: None,
         };
         Self {
             patterns,
@@ -101,20 +98,20 @@ impl<'a> InputIterator<'a> {
         // to push another text record, if possible. This way texts
         // are only 'read' from the Fasta file once.
 
-        loop {
+        'outer: loop {
             // Make sure we have a current record, just so we can unwrap
-            loop {
+            let current_record = loop {
                 match state.reader.next() {
                     Some(Ok(rec)) => {
                         let id = String::from_utf8(rec.id().to_vec()).unwrap().to_string();
                         let seq = rec.seq().into_owned();
-                        let static_text = CachedRev::new(seq, self.rev);
-                        state.current_record = Some(TextRecord {
+                        // RC is computed later to avoid blocking the reader.
+                        let static_text = CachedRev::new(seq, false);
+                        break TextRecord {
                             id,
                             seq: static_text,
                             quality: rec.qual().unwrap_or(&[]).to_vec(),
-                        });
-                        break;
+                        };
                     }
                     Some(Err(e)) => panic!("Error reading FASTA record: {e}"),
                     None => {
@@ -129,7 +126,7 @@ impl<'a> InputIterator<'a> {
 
                         // Return last batch for the current file.
                         if !batch.2.is_empty() {
-                            return Some((batch_id, batch));
+                            break 'outer;
                         }
                         if end_of_files {
                             return None;
@@ -139,26 +136,30 @@ impl<'a> InputIterator<'a> {
                         continue;
                     }
                 }
-            }
-
-            let current_record = &mut state.current_record;
+            };
 
             // We get the ref to the current record we have available
-            let record_len = current_record.as_ref().unwrap().seq.text.len();
-
-            // If no space left for next record, we return current batch
-            if !batch.2.is_empty()
-                && bytes_in_batch + record_len * self.patterns.len() > self.batch_byte_limit
-            {
-                break; // return current batch, keep state for next call
-            }
+            let record_len = current_record.seq.text.len();
 
             // Add next pattern
-            batch.2.push(current_record.take().unwrap());
+            batch.2.push(current_record);
             bytes_in_batch += record_len * self.patterns.len();
+
+            // If no space left for next record, we return current batch
+            if bytes_in_batch >= self.batch_byte_limit {
+                break;
+            }
         }
 
-        Some((batch_id, batch))
+        drop(state);
+
+        if self.rev {
+            for text_record in &mut batch.2 {
+                text_record.seq.initialize_rev();
+            }
+        }
+
+        return Some((batch_id, batch));
     }
 }
 

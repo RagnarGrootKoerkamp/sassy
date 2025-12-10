@@ -123,6 +123,9 @@ impl<T: AsRef<[u8]>> CachedRev<T> {
         let rev = build_rev.then(|| text.as_ref().iter().rev().copied().collect());
         CachedRev { text, rev }
     }
+    pub fn initialize_rev(&mut self) {
+        self.rev = Some(self.text.as_ref().iter().rev().copied().collect());
+    }
 }
 
 impl<T: AsRef<[u8]>> RcSearchAble for CachedRev<T> {
