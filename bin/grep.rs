@@ -563,7 +563,7 @@ impl Args {
         let suffix_skip =
             (suffix.len() + match_len - matching_pattern.len()) as isize - context as isize;
         if suffix_skip > 0 {
-            suffix = &suffix[..suffix.len() - suffix_skip as usize];
+            suffix = &suffix[..suffix.len().saturating_sub(suffix_skip as usize)];
         };
         let suffix_padding = (-suffix_skip.min(0)) as usize;
         let suffix_skip = format_skip(suffix_skip.max(0) as usize, false);
