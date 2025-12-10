@@ -140,12 +140,17 @@ impl<'a> InputIterator<'a> {
 
             // We get the ref to the current record we have available
             let record_len = current_record.seq.text.len();
+            bytes_in_batch += record_len * self.patterns.len();
+
+            log::trace!(
+                "Push record of len {record_len:>5} total len {bytes_in_batch:>8} limit {}",
+                self.batch_byte_limit
+            );
 
             // Add next pattern
             batch.2.push(current_record);
-            bytes_in_batch += record_len * self.patterns.len();
 
-            // If no space left for next record, we return current batch
+            // When exceeding batch limit, return current batch.
             if bytes_in_batch >= self.batch_byte_limit {
                 break;
             }
@@ -158,6 +163,12 @@ impl<'a> InputIterator<'a> {
                 text_record.seq.initialize_rev();
             }
         }
+
+        log::debug!(
+            "Batch {batch_id:>3}: {} seqs of {} bytes total",
+            batch.2.len(),
+            bytes_in_batch
+        );
 
         return Some((batch_id, batch));
     }

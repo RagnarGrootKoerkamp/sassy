@@ -220,8 +220,7 @@ impl Args {
             && !args.base.no_rc;
 
         let num_threads = args.base.threads.unwrap_or_else(num_cpus::get);
-        let task_iterator =
-            &InputIterator::new(&args.base.paths, &patterns, Some(100 * 1024 * 1024), rc);
+        let task_iterator = &InputIterator::new(&args.base.paths, &patterns, Some(1024 * 1024), rc);
 
         let output = Mutex::new((
             0,
