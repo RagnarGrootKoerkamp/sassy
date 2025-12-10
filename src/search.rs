@@ -69,8 +69,7 @@ impl Match {
     }
 
     /// Drop the cigar from the match. Convenient for debug printing.
-    #[cfg(test)]
-    pub(crate) fn without_cigar(&self) -> Match {
+    pub fn without_cigar(&self) -> Match {
         Match {
             text_start: self.text_start,
             text_end: self.text_end,
