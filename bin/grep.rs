@@ -491,12 +491,17 @@ impl Args {
             if let Some(match_writer) = match_writer.as_mut() {
                 self.print_match_tsv(pattern, text, m, match_writer);
             }
-            self.pretty_print_match_line(pattern, text, m);
+            Self::pretty_print_match_line(self.context, pattern, text, m);
         }
     }
 
     /// Pretty print the context of a match.
-    fn pretty_print_match_line(&self, pattern: &PatternRecord, text: &TextRecord, m: &Match) {
+    fn pretty_print_match_line(
+        context: usize,
+        pattern: &PatternRecord,
+        text: &TextRecord,
+        m: &Match,
+    ) {
         let rc_pattern;
         let mut cigar = m.cigar.clone();
         let matching_pattern = match m.strand {
@@ -537,8 +542,8 @@ impl Args {
         let (mut prefix, matching_text) = matching_text.split_at(m.text_start);
 
         let mut prefix_skip = 0;
-        if prefix.len() > self.context {
-            prefix_skip = prefix.len() - self.context;
+        if prefix.len() > context {
+            prefix_skip = prefix.len() - context;
             prefix = &prefix[prefix_skip..];
         };
         fn format_skip(skip: usize, prefix: bool) -> String {
@@ -556,7 +561,7 @@ impl Args {
         let (match_len, match_string) = pretty_print_match(matching_pattern, matching_text, &cigar);
 
         let suffix_skip =
-            (suffix.len() + match_len - matching_pattern.len()) as isize - self.context as isize;
+            (suffix.len() + match_len - matching_pattern.len()) as isize - context as isize;
         if suffix_skip > 0 {
             suffix = &suffix[..suffix.len() - suffix_skip as usize];
         };
@@ -568,7 +573,6 @@ impl Args {
             Strand::Rc => "-",
         };
 
-        let context = self.context;
         eprintln!(
             "{} ({}) {} | {}{:>context$}{match_string}{}{:>suffix_padding$}{} @ {}",
             pattern.id,
