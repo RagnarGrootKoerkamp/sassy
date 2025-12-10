@@ -18,7 +18,7 @@ pub struct PatternRecord {
 
 /// A text to be searched, with ID from fasta file.
 /// TODO: Reduce the number of allocations here.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TextRecord {
     pub id: ID,
     pub seq: CachedRev<Vec<u8>>,

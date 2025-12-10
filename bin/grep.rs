@@ -4,13 +4,14 @@ use std::{
     fs::File,
     io::{BufRead, Write},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Mutex, atomic::AtomicUsize},
 };
 
 use colored::Colorize;
 use either::Either;
 use needletail::parse_fastx_file;
 use pa_types::{Cigar, CigarElem, CigarOp};
+use paraseq::{Record, fastx::RefRecord, prelude::ParallelProcessor};
 use sassy::{
     Match, Searcher, Strand,
     profiles::{Dna, Iupac, Profile},
@@ -196,6 +197,69 @@ impl FilterArgs {
     }
 }
 
+#[derive(Clone)]
+struct Processor<'p> {
+    // config
+    args: &'p Args,
+
+    // shared global state
+    output: &'p Mutex<(
+        usize,
+        VecDeque<Option<Vec<(&'p Path, TextRecord, Vec<(&'p PatternRecord, Match)>)>>>,
+    )>,
+    global_histogram: &'p Mutex<Vec<usize>>,
+    filter_writer: Option<&'p Mutex<Box<dyn std::io::Write + Send>>>,
+    match_writer: Option<&'p Mutex<Box<dyn std::io::Write + Send>>>,
+    batch_id: &'p AtomicUsize,
+
+    // local state
+    searcher: Either<Searcher<Dna>, Searcher<Iupac>>,
+    results: Vec<(&'p Path, TextRecord, Vec<(&'p PatternRecord, Match)>)>,
+    local_histogram: Vec<usize>,
+}
+
+impl<'p> ParallelProcessor<RefRecord<'_>> for Processor<'p> {
+    fn process_record(&mut self, record: RefRecord) -> paraseq::Result<()> {}
+    fn on_batch_complete(&mut self) -> paraseq::Result<()> {
+        let (next_batch_id, output_buf) = &mut *self.output.lock().unwrap();
+        let mut filter_writer = self.filter_writer.map(|w| w.lock().unwrap());
+        let mut match_writer = self.match_writer.map(|w| w.lock().unwrap());
+
+        let batch_id = self
+            .batch_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        // Push to buffer.
+        let idx = batch_id - *next_batch_id;
+        if output_buf.len() <= idx {
+            output_buf.resize_with(idx + 1, || None);
+        }
+        assert!(output_buf[idx].is_none());
+        output_buf[idx] = Some(std::mem::take(&mut self.results));
+
+        // Print pending results once ready.
+        while let Some(front) = output_buf.front()
+            && front.is_some()
+        {
+            *next_batch_id += 1;
+            let front_results = output_buf.pop_front().unwrap().unwrap();
+            for (path, text, matches) in front_results {
+                self.args
+                    .output(path, text, matches, &mut filter_writer, &mut match_writer);
+            }
+        }
+        Ok(())
+    }
+    fn on_thread_complete(&mut self) -> paraseq::Result<()> {
+        // Merge local histogram into global histogram.
+        let mut global_hist = self.global_histogram.lock().unwrap();
+        for dist in 0..=self.args.base.k {
+            global_hist[dist] += self.local_histogram[dist];
+        }
+        Ok(())
+    }
+}
+
 impl Args {
     fn run(mut self) {
         if self.base.invert && self.filter.is_none() {
@@ -321,42 +385,6 @@ impl Args {
                             }
                             results.push((path, text, batch_matches));
                         }
-
-                        let (next_batch_id, output_buf) = &mut *output.lock().unwrap();
-                        let mut filter_writer = filter_writer.map(|w| w.lock().unwrap());
-                        let mut match_writer = match_writer.map(|w| w.lock().unwrap());
-
-                        // Push to buffer.
-                        let idx = batch_id - *next_batch_id;
-                        if output_buf.len() <= idx {
-                            output_buf.resize_with(idx + 1, || None);
-                        }
-                        assert!(output_buf[idx].is_none());
-                        output_buf[idx] = Some(results);
-                        results = vec![];
-
-                        // Print pending results once ready.
-                        while let Some(front) = output_buf.front()
-                            && front.is_some()
-                        {
-                            *next_batch_id += 1;
-                            let front_results = output_buf.pop_front().unwrap().unwrap();
-                            for (path, text, matches) in front_results {
-                                args.output(
-                                    path,
-                                    text,
-                                    matches,
-                                    &mut filter_writer,
-                                    &mut match_writer,
-                                );
-                            }
-                        }
-                    }
-
-                    // Merge local histogram into global histogram.
-                    let mut global_hist = global_histogram.lock().unwrap();
-                    for dist in 0..=k {
-                        global_hist[dist] += local_histogram[dist];
                     }
                 });
             }
