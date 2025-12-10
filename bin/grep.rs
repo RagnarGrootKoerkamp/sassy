@@ -524,7 +524,7 @@ impl Args {
                 cigar.reverse();
                 let rc_start = pattern.seq.len() - m.pattern_end;
                 let rc_end = pattern.seq.len() - m.pattern_start;
-                if m.pattern_start > 0 {
+                if rc_start > 0 {
                     cigar
                         .ops
                         .insert(0, CigarElem::new(CigarOp::Del, rc_start as i32));
@@ -535,7 +535,7 @@ impl Args {
                         (pattern.seq.len() - rc_end) as i32,
                     ));
                 }
-                &rc_pattern[rc_start..rc_end]
+                &rc_pattern
             }
         };
         let (matching_text, mut suffix) = text.seq.text.split_at(m.text_end);
@@ -652,4 +652,44 @@ fn pretty_print_match(pattern: &[u8], text: &[u8], cigar: &Cigar) -> (usize, Str
         }
     }
     (len, out)
+}
+
+#[cfg(test)]
+mod test {
+    use sassy::{
+        CachedRev,
+        profiles::{Dna, Profile},
+    };
+
+    use crate::{
+        grep::Args,
+        input_iterator::{PatternRecord, TextRecord},
+    };
+
+    #[test]
+    fn amplicon_crash() {
+        let pattern = b"TGTACTTCGTTCAGTTACGTATTGCTAAGGTTAACTACTTACGAAGCTGAGGGACTGCCAGCACCTACCATCTTGGACTGAGATCTTTCATTTTACCGTCACCACCACGAATTCGTCTGGTAGCTCTTCGGTAGTAGCCAATTTGGTCATCTGGACTGCTATTGGTGTTAATTGGAACGCCTTGTCCTCGAGGGAATTTAAGGTCTTCCTTGCCATGTTGAGTGAGAGCGGTGAACCAAGACGCAGTATTATTGGGTAAACCTTGGGGCCGACGTTGTTTTGATCGCGCCCACTGCGTTCTCCATTCTGGTTACTGCCAGTTGAATCTGAGGTCCACCAAACGTAATGCGGGGTGCTTTCGCTGATTTTGGGGTCCATTATCGAACATTTTAGTTTGTTCGTTTAGATGAAATCTAAAACAACACGAACGTCATGATACTCTAAAAAGTCTTCATAGAACGAACAACGCACAGAGTGCTAGCAGTCCCTCAGCTTCGTAAGTAT";
+        let text = b"CAGTTACGTATTGCTAAGGTTAACTACTTACGAAGCTGAGGGACTGCCAGCACCTACCATCTTGGACTGAGATCTTTCATTTTACCGTCACCACCACGAATTCGTCTGGTAGCTCTTCGGTAGTAGCCACCGGTCATCTGGACTGCTATTGGTGTTAATTGGAACGCCTTGTCCTCGAGGGAATTTAAGGTCTTCCTTGCCATGTTGAGTGAGAGCGGTGAACCAAGACGCAGTATTATTGGGTAAACCTTGGGGCCGACGTTGTTTTGATCGCGCCCCCACTGCGTTCTCCATTCTGGTTACTGCCAGTTGAATCTGAGGGTCCACCAAACGTAATGCGGGGTGCATTTCGCTGATTTTGGGGTCCATTATCAGACATTTTAGTTTACCTGTTTAGATGAAATCTAAAACAACACGAACGTCATGATACTCTAAAAAGTCTTCATAGAACGAACAACGCACAGGTGCTGGCAGTCCCCAGCTTCGTAAGTAGTTAACCTTAGCAATACGTAACTGAACGAAGCATAA";
+        let text = &Dna::reverse_complement(text);
+
+        let mut searcher = sassy::Searcher::<sassy::profiles::Iupac>::new_rc_with_overhang(0.5);
+        let matches = searcher.search(pattern, text, 40);
+        matches.iter().for_each(|m| {
+            eprintln!("match: {:?}", m.without_cigar());
+            eprintln!("cigar: {}", m.cigar.to_string());
+            Args::pretty_print_match_line(
+                0,
+                &PatternRecord {
+                    id: "".to_string(),
+                    seq: pattern.to_vec(),
+                },
+                &TextRecord {
+                    id: "".to_string(),
+                    seq: CachedRev::new(text.to_vec(), true),
+                    quality: vec![],
+                },
+                &m,
+            );
+        });
+    }
 }

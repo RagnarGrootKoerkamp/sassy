@@ -3,6 +3,7 @@
 <!-- next-header -->
 
 ## git
+- bugfix: `sassy grep` would crash on printing reverse complement matches with overhang.
 
 ## 0.1.10
 - **bugfix**: `sassy grep` had a bug in the batching logic, making it skip a
