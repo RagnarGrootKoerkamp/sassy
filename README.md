@@ -17,6 +17,11 @@ in a human genome or e.g. in a set of reads.
 Sassy generally works well for patterns/queries up to length 1000,
 and supports both ASCII, DNA, and IUPAC.
 
+It has a `grep`-like mode for quick human inspection, as well as `search` to
+report locations of matches, and `filter` to only output (non)-matching records.
+
+![gif of `sassy grep`](fig/sassy-grep.gif)
+
 Highlights:
 - Sassy uses bitpacking and SIMD (both AVX2 and NEON supported).
   Its main novelty is tiling these in the text direction.
