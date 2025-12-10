@@ -1139,21 +1139,6 @@ mod tests {
         assert_eq!(matches[1].text_start, 50);
     }
 
-    fn rc(text: &[u8]) -> Vec<u8> {
-        let mut rc = text.to_vec();
-        rc.reverse();
-        rc.iter_mut().for_each(|c| {
-            *c = match *c {
-                b'A' => b'T',
-                b'C' => b'G',
-                b'G' => b'C',
-                b'T' => b'A',
-                _ => *c,
-            }
-        });
-        rc
-    }
-
     fn complement(text: &[u8]) -> Vec<u8> {
         let mut complement = text.to_vec();
         complement.iter_mut().for_each(|c| {
@@ -1171,7 +1156,7 @@ mod tests {
     #[test]
     fn test_filter_fn_rc() {
         let pattern_fwd = b"ATCGATCA";
-        let pattern_rc = rc(pattern_fwd);
+        let pattern_rc = Dna::reverse_complement(pattern_fwd);
         let mut text = vec![b'G'; 100];
 
         // Insert match once before 10 and once after 10
@@ -1486,7 +1471,7 @@ mod tests {
             let Pos(q_pos, r_pos) = path[i];
             assert_eq!(
                 pattern[q_pos as usize] as char,
-                rc(&text[r_pos as usize..r_pos as usize + 1])[0] as char
+                Dna::reverse_complement(&text[r_pos as usize..r_pos as usize + 1])[0] as char
             );
         }
     }
