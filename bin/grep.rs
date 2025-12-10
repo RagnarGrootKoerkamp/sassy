@@ -362,7 +362,10 @@ impl Args {
         });
 
         let global_hist = global_histogram.into_inner().unwrap();
-        eprint!("\nStatistics: ");
+        eprint!(
+            "\nStatistics: total {}, ",
+            global_hist.iter().sum::<usize>().to_string().bold()
+        );
         for (dist, &count) in global_hist.iter().enumerate() {
             if count > 0 {
                 eprint!(
