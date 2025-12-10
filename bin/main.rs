@@ -26,7 +26,9 @@ fn main() {
     ensure_simd::ensure_simd();
 
     let args = Args::parse();
-    env_logger::init();
+    env_logger::Builder::from_default_env()
+        .format_timestamp_millis()
+        .init();
 
     match args {
         Args::Grep(args) => args.run(),
