@@ -3,6 +3,9 @@
 <!-- next-header -->
 
 ## git
+- **bugfix**: `sassy grep` had a bug in the batching logic, making it skip a
+  record after every 1MB of input. So for human genomes it would only search
+  every other record.
 - misc: set up `cargo release`
 
 ## 0.1.9

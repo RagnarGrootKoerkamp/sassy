@@ -4,6 +4,9 @@
 [![docs.rs](https://img.shields.io/docsrs/sassy.svg?label=docs.rs)](https://docs.rs/sassy)
 [![biorXiv preprint](https://img.shields.io/badge/biorXiv-10.1101/2025.07.22.666207-green)](https://doi.org/10.1101/2025.07.22.666207)
 
+**WARNING:** Versions up to `0.1.9` had a shameful bug in the `sassy grep` CLI where after
+every 1MB of input it would skip one record. Please update.
+
 # Sassy: SIMD-accelerated Approximate String Matching
 
 Sassy is a library and tool for searching short strings in texts,
