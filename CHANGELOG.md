@@ -7,6 +7,7 @@
 - misc: debug-printing a `Match` now uses stringified cigar.
 - feat: moved pretty printing from `bin/grep.rs` to publicly available `Match::pretty_print`.
 - Add `Searcher::only_best_match` and `Searcher::without_trace`.
+- Add `Searcher::search_texts`
 
 ## 0.1.10
 - **bugfix**: `sassy grep` had a bug in the batching logic, making it skip a

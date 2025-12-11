@@ -229,6 +229,46 @@ pub struct Searcher<P: Profile> {
     _phantom: std::marker::PhantomData<P>,
 }
 
+#[derive(Clone, Copy)]
+enum MultiText<'t> {
+    One(&'t [u8]),
+    Multi(&'t [&'t [u8]]),
+}
+
+impl<'t> MultiText<'t> {
+    fn one(t: &'t [u8]) -> Self {
+        MultiText::One(t)
+    }
+
+    fn get_lane(&self, lane: usize) -> Option<&'t [u8]> {
+        match self {
+            MultiText::One(t) => Some(t),
+            MultiText::Multi(ts) => ts.as_ref().get(lane).copied(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum MultiRcText<'x, I: RcSearchAble + ?Sized> {
+    One(&'x I),
+    Multi(&'x [&'x I]),
+}
+
+impl<'x, I: RcSearchAble + ?Sized> MultiRcText<'x, I> {
+    fn one(t: &'x I) -> Self {
+        MultiRcText::One(t)
+    }
+}
+
+impl<'x, I: RcSearchAble + ?Sized> MultiRcText<'x, I> {
+    fn get_lane(&self, lane: usize) -> Option<&I> {
+        match self {
+            MultiRcText::One(t) => Some(t),
+            MultiRcText::Multi(ts) => ts.as_ref().get(lane).copied(),
+        }
+    }
+}
+
 impl<P: Profile> Searcher<P> {
     // The number of rows (pattern chars) we *at least*
     // mainly to avoid branching
@@ -326,11 +366,48 @@ impl<P: Profile> Searcher<P> {
     ) -> Vec<Match> {
         self.search_handle_rc(
             pattern,
-            input,
+            MultiRcText::one(input),
             k,
             false,
             None::<fn(&[u8], &[u8], Strand) -> bool>,
         )
+        .into_iter()
+        .map(|(_, m)| m)
+        .collect()
+    }
+
+    /// Search multiple texts in chunks of `LANES` at a time.
+    ///
+    /// Use this instead of `for text in texts { searcher.search(pattern, text, k) }`
+    /// when the texts are short (below 1 to 10 kbp) and have similar length.
+    ///
+    /// Consider sorting the texts by length beforehand.
+    ///
+    /// Returns a vector of (text index, match).
+    pub fn search_texts<I: RcSearchAble + ?Sized>(
+        &mut self,
+        pattern: &[u8],
+        inputs: &[&I],
+        k: usize,
+    ) -> Vec<(usize, Match)> {
+        let mut matches = vec![];
+
+        for (i, chunk) in inputs.chunks(LANES).enumerate() {
+            let mut chunk_matches = self.search_handle_rc(
+                pattern,
+                MultiRcText::Multi(chunk),
+                k,
+                false,
+                None::<fn(&[u8], &[u8], Strand) -> bool>,
+            );
+            matches.extend(
+                chunk_matches
+                    .drain(..)
+                    .map(|(lane, m)| (i * LANES + lane, m)),
+            );
+        }
+
+        matches
     }
 
     /// Returns a match for *all* end positions with score <=k.
@@ -346,11 +423,14 @@ impl<P: Profile> Searcher<P> {
     ) -> Vec<Match> {
         self.search_handle_rc(
             pattern,
-            input,
+            MultiRcText::one(input),
             k,
             true,
             None::<fn(&[u8], &[u8], Strand) -> bool>,
         )
+        .into_iter()
+        .map(|(_lane, m)| m)
+        .collect()
     }
 
     /// Returns matches for *all* end positions where `end_filter_fn` returns true.
@@ -369,72 +449,111 @@ impl<P: Profile> Searcher<P> {
         all_minima: bool,
         filter_fn: impl Fn(&[u8], &[u8], Strand) -> bool,
     ) -> Vec<Match> {
-        self.search_handle_rc(pattern, input, k, all_minima, Some(filter_fn))
+        self.search_handle_rc(
+            pattern,
+            MultiRcText::one(input),
+            k,
+            all_minima,
+            Some(filter_fn),
+        )
+        .into_iter()
+        .map(|(_lane, m)| m)
+        .collect()
     }
 
     fn search_handle_rc<I: RcSearchAble + ?Sized>(
         &mut self,
         pattern: &[u8],
-        input: &I,
+        input: MultiRcText<I>,
         k: usize,
         all_minima: bool,
         filter_fn: Option<impl Fn(&[u8], &[u8], Strand) -> bool>,
-    ) -> Vec<Match> {
-        let mut matches = self.search_one_strand(
-            pattern,
-            input.text().as_ref(),
-            k,
-            all_minima,
-            &filter_fn,
-            Strand::Fwd,
-        );
+    ) -> Vec<(usize, Match)> {
+        // FIXME: This stuff is so ugly :/
+        let fwd_text;
+        let fwd_texts: Vec<_>;
+        let fwd_slices: Vec<_>;
+        let fwd_input = match input {
+            MultiRcText::One(t) => {
+                fwd_text = t.text();
+                MultiText::one(fwd_text.as_ref())
+            }
+            MultiRcText::Multi(ts) => {
+                fwd_texts = ts.iter().map(|i| i.text()).collect();
+                fwd_slices = fwd_texts.iter().map(|t| t.as_ref()).collect();
+                MultiText::Multi(fwd_slices.as_slice())
+            }
+        };
+        let mut matches =
+            self.search_one_strand(pattern, fwd_input, k, all_minima, &filter_fn, Strand::Fwd);
+
         if self.rc {
+            // FIXME: This stuff is so ugly :/
+            let rev_text;
+            let rev_texts: Vec<_>;
+            let rev_slices: Vec<_>;
+            let rev_input = match input {
+                MultiRcText::One(t) => {
+                    rev_text = t.rev_text();
+                    MultiText::one(rev_text.as_ref())
+                }
+                MultiRcText::Multi(ts) => {
+                    rev_texts = ts.iter().map(|i| i.rev_text()).collect();
+                    rev_slices = rev_texts.iter().map(|t| t.as_ref()).collect();
+                    MultiText::Multi(rev_slices.as_slice())
+                }
+            };
             let rc_matches = self.search_one_strand(
                 &P::complement(pattern),
-                input.rev_text().as_ref(),
+                rev_input,
                 k,
                 all_minima,
                 &filter_fn,
                 Strand::Rc,
             );
-            matches.extend(rc_matches.into_iter().map(|mut m| {
+            matches.extend(rc_matches.into_iter().map(|(lane, mut m)| {
                 m.strand = Strand::Rc;
                 // Also adjust start and end positions to original text orientation
                 let rc_start = m.text_start;
                 let rc_end = m.text_end;
-                m.text_start = input.text().as_ref().len() - rc_end;
+                let t = input.get_lane(lane).unwrap();
+                let len = t.text().as_ref().len();
+                m.text_start = len - rc_end;
                 if self.without_trace {
                     m.text_end = usize::MAX;
                 } else {
-                    m.text_end = input.text().as_ref().len() - rc_start;
+                    m.text_end = len - rc_start;
                 }
                 // NOTE: We keep the cigar in the direction of the pattern.
                 // Thus, passing text or rc(text) gives the same CIGAR.
                 // m.cigar.ops.reverse();
-                m
+                (lane, m)
             }));
         }
         matches
     }
 
-    fn search_one_strand(
+    fn search_one_strand<'t>(
         &mut self,
-        pattern: &[u8],
-        text: &[u8],
+        pattern: &'t [u8],
+        text: MultiText<'t>,
         k: usize,
         all_minima: bool,
         filter_fn: &Option<impl Fn(&[u8], &[u8], Strand) -> bool>,
         strand: Strand,
-    ) -> Vec<Match> {
+    ) -> Vec<(usize, Match)> {
         self.search_positions_bounded(pattern, text, k as Cost, all_minima);
         // If there is a filter fn, filter end positions based on function before processing matches
         if let Some(filter_fn) = filter_fn {
-            self.lanes.iter_mut().for_each(|lane| {
+            for (l, lane) in self.lanes.iter_mut().enumerate() {
+                let Some(t) = text.get_lane(l) else {
+                    break;
+                };
                 lane.matches.retain(|(end_pos, _)| {
-                    let text_till_end = &text[..*end_pos];
+                    let text_till_end = &t[..*end_pos];
                     filter_fn(pattern, text_till_end, strand)
                 });
-            });
+            }
         }
         self.process_matches(pattern, text, k as Cost)
     }
@@ -480,7 +599,13 @@ impl<P: Profile> Searcher<P> {
         None
     }
 
-    fn search_positions_bounded(&mut self, pattern: &[u8], text: &[u8], k: Cost, all_minima: bool) {
+    fn search_positions_bounded<'t>(
+        &mut self,
+        pattern: &'t [u8],
+        text: MultiText<'t>,
+        k: Cost,
+        all_minima: bool,
+    ) {
         let (profiler, pattern_profile) = P::encode_pattern(pattern);
 
         // Terminology:
@@ -491,21 +616,30 @@ impl<P: Profile> Searcher<P> {
         // The pattern will match a pattern of length at most pattern.len() + k.
         // We round that up to a multiple of 64 to find the number of blocks overlap between chunks.
         let max_overlap_blocks = (pattern.len() + k as usize).next_multiple_of(64) / 64;
-        let overlap_blocks = 0;
 
-        // Total number of blocks to be processed, including overlaps.
-        let text_blocks = if self.alpha.is_some() {
-            // When allowing overlaps, for simplicity we 'extend' the text a bit more with N.
-            (text.len() + pattern.len()).div_ceil(64)
+        // When allowing overlaps, for simplicity we 'extend' the text a bit more with N.
+        let text_padding = if self.alpha.is_some() {
+            pattern.len()
         } else {
-            text.len().div_ceil(64)
+            0
         };
-        let total_blocks = text_blocks + (LANES - 1) * overlap_blocks;
-        let blocks_per_chunk = total_blocks.div_ceil(LANES);
-        // Length of each of the four chunks.
-        let chunk_offset = blocks_per_chunk.saturating_sub(overlap_blocks);
+        // Total number of blocks to be processed, including overlaps.
+        let blocks_per_chunk = match text {
+            MultiText::One(text) => (text.len() + text_padding).div_ceil(64).div_ceil(LANES),
+            MultiText::Multi(ts) => ts
+                .iter()
+                .map(|t| t.len() + text_padding)
+                .max()
+                .unwrap_or(0)
+                .div_ceil(64),
+        };
 
-        // Update chunk offsets
+        // Length of each of the four chunks.
+        let chunk_offset = match text {
+            MultiText::One(_) => blocks_per_chunk,
+            MultiText::Multi(_) => 0,
+        };
+        // Start index in text of each chunk.
         for lane in 0..LANES {
             self.lanes[lane].chunk_offset = lane * chunk_offset;
         }
@@ -527,7 +661,10 @@ impl<P: Profile> Searcher<P> {
         self.hp.resize(pattern.len(), S::splat(1));
         self.hm.resize(pattern.len(), S::splat(0));
 
-        init_deltas_for_overshoot(&mut self.hp, self.alpha);
+        match text {
+            MultiText::One(_) => init_deltas_for_overshoot(&mut self.hp, self.alpha),
+            MultiText::Multi(_) => init_deltas_for_overshoot_all_lanes(&mut self.hp, self.alpha),
+        }
 
         'text_chunk: for i in 0..blocks_per_chunk + max_overlap_blocks {
             let mut vp = S::splat(0);
@@ -535,7 +672,10 @@ impl<P: Profile> Searcher<P> {
 
             // Update text slices and profiles
             for lane in 0..LANES {
-                self.lanes[lane].update_and_encode(text, i, &profiler, self.alpha.is_some());
+                let Some(t) = text.get_lane(lane) else {
+                    break;
+                };
+                self.lanes[lane].update_and_encode(t, i, &profiler, self.alpha.is_some());
             }
 
             let mut dist_to_start_of_lane = S::splat(0);
@@ -611,11 +751,14 @@ impl<P: Profile> Searcher<P> {
                     continue;
                 }
 
+                let Some(t) = text.get_lane(lane) else {
+                    break;
+                };
                 self.find_minima_with_overhang(
                     v,
                     cost,
                     k,
-                    text.len(),
+                    t.len(),
                     pattern.len(),
                     base_pos,
                     lane,
@@ -631,31 +774,33 @@ impl<P: Profile> Searcher<P> {
         self.reset_rows(0, prev_max_j);
 
         // Prune matches in overlapping regions.
-        if log::log_enabled!(log::Level::Trace) {
-            self.lanes[0].matches.iter().for_each(|&(end_pos, cost)| {
-                log::trace!("lane 0 KEEP {end_pos} {cost}");
-            });
-        }
-        for lane in 1..LANES {
-            let prev_lane_end = self.lanes[lane - 1].lane_end;
-            log::trace!("End of lane {}: {prev_lane_end}", lane - 1);
-            log::trace!(
-                "Last match of lane {}: {:?}",
-                lane - 1,
-                self.lanes[lane - 1].matches.last()
-            );
-            self.lanes[lane].matches.retain(|&(end_pos, cost)| {
-                if end_pos < prev_lane_end {
-                    log::trace!(
-                        "lane {lane} drop {end_pos} {cost} because it's before {prev_lane_end}"
-                    );
-                } else {
-                    log::trace!("lane {lane} KEEP {end_pos} {cost}");
-                }
-                // Keep matches that end after the previous lane's end position
-                // Note that `prev_lane_end` itself is handled by the current lane.
-                end_pos >= prev_lane_end
-            });
+        if let MultiText::One(_) = text {
+            if log::log_enabled!(log::Level::Trace) {
+                self.lanes[0].matches.iter().for_each(|&(end_pos, cost)| {
+                    log::trace!("lane 0 KEEP {end_pos} {cost}");
+                });
+            }
+            for lane in 1..LANES {
+                let prev_lane_end = self.lanes[lane - 1].lane_end;
+                log::trace!("End of lane {}: {prev_lane_end}", lane - 1);
+                log::trace!(
+                    "Last match of lane {}: {:?}",
+                    lane - 1,
+                    self.lanes[lane - 1].matches.last()
+                );
+                self.lanes[lane].matches.retain(|&(end_pos, cost)| {
+                    if end_pos < prev_lane_end {
+                        log::trace!(
+                            "lane {lane} drop {end_pos} {cost} because it's before {prev_lane_end}"
+                        );
+                    } else {
+                        log::trace!("lane {lane} KEEP {end_pos} {cost}");
+                    }
+                    // Keep matches that end after the previous lane's end position
+                    // Note that `prev_lane_end` itself is handled by the current lane.
+                    end_pos >= prev_lane_end
+                });
+            }
         }
     }
 
@@ -782,7 +927,13 @@ impl<P: Profile> Searcher<P> {
         }
     }
 
-    fn process_matches(&mut self, pattern: &[u8], text: &[u8], k: Cost) -> Vec<Match> {
+    /// Returns pairs `(lane, Match)`.
+    fn process_matches<'t>(
+        &mut self,
+        pattern: &'t [u8],
+        text: MultiText<'t>,
+        k: Cost,
+    ) -> Vec<(usize, Match)> {
         let mut traces = Vec::new();
         let fill_len = pattern.len() + k as usize;
 
@@ -790,39 +941,66 @@ impl<P: Profile> Searcher<P> {
         let mut batch = MatchBatch::new();
 
         if self.only_best_match {
-            let mut best = (Cost::MAX, Reverse(0), 0, [].as_slice());
+            let mut best = [(Cost::MAX, Reverse(0), 0, [].as_slice()); LANES];
             for lane in 0..LANES {
                 for &(end_pos, cost) in &self.lanes[lane].matches {
                     let offset = end_pos.saturating_sub(fill_len);
-                    let slice = &text[offset..end_pos.min(text.len())];
+                    let Some(t) = text.get_lane(lane) else {
+                        break;
+                    };
+                    let slice = &t[offset..end_pos.min(t.len())];
 
                     // rightmost match with minimal cost
-                    best = best.min((cost, Reverse(end_pos), offset, slice));
+                    best[lane] = best[lane].min((cost, Reverse(end_pos), offset, slice));
                 }
             }
-            if best.0 != Cost::MAX {
-                let (cost, Reverse(end_pos), offset, slice) = best;
-                if self.without_trace {
-                    traces.push(Match {
-                        text_start: usize::MAX,
-                        text_end: end_pos.min(text.len()),
-                        pattern_start: usize::MAX,
-                        pattern_end: pattern.len() - end_pos.saturating_sub(text.len()),
-                        cost,
-                        strand: Strand::Fwd,
-                        cigar: Cigar::default(),
-                    });
-                } else {
-                    batch.add(slice, offset, end_pos, cost);
+
+            let mut add_match =
+                |lane, t: &'t [u8], best: (i32, Reverse<usize>, usize, &'t [u8])| {
+                    let (cost, Reverse(end_pos), offset, slice) = best;
+                    if self.without_trace {
+                        traces.push((
+                            lane,
+                            Match {
+                                text_start: usize::MAX,
+                                text_end: end_pos.min(t.len()),
+                                pattern_start: usize::MAX,
+                                pattern_end: pattern.len() - end_pos.saturating_sub(t.len()),
+                                cost,
+                                strand: Strand::Fwd,
+                                cigar: Cigar::default(),
+                            },
+                        ));
+                    } else {
+                        batch.add(lane, slice, offset, end_pos, cost);
+                    }
+                };
+
+            match text {
+                MultiText::One(t) => {
+                    let best = *best.iter().min().unwrap();
+                    if best.0 != Cost::MAX {
+                        add_match(0, t, best);
+                    }
+                }
+                MultiText::Multi(ts) => {
+                    for lane in 0..LANES {
+                        if best[lane].0 != Cost::MAX {
+                            add_match(lane, ts[lane], best[lane]);
+                        }
+                    }
                 }
             }
         } else {
             for lane in 0..LANES {
+                let Some(t) = text.get_lane(lane) else {
+                    break;
+                };
                 for &(end_pos, cost) in &self.lanes[lane].matches {
                     let offset = end_pos.saturating_sub(fill_len);
-                    let slice = &text[offset..end_pos.min(text.len())];
+                    let slice = &t[offset..end_pos.min(t.len())];
 
-                    batch.add(slice, offset, end_pos, cost);
+                    batch.add(lane, slice, offset, end_pos, cost);
 
                     if batch.is_full() {
                         traces.extend(batch.process::<P>(
@@ -853,6 +1031,7 @@ impl<P: Profile> Searcher<P> {
 }
 
 struct MatchBatch<'a> {
+    lanes: [usize; LANES],
     slices: [&'a [u8]; LANES],
     offsets: [usize; LANES],
     ends: [usize; LANES],
@@ -863,6 +1042,7 @@ struct MatchBatch<'a> {
 impl<'a> MatchBatch<'a> {
     fn new() -> Self {
         Self {
+            lanes: [0; LANES],
             slices: [b""; LANES],
             offsets: [0; LANES],
             ends: [0; LANES],
@@ -871,7 +1051,8 @@ impl<'a> MatchBatch<'a> {
         }
     }
 
-    fn add(&mut self, slice: &'a [u8], offset: usize, end: usize, cost: Cost) {
+    fn add(&mut self, lane: usize, slice: &'a [u8], offset: usize, end: usize, cost: Cost) {
+        self.lanes[self.count] = lane;
         self.slices[self.count] = slice;
         self.offsets[self.count] = offset;
         self.ends[self.count] = end;
@@ -893,6 +1074,7 @@ impl<'a> MatchBatch<'a> {
         // which process uses to make sure it only uses filled data
     }
 
+    /// Returns pairs of (lane, Match).
     fn process<P: Profile>(
         &self,
         pattern: &[u8],
@@ -900,7 +1082,7 @@ impl<'a> MatchBatch<'a> {
         cost_matrices: &mut [CostMatrix; LANES],
         alpha: Option<f32>,
         k: Cost,
-    ) -> Vec<Match> {
+    ) -> Vec<(usize, Match)> {
         if self.count > 1 {
             simd_fill::<P>(
                 pattern,
@@ -947,7 +1129,7 @@ impl<'a> MatchBatch<'a> {
                 k,
             );
 
-            results.push(m);
+            results.push((self.lanes[i], m));
         }
 
         results
@@ -999,6 +1181,8 @@ pub(crate) fn init_deltas_for_overshoot_all_lanes(hp: &mut [S], alpha: Option<f3
 
 #[cfg(test)]
 mod tests {
+    use std::array::from_fn;
+
     use super::*;
     use crate::profiles::{Dna, Iupac};
     use rand::random_range;
@@ -1020,10 +1204,10 @@ mod tests {
     #[test]
     fn overshoot() {
         let pattern = b"CCCTTTCCCGGG";
-        let text = b"AAAAAAAAACCCTTT";
+        let text = b"AAAAAAAAACCCTTT".as_slice();
         let mut s = Searcher::<Iupac>::new_fwd();
         s.alpha = Some(0.5);
-        s.search_positions_bounded(pattern, text, 10, true);
+        s.search_positions_bounded(pattern, MultiText::One(text), 10, true);
         for l in s.lanes {
             println!("Matches: {:?}", l.matches);
         }
@@ -1052,7 +1236,7 @@ mod tests {
         let text = "GGGGTTTTTTTTTTTTTTTT";
         let mut s = Searcher::<Iupac>::new_fwd();
         s.alpha = Some(0.5);
-        s.search_positions_bounded(prefix.as_bytes(), text.as_bytes(), 2, true);
+        s.search_positions_bounded(prefix.as_bytes(), MultiText::One(text.as_bytes()), 2, true);
         let expected_idx = 3;
         let expected_edits = 2 as Cost;
         let m = s.lanes[0]
@@ -1075,7 +1259,7 @@ mod tests {
         let text = "TTTTTTTTTTTTTTTTGGGG";
         let mut s = Searcher::<Iupac>::new_fwd();
         s.alpha = Some(0.5);
-        s.search_positions_bounded(prefix.as_bytes(), text.as_bytes(), 2, true);
+        s.search_positions_bounded(prefix.as_bytes(), MultiText::One(text.as_bytes()), 2, true);
         let expected_idx = 24;
         let expected_edits = 2 as Cost;
         let m = s.lanes[0]
@@ -1123,7 +1307,12 @@ mod tests {
         let text = "GGGGGAAAAA";
         let mut s = Searcher::<Iupac>::new_fwd();
         s.alpha = Some(0.5);
-        s.search_positions_bounded(contained.as_bytes(), text.as_bytes(), 2, true);
+        s.search_positions_bounded(
+            contained.as_bytes(),
+            MultiText::One(text.as_bytes()),
+            2,
+            true,
+        );
         let expected_indices = [3, 13];
         let expected_edits = [2, 2];
         let mut found = [false, false];
@@ -1338,6 +1527,19 @@ mod tests {
 
                 eprintln!("matches {matches:?}");
                 let m = matches
+                    .iter()
+                    .find(|m| m.text_start.abs_diff(expected_idx) <= edits);
+                assert!(m.is_some());
+
+                // search_texts should give the same result
+                let multi_matches = searcher.search_texts(&pattern, &[&text, &text], edits);
+                eprintln!("multi matches {multi_matches:?}");
+                let multi_matches = multi_matches
+                    .into_iter()
+                    .filter(|m| m.0 == 1)
+                    .map(|m| m.1)
+                    .collect::<Vec<_>>();
+                let m = multi_matches
                     .iter()
                     .find(|m| m.text_start.abs_diff(expected_idx) <= edits);
                 assert!(m.is_some());
@@ -2256,6 +2458,52 @@ mod tests {
         let matches = sassy_searcher.search_all(&q, &t, k as usize);
         for m in matches {
             println!("m: {:?}", m.without_cigar());
+        }
+    }
+
+    #[test]
+    fn search_multiple_texts_fuzz() {
+        // env_logger::init();
+
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        let mut rng = StdRng::seed_from_u64(42);
+        let mut searcher = Searcher::<Iupac>::new_rc();
+        searcher.alpha = Some(0.5);
+
+        let iter = 1000;
+
+        for _ in 0..iter {
+            const B: usize = 11;
+
+            let pattern_len = rng.random_range(1..=100);
+            let text_lens = [rng.random_range(1..=1000); B];
+
+            let pattern = (0..pattern_len)
+                .map(|_| b"ACGT"[random_range(0..4)])
+                .collect::<Vec<_>>();
+            let texts = text_lens.map(|tl| {
+                (0..tl)
+                    .map(|_| b"ACGT"[random_range(0..4)])
+                    .collect::<Vec<_>>()
+            });
+
+            let texts: [_; B] = from_fn(|i| texts[i].as_slice());
+            let matches_old = texts.map(|t| searcher.search(&pattern, &t, 5));
+            let matches_new = searcher.search_texts(&pattern, &texts, 5);
+            assert_eq!(
+                matches_old.iter().map(|x| x.len()).sum::<usize>(),
+                matches_new.len(),
+                "mismatch in number of texts"
+            );
+            // eprintln!("old matches: {:?}", matches_old);
+            // eprintln!("new matches: {:?}", matches_new);
+            for i in 0..B {
+                for m in &matches_old[i] {
+                    assert!(matches_new.contains(&(i, m.clone())));
+                }
+            }
         }
     }
 }
