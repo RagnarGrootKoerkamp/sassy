@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::fmt::Debug;
 
 use crate::delta_encoding::H;
@@ -214,6 +215,8 @@ pub struct Searcher<P: Profile> {
     /// overhang cost
     /// If set, must satisfy `0.0 <= alpha <= 1.0`
     alpha: Option<f32>,
+    /// If set, only the best match is returned.
+    only_best_match: bool,
 
     // Internal caches
     cost_matrices: [CostMatrix; LANES],
@@ -263,6 +266,12 @@ impl<P: Profile> Searcher<P> {
         Self::new(true, Some(alpha))
     }
 
+    /// Only return the best match.
+    pub fn only_best_match(mut self) -> Self {
+        self.only_best_match = true;
+        self
+    }
+
     /// Create a new `Searcher`.
     #[cfg_attr(
         all(
@@ -285,6 +294,7 @@ impl<P: Profile> Searcher<P> {
             hm: Vec::new(),
             lanes: std::array::from_fn(|_| LaneState::new(P::alloc_out(), 0)),
             alpha,
+            only_best_match: false,
         }
     }
 
@@ -760,22 +770,39 @@ impl<P: Profile> Searcher<P> {
         // Collect slices to process in batches
         let mut batch = MatchBatch::new();
 
-        for lane in 0..LANES {
-            for &(end_pos, cost) in &self.lanes[lane].matches {
-                let offset = end_pos.saturating_sub(fill_len);
-                let slice = &text[offset..end_pos.min(text.len())];
+        if self.only_best_match {
+            let mut best = (Cost::MAX, Reverse(0), 0, [].as_slice());
+            for lane in 0..LANES {
+                for &(end_pos, cost) in &self.lanes[lane].matches {
+                    let offset = end_pos.saturating_sub(fill_len);
+                    let slice = &text[offset..end_pos.min(text.len())];
 
+                    // rightmost match with minimal cost
+                    best = best.min((cost, Reverse(end_pos), offset, slice));
+                }
+            }
+            if best.0 != Cost::MAX {
+                let (cost, Reverse(end_pos), offset, slice) = best;
                 batch.add(slice, offset, end_pos, cost);
+            }
+        } else {
+            for lane in 0..LANES {
+                for &(end_pos, cost) in &self.lanes[lane].matches {
+                    let offset = end_pos.saturating_sub(fill_len);
+                    let slice = &text[offset..end_pos.min(text.len())];
 
-                if batch.is_full() {
-                    traces.extend(batch.process::<P>(
-                        pattern,
-                        fill_len,
-                        &mut self.cost_matrices,
-                        self.alpha,
-                        k,
-                    ));
-                    batch.clear();
+                    batch.add(slice, offset, end_pos, cost);
+
+                    if batch.is_full() {
+                        traces.extend(batch.process::<P>(
+                            pattern,
+                            fill_len,
+                            &mut self.cost_matrices,
+                            self.alpha,
+                            k,
+                        ));
+                        batch.clear();
+                    }
                 }
             }
         }
