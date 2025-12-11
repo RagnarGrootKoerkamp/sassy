@@ -384,11 +384,14 @@ impl<P: Profile> Searcher<P> {
     /// Consider sorting the texts by length beforehand.
     ///
     /// Returns a vector of (text index, match).
+    ///
+    /// Use `early_break_below` to return the best values as soon a s a match is at least that god.
     pub fn search_texts<I: RcSearchAble + ?Sized>(
         &mut self,
         pattern: &[u8],
         inputs: &[&I],
         k: usize,
+        early_break_below: Option<usize>,
     ) -> Vec<(usize, Match)> {
         let mut matches = vec![];
 
@@ -400,11 +403,22 @@ impl<P: Profile> Searcher<P> {
                 false,
                 None::<fn(&[u8], &[u8], Strand) -> bool>,
             );
+            let mut done = false;
             matches.extend(
                 chunk_matches
                     .drain(..)
-                    .map(|(lane, m)| (i * LANES + lane, m)),
+                    .map(|(lane, m)| (i * LANES + lane, m))
+                    .inspect(|(_, m)| {
+                        if let Some(t) = early_break_below {
+                            if m.cost <= t as Cost {
+                                done = true;
+                            }
+                        }
+                    }),
             );
+            if done {
+                break;
+            }
         }
 
         matches
@@ -1532,7 +1546,7 @@ mod tests {
                 assert!(m.is_some());
 
                 // search_texts should give the same result
-                let multi_matches = searcher.search_texts(&pattern, &[&text, &text], edits);
+                let multi_matches = searcher.search_texts(&pattern, &[&text, &text], edits, None);
                 eprintln!("multi matches {multi_matches:?}");
                 let multi_matches = multi_matches
                     .into_iter()
@@ -2491,7 +2505,7 @@ mod tests {
 
             let texts: [_; B] = from_fn(|i| texts[i].as_slice());
             let matches_old = texts.map(|t| searcher.search(&pattern, &t, 5));
-            let matches_new = searcher.search_texts(&pattern, &texts, 5);
+            let matches_new = searcher.search_texts(&pattern, &texts, 5, None);
             assert_eq!(
                 matches_old.iter().map(|x| x.len()).sum::<usize>(),
                 matches_new.len(),
