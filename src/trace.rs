@@ -2,6 +2,7 @@ use crate::bitpacking::compute_block;
 use crate::delta_encoding::H;
 use crate::delta_encoding::V;
 use crate::profiles::Profile;
+use crate::search::MultiPattern;
 use crate::search::init_deltas_for_overshoot_all_lanes;
 use crate::search::init_deltas_for_overshoot_scalar;
 use pa_types::Cigar;
@@ -93,8 +94,8 @@ pub fn fill<P: Profile>(
     }
 }
 
-pub fn simd_fill<P: Profile>(
-    query: &[u8],
+pub fn simd_fill<'t, P: Profile>(
+    pattern: MultiPattern<'t>,
     texts: &[&[u8]],
     max_len: usize,
     m: &mut [CostMatrix; LANES],
@@ -110,21 +111,21 @@ pub fn simd_fill<P: Profile>(
     }
     let lanes = texts.len();
 
-    let (profiler, query_profile) = P::encode_pattern(query);
+    let (profiler, pattern_profile) = P::encode_pattern(pattern);
     let num_chunks = max_len.div_ceil(64);
 
     for m in &mut *m {
         m.alpha = alpha;
         m.max_overhang = max_overhang;
-        m.q = query.len();
+        m.q = pattern.len();
         m.deltas.clear();
         m.deltas.reserve((m.q + 1) * num_chunks);
     }
 
-    let mut hp: Vec<S> = Vec::with_capacity(query.len());
-    let mut hm: Vec<S> = Vec::with_capacity(query.len());
-    hp.resize(query.len(), S::splat(1));
-    hm.resize(query.len(), S::splat(0));
+    let mut hp: Vec<S> = Vec::with_capacity(pattern.len());
+    let mut hm: Vec<S> = Vec::with_capacity(pattern.len());
+    hp.resize(pattern.len(), S::splat(1));
+    hm.resize(pattern.len(), S::splat(0));
 
     // NOTE: It's OK to always fill the left with 010101, even if it's not
     // actually the left of the text, because in that case the left column can't
@@ -148,8 +149,8 @@ pub fn simd_fill<P: Profile>(
             m[lane].deltas.push(v);
         }
         // FIXME: for large queries, use the SIMD within this single block, rather than spreading it thin over LANES 'matches' when there is only a single candidate match.
-        for j in 0..query.len() {
-            let eq = from_fn(|lane| P::eq(&query_profile[j], &text_profile[lane])).into();
+        for j in 0..pattern.len() {
+            let eq = from_fn(|lane| P::eq(&pattern_profile[j], &text_profile[lane])).into();
             compute_block_simd(&mut hp[j], &mut hm[j], &mut vp, &mut vm, eq);
             for lane in 0..lanes {
                 let v = V::from(vp.as_array()[lane], vm.as_array()[lane]);
@@ -164,7 +165,7 @@ pub fn simd_fill<P: Profile>(
 }
 
 pub fn get_trace<P: Profile>(
-    query: &[u8],
+    pattern: &[u8],
     text_offset: usize,
     end_pos: usize,
     text: &[u8],
@@ -173,7 +174,7 @@ pub fn get_trace<P: Profile>(
     max_overhang: Option<usize>,
 ) -> Match {
     let mut trace = Vec::new();
-    let mut j = query.len();
+    let mut j = pattern.len();
     let mut i = end_pos - text_offset;
 
     let cost = |j: usize, i: usize| -> Cost { m.get(i, j) };
@@ -186,7 +187,7 @@ pub fn get_trace<P: Profile>(
     let mut cigar = Cigar::default();
 
     let mut pattern_start = 0;
-    let mut pattern_end = query.len();
+    let mut pattern_end = pattern.len();
 
     // Overshoot at end.
     if i > text.len() {
@@ -227,7 +228,7 @@ pub fn get_trace<P: Profile>(
         }
 
         // Match
-        if i > 0 && cost(j - 1, i - 1) == g && P::is_match(query[j - 1], text[i - 1]) {
+        if i > 0 && cost(j - 1, i - 1) == g && P::is_match(pattern[j - 1], text[i - 1]) {
             cigar.push(pa_types::CigarOp::Match);
             j -= 1;
             i -= 1;
@@ -256,11 +257,11 @@ pub fn get_trace<P: Profile>(
             continue;
         }
 
-        if !P::valid_seq(&[query[j - 1]]) {
+        if !P::valid_seq(&[pattern[j - 1]]) {
             panic!(
                 "Trace failed, because the query contains non-{:?} character {} at position {}. (Use `profiles::Iupac` instead of `profiles::Dna`.)",
                 std::any::type_name::<P>(),
-                query[j - 1] as char,
+                pattern[j - 1] as char,
                 j - 1
             );
         }
@@ -322,7 +323,7 @@ mod tests {
 
         let mut cost_matrix = Default::default();
         simd_fill::<Dna>(
-            query,
+            MultiPattern::One(query),
             &[text1, text2, text3, text4],
             text4.len(),
             &mut cost_matrix,
