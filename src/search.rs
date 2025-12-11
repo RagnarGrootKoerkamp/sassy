@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use crate::delta_encoding::H;
 use crate::minima::prefix_min;
 use crate::profiles::Profile;
@@ -19,7 +21,7 @@ use pa_types::{Cigar, CigarOp, Cost, Pos};
 /// In this case, the CIGAR tells the differences between `pattern` and `rc(&text[text_start..text_end])`.
 /// In the CIGAR, `I` represents a character in the text that is not in the pattern,
 /// and `D` represents a character in the pattern that is not in the text.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "python", pyo3::pyclass)]
 pub struct Match {
     /// 0-based start position in text.
@@ -42,6 +44,20 @@ pub struct Match {
     /// `I`: character in text but not in pattern.
     /// `D`: character in pattern but not in text.
     pub cigar: Cigar,
+}
+
+impl Debug for Match {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Match")
+            .field("text_start", &self.text_start)
+            .field("text_end", &self.text_end)
+            .field("pattern_start", &self.pattern_start)
+            .field("pattern_end", &self.pattern_end)
+            .field("cost", &self.cost)
+            .field("strand", &self.strand)
+            .field("cigar", &self.cigar.to_string())
+            .finish()
+    }
 }
 
 impl Match {
