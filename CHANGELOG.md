@@ -4,6 +4,8 @@
 
 ## git
 - bugfix: `sassy grep` would crash on printing reverse complement matches with overhang.
+- misc: debug-printing a `Match` now uses stringified cigar.
+- feat: moved pretty printing from `bin/grep.rs` to publicly available `Match::pretty_print`.
 
 ## 0.1.10
 - **bugfix**: `sassy grep` had a bug in the batching logic, making it skip a

@@ -110,6 +110,7 @@
 mod bitpacking;
 mod delta_encoding;
 mod minima;
+pub mod pretty_print;
 mod search;
 mod trace;
 

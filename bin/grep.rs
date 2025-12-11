@@ -1,6 +1,5 @@
 use std::{
     collections::VecDeque,
-    fmt::Write as _,
     fs::File,
     io::{BufRead, Write},
     path::{Path, PathBuf},
@@ -10,9 +9,9 @@ use std::{
 use colored::Colorize;
 use either::Either;
 use needletail::parse_fastx_file;
-use pa_types::{Cigar, CigarElem, CigarOp};
 use sassy::{
     Match, Searcher, Strand,
+    pretty_print::{PrettyPrintDirection, PrettyPrintStyle},
     profiles::{Dna, Iupac, Profile},
 };
 
@@ -493,100 +492,16 @@ impl Args {
             if let Some(match_writer) = match_writer.as_mut() {
                 self.print_match_tsv(pattern, text, m, match_writer);
             }
-            Self::pretty_print_match_line(self.context, pattern, text, m);
+            let s = m.pretty_print(
+                Some(&pattern.id),
+                &pattern.seq,
+                &text.seq.text,
+                PrettyPrintDirection::Text,
+                self.context,
+                PrettyPrintStyle::Full,
+            );
+            eprintln!("{s}");
         }
-    }
-
-    /// Pretty print the context of a match.
-    fn pretty_print_match_line(
-        context: usize,
-        pattern: &PatternRecord,
-        text: &TextRecord,
-        m: &Match,
-    ) {
-        let rc_pattern;
-        let mut cigar = m.cigar.clone();
-        let matching_pattern = match m.strand {
-            Strand::Fwd => {
-                if m.pattern_start > 0 {
-                    cigar
-                        .ops
-                        .insert(0, CigarElem::new(CigarOp::Del, m.pattern_start as i32));
-                }
-                if m.pattern_end < pattern.seq.len() {
-                    cigar.ops.push(CigarElem::new(
-                        CigarOp::Del,
-                        (pattern.seq.len() - m.pattern_end) as i32,
-                    ));
-                }
-                &pattern.seq
-            }
-            Strand::Rc => {
-                rc_pattern = Iupac::reverse_complement(&pattern.seq);
-                cigar.reverse();
-                let rc_start = pattern.seq.len() - m.pattern_end;
-                let rc_end = pattern.seq.len() - m.pattern_start;
-                if rc_start > 0 {
-                    cigar
-                        .ops
-                        .insert(0, CigarElem::new(CigarOp::Del, rc_start as i32));
-                }
-                if rc_end < pattern.seq.len() {
-                    cigar.ops.push(CigarElem::new(
-                        CigarOp::Del,
-                        (pattern.seq.len() - rc_end) as i32,
-                    ));
-                }
-                &rc_pattern
-            }
-        };
-        let (matching_text, mut suffix) = text.seq.text.split_at(m.text_end);
-        let (mut prefix, matching_text) = matching_text.split_at(m.text_start);
-
-        let mut prefix_skip = 0;
-        if prefix.len() > context {
-            prefix_skip = prefix.len() - context;
-            prefix = &prefix[prefix_skip..];
-        };
-        fn format_skip(skip: usize, prefix: bool) -> String {
-            if skip > 0 {
-                if prefix {
-                    format!("{:>9} bp + ", skip)
-                } else {
-                    format!(" + {:>9} bp", skip)
-                }
-            } else {
-                format!(" {:>9}     ", "")
-            }
-        }
-        let prefix_skip = format_skip(prefix_skip, true);
-        let (match_len, match_string) = pretty_print_match(matching_pattern, matching_text, &cigar);
-
-        let suffix_skip =
-            (suffix.len() + match_len - matching_pattern.len()) as isize - context as isize;
-        if suffix_skip > 0 {
-            suffix = &suffix[..suffix.len().saturating_sub(suffix_skip as usize)];
-        };
-        let suffix_padding = (-suffix_skip.min(0)) as usize;
-        let suffix_skip = format_skip(suffix_skip.max(0) as usize, false);
-
-        let strand = match m.strand {
-            Strand::Fwd => "+",
-            Strand::Rc => "-",
-        };
-
-        eprintln!(
-            "{} ({}) {} | {}{:>context$}{match_string}{}{:>suffix_padding$}{} @ {}",
-            pattern.id,
-            strand.bold(),
-            format!("{:>2}", m.cost).bold(),
-            prefix_skip.dimmed(),
-            String::from_utf8_lossy(prefix),
-            String::from_utf8_lossy(suffix),
-            "",
-            suffix_skip.dimmed(),
-            format!("{:<19}", format!("{}-{}", m.text_start, m.text_end)).dimmed(),
-        );
     }
 
     fn print_match_tsv(
@@ -632,41 +547,9 @@ impl Args {
     }
 }
 
-/// Pretty print a match with differences highlighted in color.
-fn pretty_print_match(pattern: &[u8], text: &[u8], cigar: &Cigar) -> (usize, String) {
-    let mut out = String::new();
-    let mut len = 0;
-    for pair in cigar.to_char_pairs(pattern, text) {
-        len += 1;
-        match pair {
-            pa_types::CigarOpChars::Match(c) => {
-                write!(out, "{}", (c as char).to_string().green().bold()).unwrap()
-            }
-            pa_types::CigarOpChars::Sub(_old, new) => {
-                write!(out, "{}", (new as char).to_string().yellow().bold()).unwrap()
-            }
-            pa_types::CigarOpChars::Del(c) => {
-                write!(out, "{}", (c as char).to_string().red().bold()).unwrap()
-            }
-            pa_types::CigarOpChars::Ins(c) => {
-                write!(out, "{}", (c as char).to_string().cyan().bold()).unwrap()
-            }
-        }
-    }
-    (len, out)
-}
-
 #[cfg(test)]
 mod test {
-    use sassy::{
-        CachedRev,
-        profiles::{Dna, Profile},
-    };
-
-    use crate::{
-        grep::Args,
-        input_iterator::{PatternRecord, TextRecord},
-    };
+    use sassy::profiles::{Dna, Profile};
 
     #[test]
     fn amplicon_crash() {
@@ -679,18 +562,13 @@ mod test {
         matches.iter().for_each(|m| {
             eprintln!("match: {:?}", m.without_cigar());
             eprintln!("cigar: {}", m.cigar.to_string());
-            Args::pretty_print_match_line(
+            m.pretty_print(
+                None,
+                pattern,
+                text,
+                sassy::pretty_print::PrettyPrintDirection::Text,
                 0,
-                &PatternRecord {
-                    id: "".to_string(),
-                    seq: pattern.to_vec(),
-                },
-                &TextRecord {
-                    id: "".to_string(),
-                    seq: CachedRev::new(text.to_vec(), true),
-                    quality: vec![],
-                },
-                &m,
+                sassy::pretty_print::PrettyPrintStyle::Full,
             );
         });
     }
