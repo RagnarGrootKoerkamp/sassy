@@ -219,6 +219,8 @@ pub struct Searcher<P: Profile> {
     only_best_match: bool,
     /// If set, matches are returned without trace and starting position.
     without_trace: bool,
+    /// If set, overhang can be at most this long.
+    max_overhang: Option<usize>,
 
     // Internal caches
     cost_matrices: [CostMatrix; LANES],
@@ -315,6 +317,12 @@ impl<P: Profile> Searcher<P> {
         self
     }
 
+    /// Set overhang cost `0<=alpha<=1`.
+    pub fn with_max_overhang(mut self, max_overhang: Option<usize>) -> Self {
+        self.max_overhang = max_overhang;
+        self
+    }
+
     /// Only return the best match.
     pub fn only_best_match(mut self) -> Self {
         self.only_best_match = true;
@@ -345,6 +353,7 @@ impl<P: Profile> Searcher<P> {
             rc,
             only_best_match: false,
             without_trace: false,
+            max_overhang: None,
             cost_matrices: std::array::from_fn(|_| CostMatrix::default()),
             hp: Vec::new(),
             hm: Vec::new(),
@@ -635,9 +644,11 @@ impl<P: Profile> Searcher<P> {
         let text_padding = if self.alpha.is_some() {
             // The padding is at most the length of the pattern (since putting the entire pattern after the text is useless).
             // The padding is at most ceil(k/alpha), since crossing longer padding costs more than k.
+            // The padding is at most `max_overhang`, if set.
             pattern
                 .len()
                 .min(((k as f32) / self.alpha.unwrap()).ceil() as usize)
+                .min(self.max_overhang.unwrap_or(usize::MAX))
         } else {
             0
         };
@@ -680,8 +691,12 @@ impl<P: Profile> Searcher<P> {
         self.hm.resize(pattern.len(), S::splat(0));
 
         match text {
-            MultiText::One(_) => init_deltas_for_overshoot(&mut self.hp, self.alpha),
-            MultiText::Multi(_) => init_deltas_for_overshoot_all_lanes(&mut self.hp, self.alpha),
+            MultiText::One(_) => {
+                init_deltas_for_overshoot(&mut self.hp, self.alpha, self.max_overhang)
+            }
+            MultiText::Multi(_) => {
+                init_deltas_for_overshoot_all_lanes(&mut self.hp, self.alpha, self.max_overhang)
+            }
         }
 
         'text_chunk: for i in 0..blocks_per_chunk + max_overlap_blocks {
@@ -878,7 +893,10 @@ impl<P: Profile> Searcher<P> {
     ) {
         let (p, m) = v.pm();
         let max_pos = if self.alpha.is_some() {
-            text_len + pattern_len
+            text_len
+                + pattern_len
+                    .min(((k as f32) / self.alpha.unwrap()).ceil() as usize)
+                    .min(self.max_overhang.unwrap_or(usize::MAX))
         } else {
             text_len
         };
@@ -1026,6 +1044,7 @@ impl<P: Profile> Searcher<P> {
                             fill_len,
                             &mut self.cost_matrices,
                             self.alpha,
+                            self.max_overhang,
                             k,
                         ));
                         batch.clear();
@@ -1040,6 +1059,7 @@ impl<P: Profile> Searcher<P> {
                 fill_len,
                 &mut self.cost_matrices,
                 self.alpha,
+                self.max_overhang,
                 k,
             ));
         }
@@ -1099,6 +1119,7 @@ impl<'a> MatchBatch<'a> {
         fill_len: usize,
         cost_matrices: &mut [CostMatrix; LANES],
         alpha: Option<f32>,
+        max_overhang: Option<usize>,
         k: Cost,
     ) -> Vec<(usize, Match)> {
         if self.count > 1 {
@@ -1108,6 +1129,7 @@ impl<'a> MatchBatch<'a> {
                 fill_len,
                 cost_matrices,
                 alpha,
+                max_overhang,
             );
         } else {
             fill::<P>(
@@ -1116,6 +1138,7 @@ impl<'a> MatchBatch<'a> {
                 fill_len,
                 &mut cost_matrices[0],
                 alpha,
+                max_overhang,
             );
         }
 
@@ -1129,6 +1152,7 @@ impl<'a> MatchBatch<'a> {
                 self.slices[i],
                 &cost_matrices[i],
                 alpha,
+                max_overhang,
             );
 
             // Check if get_trace cost is same as expected end position cost
@@ -1156,9 +1180,13 @@ impl<'a> MatchBatch<'a> {
 
 /// Assumes hp and hm are already the right size, hm=0 and hp=1.
 /// Then sets hp according to the given alpha, if needed.
-pub(crate) fn init_deltas_for_overshoot_scalar(h: &mut [H], alpha: Option<f32>) {
+pub(crate) fn init_deltas_for_overshoot_scalar(
+    h: &mut [H],
+    alpha: Option<f32>,
+    max_overhang: Option<usize>,
+) {
     if let Some(alpha) = alpha {
-        for i in 0..h.len() {
+        for i in 0..h.len().min(max_overhang.unwrap_or(usize::MAX)) {
             // Alternate 0 and 1 costs at very left of the matrix.
             // (Note: not at start of later chunks.)
             // FIXME: floor, round, or ceil?
@@ -1170,9 +1198,13 @@ pub(crate) fn init_deltas_for_overshoot_scalar(h: &mut [H], alpha: Option<f32>) 
 
 /// Assumes hp and hm are already the right size, hm=0 and hp=1.
 /// Then sets hp according to the given alpha, if needed.
-pub(crate) fn init_deltas_for_overshoot(hp: &mut [S], alpha: Option<f32>) {
+pub(crate) fn init_deltas_for_overshoot(
+    hp: &mut [S],
+    alpha: Option<f32>,
+    max_overhang: Option<usize>,
+) {
     if let Some(alpha) = alpha {
-        for i in 0..hp.len() {
+        for i in 0..hp.len().min(max_overhang.unwrap_or(usize::MAX)) {
             // Alternate 0 and 1 costs at very left of the matrix.
             // (Note: not at start of later chunks.)
             // FIXME: floor, round, or ceil?
@@ -1184,9 +1216,13 @@ pub(crate) fn init_deltas_for_overshoot(hp: &mut [S], alpha: Option<f32>) {
 
 /// Assumes hp and hm are already the right size, hm=0 and hp=1.
 /// Then sets hp according to the given alpha, if needed.
-pub(crate) fn init_deltas_for_overshoot_all_lanes(hp: &mut [S], alpha: Option<f32>) {
+pub(crate) fn init_deltas_for_overshoot_all_lanes(
+    hp: &mut [S],
+    alpha: Option<f32>,
+    max_overhang: Option<usize>,
+) {
     if let Some(alpha) = alpha {
-        for i in 0..hp.len() {
+        for i in 0..hp.len().min(max_overhang.unwrap_or(usize::MAX)) {
             // Alternate 0 and 1 costs at very left of the matrix.
             // (Note: not at start of later chunks.)
             // FIXME: floor, round, or ceil?
