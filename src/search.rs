@@ -633,7 +633,11 @@ impl<P: Profile> Searcher<P> {
 
         // When allowing overlaps, for simplicity we 'extend' the text a bit more with N.
         let text_padding = if self.alpha.is_some() {
-            pattern.len()
+            // The padding is at most the length of the pattern (since putting the entire pattern after the text is useless).
+            // The padding is at most ceil(k/alpha), since crossing longer padding costs more than k.
+            pattern
+                .len()
+                .min(((k as f32) / self.alpha.unwrap()).ceil() as usize)
         } else {
             0
         };
