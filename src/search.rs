@@ -217,6 +217,8 @@ pub struct Searcher<P: Profile> {
     alpha: Option<f32>,
     /// If set, only the best match is returned.
     only_best_match: bool,
+    /// If set, matches are returned without trace and starting position.
+    without_trace: bool,
 
     // Internal caches
     cost_matrices: [CostMatrix; LANES],
@@ -279,17 +281,35 @@ impl<P: Profile> Searcher<P> {
         self
     }
 
+    /// Return matches without trace and starting point.
+    pub fn without_trace(mut self) -> Self {
+        self.without_trace = true;
+        self
+    }
+
+    /// Default: return matches with trace.
+    ///
+    /// Only here to negate `without_trace`.
+    pub fn with_trace(mut self) -> Self {
+        self.without_trace = false;
+        self
+    }
+    pub fn set_trace(&mut self, trace: bool) {
+        self.without_trace = !trace;
+    }
+
     /// Create a new `Searcher`.
     pub fn new(rc: bool, alpha: Option<f32>) -> Self {
         Self {
+            alpha,
             rc,
-            _phantom: std::marker::PhantomData,
+            only_best_match: false,
+            without_trace: false,
             cost_matrices: std::array::from_fn(|_| CostMatrix::default()),
             hp: Vec::new(),
             hm: Vec::new(),
             lanes: std::array::from_fn(|_| LaneState::new(P::alloc_out(), 0)),
-            alpha,
-            only_best_match: false,
+            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -383,7 +403,11 @@ impl<P: Profile> Searcher<P> {
                 let rc_start = m.text_start;
                 let rc_end = m.text_end;
                 m.text_start = input.text().as_ref().len() - rc_end;
-                m.text_end = input.text().as_ref().len() - rc_start;
+                if self.without_trace {
+                    m.text_end = usize::MAX;
+                } else {
+                    m.text_end = input.text().as_ref().len() - rc_start;
+                }
                 // NOTE: We keep the cigar in the direction of the pattern.
                 // Thus, passing text or rc(text) gives the same CIGAR.
                 // m.cigar.ops.reverse();
@@ -778,7 +802,19 @@ impl<P: Profile> Searcher<P> {
             }
             if best.0 != Cost::MAX {
                 let (cost, Reverse(end_pos), offset, slice) = best;
-                batch.add(slice, offset, end_pos, cost);
+                if self.without_trace {
+                    traces.push(Match {
+                        text_start: usize::MAX,
+                        text_end: end_pos.min(text.len()),
+                        pattern_start: usize::MAX,
+                        pattern_end: pattern.len() - end_pos.saturating_sub(text.len()),
+                        cost,
+                        strand: Strand::Fwd,
+                        cigar: Cigar::default(),
+                    });
+                } else {
+                    batch.add(slice, offset, end_pos, cost);
+                }
             }
         } else {
             for lane in 0..LANES {
