@@ -1,5 +1,6 @@
 use std::cmp::Reverse;
 use std::fmt::Debug;
+use std::hint::assert_unchecked;
 
 use crate::delta_encoding::H;
 use crate::minima::prefix_min;
@@ -717,32 +718,41 @@ impl<P: Profile> Searcher<P> {
 
             // Iterate over pattern chars (rows in the DP matrix)
             for j in 0..pattern.len() {
-                dist_to_start_of_lane += self.hp[j];
-                dist_to_start_of_lane -= self.hm[j];
+                // These are needed to prevent bound checks on `self.hp[j]`.
+                // I'm not quite sure why those aren't optimized away automatically.
+                unsafe { assert_unchecked(j < self.hp.len()) };
+                unsafe { assert_unchecked(j < self.hm.len()) };
+                let hp = &mut self.hp[j];
+                let hm = &mut self.hm[j];
+                dist_to_start_of_lane += *hp;
+                dist_to_start_of_lane -= *hm;
 
                 let pattern_char = unsafe { pattern_profile.get_unchecked(j) };
                 let eq = S::from(std::array::from_fn(|lane| {
                     P::eq(pattern_char, &self.lanes[lane].text_profile)
                 }));
 
-                compute_block_simd(&mut self.hp[j], &mut self.hm[j], &mut vp, &mut vm, eq);
+                compute_block_simd(hp, hm, &mut vp, &mut vm, eq);
 
                 // Early termination check: If we've moved past the last row that had any
                 // promising matches (cost <= k), we can potentially skip ahead or terminate
                 'check: {
-                    dist_to_end_of_lane += self.hp[j];
-                    dist_to_end_of_lane -= self.hm[j];
+                    dist_to_end_of_lane += *hp;
+                    dist_to_end_of_lane -= *hm;
 
-                    // Check if any lane has cost <= k at the current row
-                    let cmp = dist_to_end_of_lane.simd_lt(S::splat(k as u64 + 1));
-                    // u64x4 does not have to_bitmask :(
-                    // FIXME: Update after wide PR 229.
-                    let bitmask =
-                        unsafe { std::mem::transmute::<S, wide::i64x4>(cmp) }.to_bitmask() as u32;
-                    let end_leq_k = bitmask != 0;
+                    // NOTE HOT: This bit is up to 25% of runtime, so only do it every few iterations.
+                    {
+                        // Check if any lane has cost <= k (ie <k+1) at the current row
+                        let cmp = dist_to_end_of_lane.simd_lt(S::splat(k as u64 + 1));
+                        // u64x4 does not have to_bitmask :(
+                        // FIXME: Update after wide PR 229.
+                        let bitmask = unsafe { std::mem::transmute::<S, wide::i64x4>(cmp) }
+                            .to_bitmask() as u32;
+                        let end_leq_k = bitmask != 0;
 
-                    // Track the highest row where we found any promising matches
-                    cur_end_last_below = if end_leq_k { j } else { cur_end_last_below };
+                        // Track the highest row where we found any promising matches
+                        cur_end_last_below = if end_leq_k { j } else { cur_end_last_below };
+                    }
 
                     // Only do early termination checks if we've moved past the last promising row
                     if j > prev_end_last_below {
@@ -1180,6 +1190,7 @@ impl<'a> MatchBatch<'a> {
 
 /// Assumes hp and hm are already the right size, hm=0 and hp=1.
 /// Then sets hp according to the given alpha, if needed.
+#[inline(always)]
 pub(crate) fn init_deltas_for_overshoot_scalar(
     h: &mut [H],
     alpha: Option<f32>,
@@ -1198,6 +1209,7 @@ pub(crate) fn init_deltas_for_overshoot_scalar(
 
 /// Assumes hp and hm are already the right size, hm=0 and hp=1.
 /// Then sets hp according to the given alpha, if needed.
+#[inline(always)]
 pub(crate) fn init_deltas_for_overshoot(
     hp: &mut [S],
     alpha: Option<f32>,
@@ -1216,6 +1228,7 @@ pub(crate) fn init_deltas_for_overshoot(
 
 /// Assumes hp and hm are already the right size, hm=0 and hp=1.
 /// Then sets hp according to the given alpha, if needed.
+#[inline(always)]
 pub(crate) fn init_deltas_for_overshoot_all_lanes(
     hp: &mut [S],
     alpha: Option<f32>,
