@@ -744,12 +744,8 @@ impl<P: Profile> Searcher<P> {
                     {
                         // Check if any lane has cost <= k (ie <k+1) at the current row
                         let cmp = dist_to_end_of_lane.simd_lt(S::splat(k as u64 + 1));
-                        // u64x4 does not have to_bitmask :(
-                        // FIXME: Update after wide PR 229.
-                        let bitmask = unsafe { std::mem::transmute::<S, wide::i64x4>(cmp) }
-                            .to_bitmask() as u32;
-                        let end_leq_k = bitmask != 0;
-
+                        // at least one lane true?
+                        let end_leq_k = cmp != wide::u64x4::splat(0);
                         // Track the highest row where we found any promising matches
                         cur_end_last_below = if end_leq_k { j } else { cur_end_last_below };
                     }
