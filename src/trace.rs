@@ -2,7 +2,6 @@ use crate::bitpacking::compute_block;
 use crate::delta_encoding::H;
 use crate::delta_encoding::V;
 use crate::profiles::Profile;
-use crate::search::MultiPattern;
 use crate::search::init_deltas_for_overshoot_all_lanes;
 use crate::search::init_deltas_for_overshoot_scalar;
 use pa_types::Cigar;
@@ -94,8 +93,9 @@ pub fn fill<P: Profile>(
     }
 }
 
-pub fn simd_fill<'t, P: Profile>(
-    pattern: MultiPattern<'t>,
+// FIXME: DEDUP
+pub fn simd_fill<P: Profile>(
+    pattern: &[u8],
     texts: &[&[u8]],
     max_len: usize,
     m: &mut [CostMatrix; LANES],
@@ -164,6 +164,80 @@ pub fn simd_fill<'t, P: Profile>(
     }
 }
 
+// FIXME: DEDUP
+pub fn simd_fill_multipattern<P: Profile>(
+    patterns: &[&[u8]],
+    texts: &[&[u8]],
+    max_len: usize,
+    m: &mut [CostMatrix; LANES],
+    alpha: Option<f32>,
+    max_overhang: Option<usize>,
+) {
+    assert!(texts.len() <= LANES);
+    if alpha.is_some() && !P::supports_overhang() {
+        panic!(
+            "Overhang is not supported for {:?}",
+            std::any::type_name::<P>()
+        );
+    }
+    let lanes = texts.len();
+
+    let (profiler, pattern_profiles) = P::encode_patterns(patterns);
+    let pattern = &patterns[0];
+    let num_chunks = max_len.div_ceil(64);
+
+    log::debug!("max len {max_len} num_chunks {num_chunks}");
+
+    for m in &mut *m {
+        m.alpha = alpha;
+        m.max_overhang = max_overhang;
+        m.q = pattern.len();
+        m.deltas.clear();
+        m.deltas.reserve((m.q + 1) * num_chunks);
+    }
+
+    let mut hp: Vec<S> = Vec::with_capacity(pattern.len());
+    let mut hm: Vec<S> = Vec::with_capacity(pattern.len());
+    hp.resize(pattern.len(), S::splat(1));
+    hm.resize(pattern.len(), S::splat(0));
+
+    // NOTE: It's OK to always fill the left with 010101, even if it's not
+    // actually the left of the text, because in that case the left column can't
+    // be included in the alignment anyway. (The text has length q+k in that case.)
+    init_deltas_for_overshoot_all_lanes(&mut hp, alpha, max_overhang);
+
+    let mut text_profile: [_; LANES] = from_fn(|_| P::alloc_out());
+
+    for i in 0..num_chunks {
+        for lane in 0..lanes {
+            let mut slice = [b'N'; 64];
+            let block = texts[lane].get(64 * i..).unwrap_or_default();
+            let block = block.get(..64).unwrap_or(block);
+            slice[..block.len()].copy_from_slice(block);
+            profiler.encode_ref(&slice, &mut text_profile[lane]);
+        }
+        let mut vp = S::splat(0);
+        let mut vm = S::splat(0);
+        for lane in 0..lanes {
+            let v = V::from(vp.as_array()[lane], vm.as_array()[lane]);
+            m[lane].deltas.push(v);
+        }
+        // FIXME: for large queries, use the SIMD within this single block, rather than spreading it thin over LANES 'matches' when there is only a single candidate match.
+        for j in 0..pattern.len() {
+            let eq = from_fn(|lane| P::eq(&pattern_profiles[j][lane], &text_profile[lane])).into();
+            compute_block_simd(&mut hp[j], &mut hm[j], &mut vp, &mut vm, eq);
+            for lane in 0..lanes {
+                let v = V::from(vp.as_array()[lane], vm.as_array()[lane]);
+                m[lane].deltas.push(v);
+            }
+        }
+    }
+
+    for lane in 0..lanes {
+        assert_eq!(m[lane].deltas.len(), num_chunks * (m[lane].q + 1));
+    }
+}
+
 pub fn get_trace<P: Profile>(
     pattern: &[u8],
     text_offset: usize,
@@ -179,10 +253,11 @@ pub fn get_trace<P: Profile>(
 
     let cost = |j: usize, i: usize| -> Cost { m.get(i, j) };
 
+    log::debug!("Trace ({j}, {i}) end pos {end_pos} offset {text_offset}");
     // remaining dist to (i,j)
     let mut g = cost(j, i);
     let mut total_cost = g;
-    log::trace!("Initial cost at ({j}, {i}) is {g}");
+    log::debug!("Initial cost at ({j}, {i}) is {g}");
 
     let mut cigar = Cigar::default();
 
@@ -198,10 +273,10 @@ pub fn get_trace<P: Profile>(
         total_cost += overshoot_cost;
         i -= overshoot;
         j -= overshoot;
-        log::trace!("Trace from ({j}, {i}) for total cost {total_cost}");
-        log::trace!("Right overshoot {overshoot} for cost {overshoot_cost}");
+        log::debug!("Trace from ({j}, {i}) for total cost {total_cost}");
+        log::debug!("Right overshoot {overshoot} for cost {overshoot_cost}");
     } else {
-        log::trace!("Trace from ({j}, {i}) for total cost {total_cost}");
+        log::debug!("Trace from ({j}, {i}) for total cost {total_cost}");
     }
 
     loop {
@@ -323,7 +398,7 @@ mod tests {
 
         let mut cost_matrix = Default::default();
         simd_fill::<Dna>(
-            MultiPattern::One(query),
+            query,
             &[text1, text2, text3, text4],
             text4.len(),
             &mut cost_matrix,

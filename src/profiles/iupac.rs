@@ -1,4 +1,7 @@
-use crate::profiles::{Profile, u8x32_gt, u8x32_shr};
+use crate::{
+    LANES,
+    profiles::{Profile, u8x32_gt, u8x32_shr},
+};
 use std::mem::transmute;
 use wide::{CmpEq, u8x32};
 
@@ -30,6 +33,34 @@ impl Profile for Iupac {
                 bases.push(c);
             }
             query_profile.push(bases.iter().position(|&x| x == c).unwrap());
+        }
+        (Iupac { bases }, query_profile)
+    }
+    fn encode_patterns(a: &[&[u8]]) -> (Self, Vec<[Self::A; LANES]>) {
+        assert!(!a.is_empty());
+        assert!(a.len() <= LANES);
+        let len = a[0].len();
+        for p in a {
+            if !Self::valid_seq(p) {
+                panic!(
+                    "Pattern is not valid IUPAC: {:?}",
+                    String::from_utf8_lossy(p)
+                );
+            }
+            assert_eq!(p.len(), len);
+        }
+
+        let mut bases = vec![b'A', b'C', b'T', b'G'];
+        let mut query_profile = vec![[0; LANES]; len];
+        for i in 0..a[0].len() {
+            for lane in 0..LANES {
+                let c = if lane < a.len() { a[lane][i] } else { b'X' };
+                let c = c & !0x20; // to uppercase
+                if !bases.contains(&c) {
+                    bases.push(c);
+                }
+                query_profile[i][lane] = bases.iter().position(|&x| x == c).unwrap();
+            }
         }
         (Iupac { bases }, query_profile)
     }
