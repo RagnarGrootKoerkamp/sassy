@@ -1,10 +1,11 @@
-use needletail::{FastxReader, parse_fastx_file, parse_fastx_stdin};
+use paraseq::fastx::RefRecord;
+use paraseq::prelude::ParallelReader;
 use sassy::CachedRev;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex; //Todo: could use parking_lot mutex - faster
+use std::sync::atomic::AtomicUsize; //Todo: could use parking_lot mutex - faster
 
 /// Each batch of text records will be at most this size if possible.
-const DEFAULT_BATCH_BYTES: usize = 1024 * 1024; // 1 MiB
+const DEFAULT_BATCH_SIZE: usize = 1024 * 1024; // 1 MiB
 
 /// Type alias for fasta record IDs.
 pub type ID = String;
@@ -25,21 +26,6 @@ pub struct TextRecord {
     pub quality: Vec<u8>,
 }
 
-/// A batch of alignment tasks, with total text size around `DEFAULT_BATCH_BYTES`.
-/// This avoids lock contention of sending too small items across threads.
-///
-/// Each task represents searching _all_ patterns against _all_ text records.
-pub type TaskBatch<'a> = (&'a Path, &'a [PatternRecord], Vec<TextRecord>);
-
-struct RecordState {
-    /// The current fasta reader.
-    reader: Box<dyn FastxReader + Send>,
-    /// The next file index.
-    cur_file_index: usize,
-    /// The next batch id.
-    next_batch_id: usize,
-}
-
 /// Thread-safe iterator giving *batches* of (pattern, text) pairs.
 /// Each batch searches at least `batch_byte_limit` bytes of text.
 ///
@@ -47,136 +33,58 @@ struct RecordState {
 pub struct InputIterator<'a> {
     patterns: &'a [PatternRecord],
     paths: &'a Vec<PathBuf>,
-    state: Mutex<RecordState>,
-    batch_byte_limit: usize,
-    rev: bool,
-}
+    batch_size: usize,
 
-fn parse_file(path: &PathBuf) -> Box<dyn FastxReader> {
-    if path == Path::new("") || path == Path::new("-") {
-        return parse_fastx_stdin().unwrap();
-    } else {
-        return parse_fastx_file(path).unwrap();
-    }
+    batch_id: AtomicUsize,
 }
 
 impl<'a> InputIterator<'a> {
     /// Create a new iterator over `fasta_path`, going through `patterns`.
-    /// `max_batch_bytes` controls how many texts are bundled together.
+    /// `max_batch_bytes` controls the amount of text to be searched per batch.
     pub fn new(
         paths: &'a Vec<PathBuf>,
         patterns: &'a [PatternRecord],
-        max_batch_bytes: Option<usize>,
-        rev: bool,
+        batch_size: Option<usize>,
     ) -> Self {
-        let reader = parse_file(&paths[0]);
-        // Just empty state when we create the iterator
-        let state = RecordState {
-            reader,
-            cur_file_index: 0,
-            next_batch_id: 0,
-        };
         Self {
             patterns,
             paths,
-            state: Mutex::new(state),
-            batch_byte_limit: max_batch_bytes.unwrap_or(DEFAULT_BATCH_BYTES),
-            rev,
+            batch_id: AtomicUsize::new(0),
+            batch_size: batch_size.unwrap_or(DEFAULT_BATCH_SIZE),
         }
     }
 
     /// Get the next batch, or returns None when done.
-    pub fn next_batch(&self) -> Option<(usize, TaskBatch<'a>)> {
-        let mut state = self.state.lock().unwrap();
-        let batch_id = state.next_batch_id;
-        state.next_batch_id += 1;
-        let mut batch: TaskBatch<'a> =
-            (&self.paths[state.cur_file_index], self.patterns, Vec::new());
-        let mut bytes_in_batch = 0usize;
-
-        // Effectively this gets a record, add all patterns, then tries
-        // to push another text record, if possible. This way texts
-        // are only 'read' from the Fasta file once.
-
-        'outer: loop {
-            // Make sure we have a current record, just so we can unwrap
-            let current_record = loop {
-                match state.reader.next() {
-                    Some(Ok(rec)) => {
-                        let id = String::from_utf8(rec.id().to_vec()).unwrap().to_string();
-                        let seq = rec.seq().into_owned();
-                        // RC is computed later to avoid blocking the reader.
-                        let static_text = CachedRev::new(seq, false);
-                        break TextRecord {
-                            id,
-                            seq: static_text,
-                            quality: rec.qual().unwrap_or(&[]).to_vec(),
-                        };
-                    }
-                    Some(Err(e)) => panic!("Error reading FASTA record: {e}"),
-                    None => {
-                        // Reached end of reader, initialize for next file.
-                        let end_of_files = state.cur_file_index + 1 >= self.paths.len();
-                        if !end_of_files {
-                            state.cur_file_index += 1;
-                            if state.cur_file_index < self.paths.len() {
-                                state.reader = parse_file(&self.paths[state.cur_file_index]);
-                            }
-                        }
-
-                        // Return last batch for the current file.
-                        if !batch.2.is_empty() {
-                            break 'outer;
-                        }
-                        if end_of_files {
-                            return None;
-                        }
-
-                        // Start reading next file.
-                        continue;
-                    }
-                }
+    pub fn process(
+        &mut self,
+        num_threads: usize,
+        f: impl FnMut(usize, &'a Path, &'a [PatternRecord], &mut dyn Iterator<Item = RefRecord>)
+        + Clone
+        + Send,
+    ) {
+        for path in self.paths {
+            let mut reader = paraseq::fastx::Reader::from_path(path).unwrap();
+            reader.update_batch_size_in_bp(self.batch_size).unwrap();
+            let batch_id = &self.batch_id;
+            let patterns = &self.patterns;
+            let mut f = f.clone();
+            let mut processor = move |record_batch: &mut dyn Iterator<Item = RefRecord>| {
+                let batch_id = batch_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                f(batch_id, path, patterns, record_batch);
+                Ok(())
             };
 
-            // We get the ref to the current record we have available
-            let record_len = current_record.seq.text.len();
-            bytes_in_batch += record_len * self.patterns.len();
-
-            log::trace!(
-                "Push record of len {record_len:>5} total len {bytes_in_batch:>8} limit {}",
-                self.batch_byte_limit
-            );
-
-            // Add next pattern
-            batch.2.push(current_record);
-
-            // When exceeding batch limit, return current batch.
-            if bytes_in_batch >= self.batch_byte_limit {
-                break;
-            }
+            reader
+                .process_parallel(&mut processor, num_threads)
+                .unwrap();
         }
-
-        drop(state);
-
-        if self.rev {
-            for text_record in &mut batch.2 {
-                text_record.seq.initialize_rev();
-            }
-        }
-
-        log::debug!(
-            "Batch {batch_id:>3}: {} seqs of {} bytes total",
-            batch.2.len(),
-            bytes_in_batch
-        );
-
-        return Some((batch_id, batch));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paraseq::Record;
     use rand::Rng;
     use std::io::Write;
     use tempfile::NamedTempFile;
@@ -219,23 +127,15 @@ mod tests {
 
         // Create the iterator
         let paths = vec![file.path().to_path_buf()];
-        let iter = InputIterator::new(&paths, &patterns, Some(500), true);
+        let mut input_iterator = InputIterator::new(&paths, &patterns, Some(500));
 
-        // Pull 10 batches
-        let mut batch_id = 0;
-        while let Some(batch) = iter.next_batch() {
-            batch_id += 1;
+        input_iterator.process(1, |batch_id, _path, patterns, record_iter| {
             // Get unique texts, and then their length sum
-            let unique_texts = batch
-                .1
-                .2
-                .iter()
-                .map(|item| item.seq.text.clone())
+            let unique_texts = record_iter
+                .map(|record| record.seq().into_owned())
                 .collect::<std::collections::HashSet<_>>();
             let text_len = unique_texts.iter().map(|text| text.len()).sum::<usize>();
-            let n_patterns = batch
-                .1
-                .1
+            let n_patterns = patterns
                 .iter()
                 .map(|item| item.id.clone())
                 .collect::<std::collections::HashSet<_>>()
@@ -244,7 +144,6 @@ mod tests {
             println!(
                 "Batch {batch_id} (tot_size: {text_len}, n_texts: {n_texts}): {n_patterns} patterns"
             );
-        }
-        drop(file);
+        })
     }
 }

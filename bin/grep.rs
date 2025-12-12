@@ -2,6 +2,7 @@ use std::{
     collections::VecDeque,
     fs::File,
     io::{BufRead, Write},
+    ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -9,8 +10,9 @@ use std::{
 use colored::Colorize;
 use either::Either;
 use needletail::parse_fastx_file;
+use paraseq::{Record, fastx::RefRecord};
 use sassy::{
-    Match, Searcher, Strand,
+    CachedRev, Match, Searcher, Strand,
     pretty_print::{PrettyPrintDirection, PrettyPrintStyle},
     profiles::{Dna, Iupac, Profile},
 };
@@ -195,6 +197,44 @@ impl FilterArgs {
     }
 }
 
+#[derive(Clone)]
+struct Dropper<L, F>(L, F)
+where
+    F: for<'a> Fn(&'a mut L);
+impl<L, F> Dropper<L, F>
+where
+    F: for<'a> Fn(&'a mut L),
+{
+    fn new(local: L, f: F) -> Self {
+        Self(local, f)
+    }
+}
+impl<L, F> Deref for Dropper<L, F>
+where
+    F: for<'a> Fn(&'a mut L),
+{
+    type Target = L;
+    fn deref(&self) -> &L {
+        &self.0
+    }
+}
+impl<L, F> DerefMut for Dropper<L, F>
+where
+    F: for<'a> Fn(&'a mut L),
+{
+    fn deref_mut(&mut self) -> &mut L {
+        &mut self.0
+    }
+}
+impl<L, F> Drop for Dropper<L, F>
+where
+    F: for<'a> Fn(&'a mut L),
+{
+    fn drop(&mut self) {
+        (self.1)(&mut self.0);
+    }
+}
+
 impl Args {
     fn run(mut self) {
         if self.base.invert && self.filter.is_none() {
@@ -217,9 +257,10 @@ impl Args {
         let k = args.base.k;
         let rc = (args.base.alphabet == Alphabet::Dna || args.base.alphabet == Alphabet::Iupac)
             && !args.base.no_rc;
+        let filter = args.filter.is_some();
 
         let num_threads = args.base.threads.unwrap_or_else(num_cpus::get);
-        let task_iterator = &InputIterator::new(&args.base.paths, &patterns, Some(1024 * 1024), rc);
+        let mut input_iterator = InputIterator::new(&args.base.paths, &patterns, Some(1024 * 1024));
 
         let output = Mutex::new((
             0,
@@ -274,91 +315,89 @@ impl Args {
             Mutex::new(writer)
         });
 
-        std::thread::scope(|s| {
-            for _ in 0..num_threads {
-                let output = &output;
-                let global_histogram = &global_histogram;
-                let filter_writer = filter_writer.as_ref();
-                let match_writer = match_writer.as_ref();
-                s.spawn(move || {
-                    // Each thread has own searcher here
-                    let mut searcher = match &args.base.alphabet {
-                        Alphabet::Dna => Either::Left(Searcher::<Dna>::new(rc, args.base.overhang)),
-                        Alphabet::Iupac => {
-                            Either::Right(Searcher::<Iupac>::new(rc, args.base.overhang))
-                        }
-                    };
+        {
+            // Initialize per-thread state.
+            // Note: things will compile without turning these into references,
+            // but that will implicitly clone the underlying objects.
+            let filter_writer = filter_writer.as_ref();
+            let match_writer = match_writer.as_ref();
+            let output = &output;
+            let mut searcher = match &args.base.alphabet {
+                Alphabet::Dna => Either::Left(Searcher::<Dna>::new(rc, args.base.overhang)),
+                Alphabet::Iupac => Either::Right(Searcher::<Iupac>::new(rc, args.base.overhang)),
+            };
+            let mut local_histogram = Dropper::new(vec![0usize; k + 1], |hist| {
+                let mut global_hist = global_histogram.lock().unwrap();
+                for dist in 0..hist.len() {
+                    global_hist[dist] += hist[dist];
+                }
+            });
 
+            input_iterator.process(
+                num_threads,
+                move |batch_id: usize,
+                      path: &Path,
+                      patterns: &[PatternRecord],
+                      text_record_batch: &mut dyn Iterator<Item = RefRecord>| {
                     let mut results: Vec<(&Path, TextRecord, Vec<(&PatternRecord, Match)>)> =
                         vec![];
-                    let mut local_histogram = vec![0usize; k + 1];
-
-                    while let Some((batch_id, batch)) = task_iterator.next_batch() {
-                        let path = batch.0;
-                        for text in batch.2 {
-                            let mut batch_matches = vec![];
-                            for pattern in batch.1 {
-                                let record_matches = match &mut searcher {
-                                    Either::Left(s) => s.search(&pattern.seq, &text.seq, k),
-                                    Either::Right(s) => s.search(&pattern.seq, &text.seq, k),
-                                };
-                                batch_matches.extend(
-                                    record_matches
-                                        .into_iter()
-                                        .filter(|m| {
-                                            check_n_frac(
-                                                args.base.max_n_frac,
-                                                &text.seq.text[m.text_start..m.text_end],
-                                            )
-                                        })
-                                        .map(|m| (pattern, m)),
-                                );
-                            }
-                            for (_pat, m) in &batch_matches {
-                                local_histogram[m.cost as usize] += 1;
-                            }
-                            results.push((path, text, batch_matches));
+                    for record in text_record_batch {
+                        let text = TextRecord {
+                            id: String::from_utf8(record.id().to_vec()).unwrap(),
+                            seq: CachedRev::new(record.seq().into_owned(), rc),
+                            quality: filter
+                                .then(|| record.qual().map_or(vec![], |q| q.to_owned()))
+                                .unwrap_or_default(),
+                        };
+                        let mut batch_matches = vec![];
+                        for pattern in patterns {
+                            let record_matches = match &mut searcher {
+                                Either::Left(s) => s.search(&pattern.seq, &text.seq, k),
+                                Either::Right(s) => s.search(&pattern.seq, &text.seq, k),
+                            };
+                            batch_matches.extend(
+                                record_matches
+                                    .into_iter()
+                                    .filter(|m| {
+                                        check_n_frac(
+                                            args.base.max_n_frac,
+                                            &text.seq.text[m.text_start..m.text_end],
+                                        )
+                                    })
+                                    .map(|m| (pattern, m)),
+                            );
                         }
-
-                        let (next_batch_id, output_buf) = &mut *output.lock().unwrap();
-                        let mut filter_writer = filter_writer.map(|w| w.lock().unwrap());
-                        let mut match_writer = match_writer.map(|w| w.lock().unwrap());
-
-                        // Push to buffer.
-                        let idx = batch_id - *next_batch_id;
-                        if output_buf.len() <= idx {
-                            output_buf.resize_with(idx + 1, || None);
+                        for (_pat, m) in &batch_matches {
+                            local_histogram.0[m.cost as usize] += 1;
                         }
-                        assert!(output_buf[idx].is_none());
-                        output_buf[idx] = Some(results);
-                        results = vec![];
-
-                        // Print pending results once ready.
-                        while let Some(front) = output_buf.front()
-                            && front.is_some()
-                        {
-                            *next_batch_id += 1;
-                            let front_results = output_buf.pop_front().unwrap().unwrap();
-                            for (path, text, matches) in front_results {
-                                args.output(
-                                    path,
-                                    text,
-                                    matches,
-                                    &mut filter_writer,
-                                    &mut match_writer,
-                                );
-                            }
-                        }
+                        results.push((path, text, batch_matches));
                     }
 
-                    // Merge local histogram into global histogram.
-                    let mut global_hist = global_histogram.lock().unwrap();
-                    for dist in 0..=k {
-                        global_hist[dist] += local_histogram[dist];
+                    let (next_batch_id, output_buf) = &mut *output.lock().unwrap();
+                    let mut filter_writer = filter_writer.map(|w| w.lock().unwrap());
+                    let mut match_writer = match_writer.map(|w| w.lock().unwrap());
+
+                    // Push to buffer.
+                    let idx = batch_id - *next_batch_id;
+                    if output_buf.len() <= idx {
+                        output_buf.resize_with(idx + 1, || None);
                     }
-                });
-            }
-        });
+                    assert!(output_buf[idx].is_none());
+                    output_buf[idx] = Some(results);
+
+                    // Print pending results once ready.
+                    while let Some(front) = output_buf.front()
+                        && front.is_some()
+                    {
+                        *next_batch_id += 1;
+                        let front_results = output_buf.pop_front().unwrap().unwrap();
+                        for (path, text, matches) in front_results {
+                            args.output(path, text, matches, &mut filter_writer, &mut match_writer);
+                        }
+                    }
+                },
+            );
+        }
 
         let global_hist = global_histogram.into_inner().unwrap();
         eprint!(
