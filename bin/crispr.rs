@@ -1,12 +1,13 @@
-use crate::input_iterator::{InputIterator, PatternRecord};
+use crate::input_iterator::{InputIterator, PatternRecord, TextRecord};
+use paraseq::Record;
 use sassy::{
-    RcSearchAble, Searcher, Strand,
+    CachedRev, RcSearchAble, Searcher, Strand,
     profiles::{Iupac, Profile},
 };
-use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
+use std::{fs::File, path::Path};
 use std::{
     io::{BufWriter, Write},
     path::PathBuf,
@@ -170,7 +171,7 @@ pub fn crispr(args: &CrisprArgs) {
     let pam_compl = Iupac::complement(pam);
     let pam_compl = pam_compl.as_slice();
 
-    let total_found = AtomicUsize::new(0);
+    let total_found = &AtomicUsize::new(0);
 
     let num_threads = args.threads.unwrap_or_else(num_cpus::get);
     println!("[Threads] Using {num_threads} threads");
@@ -187,31 +188,38 @@ pub fn crispr(args: &CrisprArgs) {
 
     // Shared iterator that pairs each query with every FASTA record in a batched fashion
     let paths = vec![args.path.clone()];
-    let task_iter = InputIterator::new(&paths, &queries, None, true);
+    let mut input_iterator = InputIterator::new(&paths, &queries, None);
 
     let start = Instant::now();
-    std::thread::scope(|scope| {
-        for _ in 0..num_threads {
-            scope.spawn(|| {
-                // Searcher, IUPAC and always reverse complement
-                let mut searcher = if args.no_rc {
-                    Searcher::<Iupac>::new_fwd()
-                } else {
-                    Searcher::<Iupac>::new_rc()
-                };
 
-                let filter_fn = |_q: &[u8], text_up_to_end: &[u8], strand: Strand| {
-                    let pam_slice = &text_up_to_end[text_up_to_end.len() - 3..];
-                    if strand == Strand::Fwd {
-                        matching_seq::<Iupac>(pam_slice, pam)
-                    } else {
-                        matching_seq::<Iupac>(pam_slice, pam_compl)
-                    }
-                };
+    // IUPAC searcher
+    let mut searcher = if args.no_rc {
+        Searcher::<Iupac>::new_fwd()
+    } else {
+        Searcher::<Iupac>::new_rc()
+    };
 
-                while let Some((_batch_id, batch)) = task_iter.next_batch() {
-                    for text in batch.2 {
-                        for pattern in batch.1 {
+    let filter_fn = |_q: &[u8], text_up_to_end: &[u8], strand: Strand| {
+        let pam_slice = &text_up_to_end[text_up_to_end.len() - 3..];
+        if strand == Strand::Fwd {
+            matching_seq::<Iupac>(pam_slice, pam)
+        } else {
+            matching_seq::<Iupac>(pam_slice, pam_compl)
+        }
+    };
+
+    input_iterator.process(num_threads,
+                move |_batch_id: usize,
+                      _path: &Path,
+                      patterns: &[PatternRecord],
+                      text_record_batch: &mut dyn Iterator<Item = paraseq::fastx::RefRecord>| {
+                for record in text_record_batch {
+                    let text = TextRecord {
+                        id: String::from_utf8(record.id().to_vec()).unwrap(),
+                        seq: CachedRev::new(record.seq().into_owned(), true),
+                        quality: vec![],
+                    };
+                        for pattern in patterns {
                             let guide_sequence = &pattern.seq;
                             let guide_string = String::from_utf8_lossy(guide_sequence);
                             let id_text = &text;
@@ -272,10 +280,7 @@ pub fn crispr(args: &CrisprArgs) {
                             drop(writer_guard);
                         }
                     }
-                }
-            });
-        }
-    });
+                });
 
     println!("\nSummary");
     println!(

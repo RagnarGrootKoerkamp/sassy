@@ -150,7 +150,9 @@ impl<T: AsRef<[u8]>> CachedRev<T> {
         CachedRev { text, rev }
     }
     pub fn initialize_rev(&mut self) {
-        self.rev = Some(self.text.as_ref().iter().rev().copied().collect());
+        if self.rev.is_none() {
+            self.rev = Some(self.text.as_ref().iter().rev().copied().collect());
+        }
     }
 }
 
