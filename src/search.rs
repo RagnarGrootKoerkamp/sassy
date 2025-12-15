@@ -181,16 +181,18 @@ impl<P: Profile> LaneState<P> {
     fn update_and_encode(&mut self, text: &[u8], i: usize, profiler: &P, overhang: bool) {
         let start = self.chunk_offset * 64 + 64 * i;
         self.lane_end = start + 64;
-        if start + 64 <= text.len() {
-            self.text_slice.copy_from_slice(&text[start..start + 64]);
+
+        if let Some(src_slice) = text.get(start..start + 64) {
+            self.text_slice.copy_from_slice(src_slice);
         } else {
-            // Pad with N, so that costs at the end are diagonally preserved.
             self.text_slice.fill(if overhang { b'N' } else { b'X' });
-            if start <= text.len() {
-                let slice = &text[start..];
-                self.text_slice[..slice.len()].copy_from_slice(slice);
+
+            if start < text.len() {
+                let len = text.len() - start;
+                self.text_slice[..len].copy_from_slice(&text[start..]);
             }
         }
+
         profiler.encode_ref(&self.text_slice, &mut self.text_profile);
     }
 }
@@ -296,6 +298,114 @@ impl<'x, I: RcSearchAble + ?Sized> MultiRcText<'x, I> {
             MultiRcText::One(t) => Some(t),
             MultiRcText::Multi(ts) => ts.as_ref().get(lane).copied(),
         }
+    }
+}
+
+pub struct PatternChunk<'a, P: Profile + 'a> {
+    patterns: &'a [&'a [u8]],
+    pattern_chunk_idx: usize,
+    profiler: P,
+    pattern_len: usize,
+    pattern_profiles: Vec<[P::A; LANES]>,
+    lane_states: Vec<LaneState<P>>,
+    vp: S,
+    vm: S,
+    hp: Vec<S>,
+    hm: Vec<S>,
+    prev_max_j: usize,
+    prev_end_last_below: usize,
+    dist_to_start_of_lane: S,
+    dist_to_end_of_lane: S,
+    cur_end_last_below: usize,
+}
+
+impl<'a, P: Profile> PatternChunk<'a, P> {
+    fn new(patterns: &'a [&'a [u8]], pattern_chunk_idx: usize) -> Self {
+        assert!(patterns.len() <= LANES);
+        let pattern_len = patterns[0].len();
+        for pattern in patterns {
+            if pattern.len() != pattern_len {
+                panic!("All patterns must have the same length");
+            }
+            if !P::valid_seq(pattern) {
+                panic!("Invalid pattern: {:?}", pattern);
+            }
+        }
+        let (profiler, pattern_profiles) = P::encode_patterns(patterns);
+
+        let mut lane_states = Vec::new();
+        for _ in 0..LANES {
+            lane_states.push(LaneState::new(P::alloc_out(), 0));
+        }
+        PatternChunk {
+            patterns,
+            pattern_chunk_idx,
+            profiler,
+            pattern_len,
+            pattern_profiles,
+            lane_states,
+            vp: S::splat(0),
+            vm: S::splat(0),
+            hp: Vec::new(),
+            hm: Vec::new(),
+            prev_max_j: 0,
+            prev_end_last_below: 0,
+            dist_to_start_of_lane: S::splat(0),
+            dist_to_end_of_lane: S::splat(0),
+            cur_end_last_below: 0,
+        }
+    }
+
+    #[inline(always)]
+    fn fill_lanes(&mut self, text: &[u8], i: usize, alpha: Option<f32>) {
+        //for lane in 0..LANES {
+        self.lane_states[0].update_and_encode(text, i, &self.profiler, alpha.is_some());
+        //}
+    }
+
+    #[inline(always)]
+    fn reset_per_text_block(&mut self) {
+        self.vp = S::splat(0);
+        self.vm = S::splat(0);
+        self.dist_to_start_of_lane = S::splat(0);
+        self.dist_to_end_of_lane = S::splat(0);
+        self.cur_end_last_below = 0;
+    }
+
+    #[inline(always)]
+    fn reset_before_text(&mut self) {
+        self.hp.clear();
+        self.hm.clear();
+        self.hp.resize(self.pattern_len, S::splat(1));
+        self.hm.resize(self.pattern_len, S::splat(0));
+
+        // Start index in text of each chunk.
+        for lane in 0..LANES {
+            self.lane_states[lane].chunk_offset = 0; // All lanes search the same text
+            self.lane_states[lane].matches.clear();
+            self.lane_states[lane].decreasing = true;
+        }
+
+        self.prev_max_j = 0;
+        self.prev_end_last_below = 0;
+    }
+
+    #[inline(always)]
+    fn reset_pattern_chunk_rows(&mut self, from_row: usize, to_row: usize) {
+        for j2 in from_row..=to_row {
+            self.hp[j2] = S::splat(1);
+            self.hm[j2] = S::splat(0);
+        }
+    }
+
+    #[inline(always)]
+    fn get_lane(&self, lane: usize) -> &[u8] {
+        self.patterns[lane]
+    }
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.pattern_len
     }
 }
 
@@ -459,6 +569,414 @@ impl<P: Profile> Searcher<P> {
         }
 
         matches
+    }
+
+    pub fn encode_patterns<'a>(&self, patterns: &'a [&'a [u8]]) -> Vec<PatternChunk<'a, P>> {
+        // First we chunk the patterns into LANES chunks
+        let n_pattern_chunks = patterns.len().div_ceil(LANES);
+        let mut pattern_chunks: Vec<PatternChunk<P>> = Vec::with_capacity(n_pattern_chunks);
+        for pattern_chunk in 0..n_pattern_chunks {
+            let max_idx = (pattern_chunk + 1) * LANES;
+            let patterns = &patterns[pattern_chunk * LANES..max_idx.min(patterns.len())];
+            pattern_chunks.push(PatternChunk::new(patterns, pattern_chunk));
+        }
+        pattern_chunks
+    }
+
+    #[inline(always)]
+    pub fn search_patterns_flipped_with_encoded(
+        &mut self,
+        pattern_chunks: &mut [PatternChunk<P>],
+        text: &[u8],
+        k: usize,
+        all_minima: bool,
+    ) -> Vec<(usize, Match)> {
+        let mut matches = vec![];
+        // Find all matches, stored in lanes for each block
+        self.search_patterns_flipped_single_strand(pattern_chunks, text, k as Cost, all_minima);
+
+        // Process matches per block
+        for pattern_chunk in pattern_chunks.iter_mut() {
+            matches.extend(
+                self.process_matches_flipped(
+                    pattern_chunk,
+                    text,
+                    k as Cost,
+                    &pattern_chunk.lane_states,
+                )
+                .into_iter()
+                .map(|(lane, m)| ((pattern_chunk.pattern_chunk_idx * LANES) + lane, m)),
+            );
+        }
+
+        matches
+    }
+
+    pub fn search_patterns_flipped(
+        &mut self,
+        patterns: &[&[u8]],
+        text: &[u8],
+        k: usize,
+        all_minima: bool,
+    ) -> Vec<(usize, Match)> {
+        let mut pattern_chunks = self.encode_patterns(patterns);
+        self.search_patterns_flipped_with_encoded(&mut pattern_chunks, text, k, all_minima)
+    }
+
+    #[inline(always)]
+    fn get_pattern_stats(
+        text: &[u8],
+        pattern_chunks: &[PatternChunk<P>],
+        alpha: Option<f32>,
+        max_overhang: Option<usize>,
+        k: i32,
+    ) -> (usize, usize, usize) {
+        // How long we continue beyond the text now depends on the longets pattern
+        // across *all* patterns
+        let max_pattern_len = pattern_chunks
+            .iter()
+            .map(|p| p.pattern_len)
+            .max()
+            .unwrap_or(0);
+        let text_padding = if alpha.is_some() {
+            max_pattern_len
+                .min(((k as f32) / alpha.unwrap()).ceil() as usize)
+                .min(max_overhang.unwrap_or(usize::MAX))
+        } else {
+            0
+        };
+
+        // Total number of blocks to be processed, including overlaps.
+        let blocks_per_chunk = (text.len() + text_padding).div_ceil(64);
+
+        // Length of each of the four chunks.
+        let chunk_offset = 0;
+
+        // No overlap here, each pattern against same text slice
+        let max_overlap_blocks = 0;
+
+        (blocks_per_chunk, max_overlap_blocks, chunk_offset)
+    }
+
+    #[inline(always)]
+    fn search_patterns_flipped_single_strand(
+        &mut self,
+        pattern_chunks: &mut [PatternChunk<P>],
+        text: &[u8],
+        k: Cost,
+        all_minima: bool,
+    ) {
+        let (blocks_per_chunk, max_overlap_blocks, _chunk_offset) =
+            Self::get_pattern_stats(text, pattern_chunks, self.alpha, self.max_overhang, k);
+
+        let k_threshold = S::splat(k as u64 + 1);
+
+        for pattern_chunk in pattern_chunks.iter_mut() {
+            pattern_chunk.reset_before_text();
+            init_deltas_for_overshoot_all_lanes(
+                &mut pattern_chunk.hp,
+                self.alpha,
+                self.max_overhang,
+            );
+        }
+
+        'text_chunk: for i in 0..blocks_per_chunk + max_overlap_blocks {
+            'pattern_chunk: for pattern_chunk in pattern_chunks.iter_mut() {
+                pattern_chunk.reset_per_text_block();
+                pattern_chunk.fill_lanes(text, i, self.alpha);
+
+                let mut vp = pattern_chunk.vp;
+                let mut vm = pattern_chunk.vm;
+                let mut dist_start = pattern_chunk.dist_to_start_of_lane;
+                let mut dist_end = pattern_chunk.dist_to_end_of_lane;
+
+                for j in 0..pattern_chunk.pattern_len {
+                    let hp = unsafe { pattern_chunk.hp.get_unchecked_mut(j) };
+                    let hm = unsafe { pattern_chunk.hm.get_unchecked_mut(j) };
+
+                    dist_start += *hp;
+                    dist_start -= *hm;
+
+                    let eq = S::from(std::array::from_fn(|lane| {
+                        P::eq(
+                            &pattern_chunk.pattern_profiles[j][lane],
+                            &pattern_chunk.lane_states[0].text_profile,
+                        )
+                    }));
+
+                    compute_block_simd(hp, hm, &mut vp, &mut vm, eq);
+
+                    'check: {
+                        dist_end += *hp;
+                        dist_end -= *hm;
+
+                        {
+                            let cmp = dist_end.simd_lt(k_threshold);
+                            let end_leq_k = cmp != wide::u64x4::splat(0);
+
+                            pattern_chunk.cur_end_last_below = if end_leq_k {
+                                j
+                            } else {
+                                pattern_chunk.cur_end_last_below
+                            };
+                        }
+
+                        if j > pattern_chunk.prev_end_last_below {
+                            if let Some(new_end) = self.check_lanes(&vp, &vm, &dist_start, k, j) {
+                                pattern_chunk.prev_end_last_below = new_end;
+                                break 'check;
+                            }
+
+                            pattern_chunk.reset_pattern_chunk_rows(j + 1, pattern_chunk.prev_max_j);
+                            pattern_chunk.prev_end_last_below = pattern_chunk
+                                .cur_end_last_below
+                                .max(Self::CHECK_AT_LEAST_ROWS);
+                            pattern_chunk.prev_max_j = j;
+
+                            if self.should_terminate_early(i, blocks_per_chunk, j, k) {
+                                break 'pattern_chunk;
+                            }
+                            continue 'pattern_chunk;
+                        }
+                    }
+                }
+
+                pattern_chunk.vp = vp;
+                pattern_chunk.vm = vm;
+                pattern_chunk.dist_to_start_of_lane = dist_start;
+
+                for lane in 0..LANES {
+                    let v = V::from(
+                        pattern_chunk.vp.as_array()[lane],
+                        pattern_chunk.vm.as_array()[lane],
+                    );
+                    let base_pos = pattern_chunk.lane_states[lane].chunk_offset * 64 + 64 * i;
+                    let cost = pattern_chunk.dist_to_start_of_lane.as_array()[lane] as Cost;
+
+                    let min_in_lane =
+                        self.min_in_lane(v, lane, &pattern_chunk.dist_to_start_of_lane);
+                    if min_in_lane > k {
+                        continue;
+                    }
+
+                    self.find_minima_with_overhang_flipped(
+                        v,
+                        cost,
+                        k,
+                        text.len(),
+                        pattern_chunk.pattern_len,
+                        base_pos,
+                        lane,
+                        all_minima,
+                        &mut pattern_chunk.lane_states,
+                    );
+                }
+
+                pattern_chunk.prev_end_last_below = pattern_chunk
+                    .cur_end_last_below
+                    .max(Self::CHECK_AT_LEAST_ROWS);
+                pattern_chunk.prev_max_j = pattern_chunk.pattern_len - 1;
+            }
+        }
+
+        for pattern_chunk in pattern_chunks.iter_mut() {
+            pattern_chunk.reset_pattern_chunk_rows(0, pattern_chunk.prev_max_j);
+        }
+    }
+
+    #[inline(always)]
+    fn find_minima_with_overhang_flipped(
+        &mut self,
+        v: V,
+        cur_cost: Cost,
+        k: Cost,
+        text_len: usize,
+        pattern_len: usize,
+        base_pos: usize,
+        lane: usize,
+        all_minima: bool,
+        lanes: &mut [LaneState<P>],
+    ) {
+        let (p, m) = v.pm();
+        let max_pos = if self.alpha.is_some() {
+            text_len
+                + pattern_len
+                    .min(((k as f32) / self.alpha.unwrap()).ceil() as usize)
+                    .min(self.max_overhang.unwrap_or(usize::MAX))
+        } else {
+            text_len
+        };
+
+        let mut cost = cur_cost;
+        let mut prev_cost = self.add_overshoot_cost(cur_cost, base_pos, text_len);
+        let mut prev_pos = base_pos;
+
+        if base_pos >= max_pos {
+            if base_pos == max_pos {
+                if lanes[lane].decreasing && prev_cost <= k {
+                    log::trace!("lane {lane} push {prev_pos} {prev_cost} <last>");
+                    lanes[lane].matches.push((prev_pos, prev_cost));
+                }
+            }
+
+            return;
+        }
+
+        for bit in 1..=64 {
+            cost += ((p >> (bit - 1)) & 1) as Cost;
+            cost -= ((m >> (bit - 1)) & 1) as Cost;
+
+            let pos: usize = base_pos + bit;
+            if pos > max_pos {
+                if !all_minima && lanes[lane].decreasing && prev_cost <= k {
+                    log::trace!("lane {lane} push {prev_pos} {prev_cost} <last>");
+                    lanes[lane].matches.push((prev_pos, prev_cost));
+                }
+                break;
+            }
+
+            let total_cost = self.add_overshoot_cost(cost, pos, text_len);
+
+            if all_minima {
+                if total_cost <= k {
+                    log::debug!("MATCH: lane {lane} push {prev_pos} {prev_cost}");
+                    lanes[lane].matches.push((pos, total_cost));
+                }
+            } else {
+                log::trace!("lane {lane}      {pos} {total_cost}");
+                let costs_are_equal = total_cost == prev_cost;
+                let costs_are_increasing = total_cost > prev_cost;
+                let costs_are_decreasing = total_cost < prev_cost;
+
+                if lanes[lane].decreasing && costs_are_increasing && prev_cost <= k {
+                    log::debug!("MATCH: lane {lane} push {prev_pos} {prev_cost}");
+                    lanes[lane].matches.push((prev_pos, prev_cost));
+                }
+
+                // Update decreasing state:
+                // - If costs are decreasing, we're in a decreasing sequence
+                // - If costs are equal, keep the previous state
+                // - If costs are increasing, we're not decreasing
+                lanes[lane].decreasing =
+                    costs_are_decreasing || (lanes[lane].decreasing && costs_are_equal);
+            }
+
+            prev_cost = total_cost;
+            prev_pos = pos;
+        }
+
+        // We can have a match ending exactly at the end of the text
+        // todo: not sure if this is handled in original code though less likely
+        // there due to chunking
+        if prev_pos >= text_len {
+            if lanes[lane].decreasing && prev_cost <= k {
+                log::trace!("lane {lane} push {prev_pos} {prev_cost} <last>");
+                lanes[lane].matches.push((prev_pos, prev_cost));
+            }
+        }
+    }
+
+    fn process_matches_flipped<'t>(
+        &mut self,
+        pattern_chunk: &PatternChunk<'t, P>,
+        text: &[u8],
+        k: Cost,
+        lanes: &[LaneState<P>],
+    ) -> Vec<(usize, Match)> {
+        let mut traces = Vec::new();
+        let fill_len = pattern_chunk.len() + k as usize;
+
+        // Collect slices to process in batches
+        let mut batch = MatchBatch::new();
+
+        if self.only_best_match {
+            let mut best = [(Cost::MAX, Reverse(0), 0, [].as_slice(), [].as_slice()); LANES];
+            for lane in 0..LANES {
+                for &(end_pos, cost) in &lanes[lane].matches {
+                    let offset = end_pos.saturating_sub(fill_len);
+                    let slice = &text[offset..end_pos.min(text.len())];
+
+                    // rightmost match with minimal cost
+                    best[lane] = best[lane].min((
+                        cost,
+                        Reverse(end_pos),
+                        offset,
+                        pattern_chunk.get_lane(lane),
+                        slice,
+                    ));
+                }
+            }
+
+            let without_trace = self.without_trace;
+            for lane in 0..LANES {
+                let best_match = best[lane];
+                if best_match.0 != Cost::MAX {
+                    let (cost, Reverse(end_pos), offset, pattern, slice) = best_match;
+                    if without_trace {
+                        traces.push((
+                            lane,
+                            Match {
+                                text_start: usize::MAX,
+                                text_end: end_pos.min(text.len()),
+                                pattern_start: usize::MAX,
+                                pattern_end: pattern.len() - end_pos.saturating_sub(text.len()),
+                                cost,
+                                strand: Strand::Fwd,
+                                cigar: Cigar::default(),
+                            },
+                        ));
+                    } else {
+                        batch.add(
+                            lane,
+                            pattern_chunk.get_lane(lane),
+                            slice,
+                            offset,
+                            end_pos,
+                            cost,
+                        );
+                    }
+                }
+            }
+        } else {
+            for lane in 0..LANES {
+                for &(end_pos, cost) in &lanes[lane].matches {
+                    let offset = end_pos.saturating_sub(fill_len);
+                    let slice = &text[offset..end_pos.min(text.len())];
+
+                    batch.add(
+                        lane,
+                        pattern_chunk.get_lane(lane),
+                        slice,
+                        offset,
+                        end_pos,
+                        cost,
+                    );
+
+                    if batch.is_full() {
+                        traces.extend(batch.process::<P>(
+                            fill_len,
+                            &mut self.cost_matrices,
+                            self.alpha,
+                            self.max_overhang,
+                            k,
+                        ));
+                        batch.clear();
+                    }
+                }
+            }
+        }
+
+        if !batch.is_empty() {
+            traces.extend(batch.process::<P>(
+                fill_len,
+                &mut self.cost_matrices,
+                self.alpha,
+                self.max_overhang,
+                k,
+            ));
+        }
+
+        traces
     }
 
     /// Search multiple similar-length patterns in chunks of `LANES` at a time.
@@ -828,6 +1346,7 @@ impl<P: Profile> Searcher<P> {
                 let Some(t) = text.get_lane(lane) else {
                     break;
                 };
+                let t = text.get_lane(lane).unwrap();
                 self.lanes[lane].update_and_encode(t, i, &profiler, self.alpha.is_some());
             }
 
@@ -1037,6 +1556,7 @@ impl<P: Profile> Searcher<P> {
                 let Some(t) = text.get_lane(lane) else {
                     break;
                 };
+                let t: &[u8] = text.get_lane(lane).unwrap();
                 self.lanes[lane].update_and_encode(t, i, &profiler, self.alpha.is_some());
             }
 
@@ -1341,6 +1861,7 @@ impl<P: Profile> Searcher<P> {
                 let Some(t) = text.get_lane(lane) else {
                     break;
                 };
+                let t = text.get_lane(lane).unwrap();
                 for &(end_pos, cost) in &self.lanes[lane].matches {
                     let offset = end_pos.saturating_sub(fill_len);
                     let slice = &t[offset..end_pos.min(t.len())];
@@ -2904,6 +3425,202 @@ mod tests {
                     assert!(matches_new.contains(&(i, m.clone())));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_search_patterns_flipped() {
+        let patterns = [b"GGG".as_ref(), b"TTG".as_ref()];
+        let text = b"XXXXXXATGXXXXXTTGXXXXATGXXX";
+        let mut searcher = Searcher::<Iupac>::new_fwd();
+        let matches = searcher.search_patterns_flipped(&patterns, text, 0, false);
+        assert_eq!(matches.len(), 1); // Only TTG matches exactly
+    }
+
+    #[test]
+    fn test_search_patterns_flipped_pre_encoded() {
+        let patterns = vec![b"GGG".as_ref(), b"TTG".as_ref()];
+        let text = b"XXXXXXATGXXXXXTTGXXXXATGXXX";
+        let mut searcher = Searcher::<Iupac>::new_fwd();
+        let mut pattern_chunks = searcher.encode_patterns(&patterns);
+        let matches =
+            searcher.search_patterns_flipped_with_encoded(&mut pattern_chunks, text, 0, false);
+        println!("matches: {:?}", matches);
+        assert_eq!(matches.len(), 1); // Only TTG matches exactly
+    }
+
+    #[test]
+    fn search_vs_search_patterns_flipped_fuzz() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let mut searcher: Searcher<Iupac> = Searcher::<Iupac>::new_fwd();
+
+        for test_iter in 0..100_000 {
+            eprintln!("\nTest iteration {test_iter}");
+            let num_patterns = rng.random_range(1..=10);
+
+            let pattern_len = rng.random_range(10..=20);
+            let patterns: Vec<Vec<u8>> = (0..num_patterns)
+                .map(|_| {
+                    (0..pattern_len)
+                        .map(|_| b"ACGT"[rng.random_range(0..4)])
+                        .collect()
+                })
+                .collect();
+
+            let text_len = rng.random_range(80..=200);
+            let text: Vec<u8> = (0..text_len)
+                .map(|_| b"ACGT"[rng.random_range(0..4)])
+                .collect();
+
+            let individual_results: Vec<Vec<Match>> = patterns
+                .iter()
+                .map(|pattern| searcher.search(pattern, &text, 2))
+                .collect();
+
+            let pattern_refs: Vec<&[u8]> = patterns.iter().map(|p| p.as_slice()).collect();
+            let batch_results = searcher.search_patterns_flipped(&pattern_refs, &text, 2, false);
+
+            let mut batch_by_pattern: Vec<Vec<Match>> = vec![vec![]; num_patterns];
+            for (pattern_idx, match_result) in batch_results {
+                batch_by_pattern[pattern_idx].push(match_result);
+            }
+            for batch_results in &mut batch_by_pattern {
+                batch_results.sort_by_key(|m| (m.text_start, m.text_end, m.cost));
+                batch_results.dedup_by_key(|m| (m.text_start, m.text_end, m.cost));
+            }
+            for (pattern_idx, (individual, batch)) in individual_results
+                .into_iter()
+                .zip(batch_by_pattern)
+                .enumerate()
+            {
+                let mut individual_sorted = individual;
+                individual_sorted.sort_by_key(|m| (m.text_start, m.text_end, m.cost));
+
+                if individual_sorted != batch {
+                    eprintln!(
+                        "Test iteration {} failed for pattern {}! with k",
+                        test_iter, pattern_idx
+                    );
+                    eprintln!(
+                        "Pattern: {:?}",
+                        String::from_utf8_lossy(&patterns[pattern_idx])
+                    );
+                    eprintln!("Text length: {}", text_len);
+                    eprintln!("Text: {:?}", String::from_utf8_lossy(&text));
+                    eprintln!("Individual results ({}):", individual_sorted.len());
+                    for m in &individual_sorted {
+                        eprintln!("  {:?} {}", m.without_cigar(), m.cigar.to_string());
+                    }
+                    eprintln!("Batch results ({}):", batch.len());
+                    for m in &batch {
+                        eprintln!("  {:?} {}", m.without_cigar(), m.cigar.to_string());
+                    }
+                    panic!(
+                        "Results don't match for pattern {} in test iteration {}",
+                        pattern_idx, test_iter
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn profile_search_patterns_flipped() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let text_len = 100_000;
+        let text: Vec<u8> = (0..text_len)
+            .map(|_| b"ACGT"[rng.random_range(0..4)])
+            .collect();
+
+        let num_patterns = 100;
+        let pattern_len = rng.random_range(10..=50);
+        let patterns: Vec<Vec<u8>> = (0..num_patterns)
+            .map(|_| {
+                (0..pattern_len)
+                    .map(|_| b"ACGT"[rng.random_range(0..4)])
+                    .collect()
+            })
+            .collect();
+
+        let mut searcher = Searcher::<Iupac>::new_fwd();
+
+        let pattern_refs: Vec<&[u8]> = patterns.iter().map(|p| p.as_slice()).collect();
+        let mut pattern_chunks = searcher.encode_patterns(&pattern_refs);
+
+        let start = std::time::Instant::now();
+        let matches = searcher.search_patterns_flipped_with_encoded(
+            &mut pattern_chunks,
+            &text,
+            5,    // edit distance
+            true, // all_minima
+        );
+        let duration = start.elapsed();
+
+        println!("Search completed in {:?}", duration);
+        println!("Found {} matches across all patterns", matches.len());
+
+        let mut matches_by_pattern = vec![0; num_patterns];
+        for (pattern_idx, _) in matches {
+            if pattern_idx < num_patterns {
+                matches_by_pattern[pattern_idx] += 1;
+            }
+        }
+
+        let total_matches: usize = matches_by_pattern.iter().sum();
+        let avg_matches = total_matches as f64 / num_patterns as f64;
+        let max_matches = matches_by_pattern.iter().max().unwrap();
+        let min_matches = matches_by_pattern.iter().min().unwrap();
+
+        println!(
+            "Matches per pattern - Avg: {:.2}, Min: {}, Max: {}",
+            avg_matches, min_matches, max_matches
+        );
+    }
+
+    #[test]
+    fn fix_multi_pattern_bug() {
+        /*
+                internal
+        Individual pattern 0 matches: []
+        Individual pattern 1 matches: []
+        Individual pattern 2 matches: []
+        Individual pattern 3 matches: []
+        Individual pattern 4 matches: []
+        Individual pattern 5 matches: []
+        Individual pattern 6 matches: []
+        Individual pattern 7 matches: [Match { text_start: 109, text_end: 121, pattern_start: 0, pattern_end: 12, cost: 2, strand: Fwd, cigar: "1=2X9=" }]
+        Individual pattern 8 matches: []
+        Test iteration 48 failed for pattern 7!
+        Pattern: "TTATGGTAGTAG"
+        Text length: 187
+        Text: "CGCTTCAAACGACACTTTGGCGCCTACCCCTAAACCACCGCATGCCATTAACTGGGGAGAGAGGAAGGCTCCGAGGCTGTATATCTCATAGGGGTGGTACACTGAAACATCGTGGTAGTAGTGCGTCGTAGGTACCACGCTCTGCGGGGCGGGTAGCTCAGATCAATGACACACACAGATTCGTGTA"
+        Individual results (1):
+          Match { text_start: 109, text_end: 121, pattern_start: 0, pattern_end: 12, cost: 2, strand: Fwd, cigar: "" } 1=2X9=
+        Batch results (0):
+
+        */
+        let mock_pattern = b"XXXXXXXXXXXX".to_vec();
+        let patterns = [
+            mock_pattern.as_ref(),
+            mock_pattern.as_ref(),
+            mock_pattern.as_ref(),
+            mock_pattern.as_ref(),
+            b"TTATGGTAGTAG".as_ref(),
+        ];
+        let text = b"CGCTTCAAACGACACTTTGGCGCCTACCCCTAAACCACCGCATGCCATTAACTGGGGAGAGAGGAAGGCTCCGAGGCTGTATATCTCATAGGGGTGGTACACTGAAACATCGTGGTAGTAGTGCGTCGTAGGTACCACGCTCTGCGGGGCGGGTAGCTCAGATCAATGACACACACAGATTCGTGTA".to_vec();
+        let mut searcher = Searcher::<Iupac>::new_fwd();
+        let matches = searcher.search_patterns_flipped(&patterns, &text, 3, false);
+        for (idx, m) in matches.iter() {
+            println!("m: {idx} {:?}", m.without_cigar());
+            println!("m: {:?}", m.without_cigar());
         }
     }
 }
