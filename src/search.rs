@@ -553,6 +553,8 @@ impl<P: Profile> Searcher<P> {
     /// Returns a vector of (pattern index, match).
     ///
     /// Use `early_break_below` to return the best values as soon as a match is at least that good.
+    ///
+    /// FIXME: THIS STILL NEEDS TESTING FOR PADDING AND RC.
     pub fn search_patterns<I: RcSearchAble + ?Sized, PT: AsRef<[u8]>>(
         &mut self,
         patterns: &[PT],
