@@ -1704,10 +1704,9 @@ pub(crate) fn init_deltas_for_overshoot_all_lanes(
 
 #[cfg(test)]
 mod tests {
-    use std::array::from_fn;
-
     use super::*;
     use crate::profiles::{Dna, Iupac};
+    use itertools::Itertools;
     use rand::random_range;
 
     #[test]
@@ -3002,56 +3001,136 @@ mod tests {
     }
 
     #[test]
-    fn search_multiple_texts_fuzz() {
-        // env_logger::init();
+    fn search_many_fuzz() {
+        env_logger::init();
 
         use rand::rngs::StdRng;
         use rand::{Rng, SeedableRng};
 
         let mut rng = StdRng::seed_from_u64(42);
-        let mut searcher = Searcher::<Iupac>::new_rc();
-        searcher.alpha = Some(0.5);
+        let mut searcher = Searcher::<Iupac>::new_fwd();
 
         let iter = 1000;
 
         for _ in 0..iter {
-            const B: usize = 11;
+            searcher.rc = rng.random_bool(0.5);
+            searcher.alpha = if rng.random_bool(0.5) {
+                None
+            } else {
+                Some(0.5)
+            };
+            let num_patterns = rng.random_range(1..=100);
+            let num_texts = rng.random_range(1..=100);
+            eprintln!("num patterns {num_patterns}");
+            eprintln!("num texts {num_texts}");
 
             let pattern_len = rng.random_range(1..=100);
-            let text_lens = [rng.random_range(1..=1000); B];
+            eprintln!("pattern len {pattern_len}");
 
-            let pattern = (0..pattern_len)
-                .map(|_| b"ACGT"[random_range(0..4)])
+            let patterns = (0..num_patterns)
+                .map(|_| {
+                    (0..pattern_len)
+                        .map(|_| b"ACGT"[random_range(0..4)])
+                        .collect::<Vec<_>>()
+                })
                 .collect::<Vec<_>>();
-            let texts = text_lens.map(|tl| {
-                (0..tl)
-                    .map(|_| b"ACGT"[random_range(0..4)])
-                    .collect::<Vec<_>>()
-            });
+            let patterns = patterns.iter().map(|p| p.as_slice()).collect_vec();
+            // for pattern in &patterns {
+            //     eprintln!("Pattern: {:?}", String::from_utf8_lossy(pattern));
+            // }
 
-            let texts: [_; B] = from_fn(|i| texts[i].as_slice());
-            let matches_old = texts.map(|t| searcher.search(&pattern, &t, 5));
-            let matches_new = searcher.search_texts(&pattern, &texts, 5);
-            assert_eq!(
-                matches_old.iter().map(|x| x.len()).sum::<usize>(),
-                matches_new.len(),
-                "mismatch in number of texts"
+            let texts = (0..num_texts)
+                .map(|_| {
+                    let text_len = rng.random_range(2..=1000);
+                    (0..text_len)
+                        .map(|_| b"ACGT"[random_range(0..4)])
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let texts = texts.iter().map(|t| t.as_slice()).collect_vec();
+            // for text in &texts {
+            //     eprintln!("Text: {:?}", String::from_utf8_lossy(text));
+            // }
+
+            eprintln!("alpha {:?}", searcher.alpha);
+            let k = rng.random_range(0..=pattern_len * 4 / 10);
+            eprintln!("k {k}");
+            let num_threads = rng.random_range(1..=4);
+            eprintln!("threads {num_threads}");
+
+            let mut matches_single =
+                searcher.search_many(&patterns, &texts, k, num_threads, SearchMode::Single);
+            let mut matches_batch_texts =
+                searcher.search_many(&patterns, &texts, k, num_threads, SearchMode::BatchTexts);
+            let mut matches_batch_patterns =
+                searcher.search_many(&patterns, &texts, k, num_threads, SearchMode::BatchPatterns);
+            matches_single.sort();
+            matches_batch_texts.sort();
+            matches_batch_patterns.sort();
+
+            eprintln!("single: {}", matches_single.len());
+            eprintln!("batch_text: {}", matches_batch_texts.len());
+            eprintln!("batch_patterns: {}", matches_batch_patterns.len());
+
+            eprintln!(
+                "single dup {}",
+                matches_single
+                    .iter()
+                    .tuple_windows()
+                    .filter(|(x, y)| x == y)
+                    .inspect(|(m, _)| eprintln!(
+                        "Duplicate match in text len {}\n{m:?}",
+                        texts[m.text_idx].len()
+                    ))
+                    .count()
             );
-            // eprintln!("old matches: {:?}", matches_old);
-            // eprintln!("new matches: {:?}", matches_new);
-            for i in 0..B {
-                for m in &matches_old[i] {
-                    assert!(matches_new.contains(&m));
+            eprintln!(
+                "batch_text dup {}",
+                matches_batch_texts
+                    .iter()
+                    .tuple_windows()
+                    .filter(|(x, y)| x == y)
+                    .inspect(|(m, _)| eprintln!(
+                        "Duplicate match in text len {}\n{m:?}",
+                        texts[m.text_idx].len()
+                    ))
+                    .count()
+            );
+            eprintln!(
+                "batch_patterns dup {}",
+                matches_batch_patterns
+                    .iter()
+                    .tuple_windows()
+                    .filter(|(x, y)| x == y)
+                    .inspect(|(m, _)| eprintln!(
+                        "Duplicate match in text len {}\n{m:?}",
+                        texts[m.text_idx].len()
+                    ))
+                    .count()
+            );
+
+            if matches_batch_patterns != matches_single {
+                eprintln!("MATCHES BATCH PATTERNS\n{matches_batch_patterns:?}");
+                eprintln!("MATCHES SINGLE\n{matches_single:?}");
+                for m in &matches_batch_patterns {
+                    if !matches_single.contains(m) {
+                        eprintln!("pattern len {}", patterns[m.pattern_idx].len());
+                        eprintln!("text len {}", texts[m.text_idx].len());
+                        panic!("Pattern match\n{m:?}\nwas not found in single search");
+                    }
+                }
+                for m in &matches_single {
+                    if !matches_batch_patterns.contains(m) {
+                        eprintln!("pattern len {}", patterns[m.pattern_idx].len());
+                        eprintln!("text len {}", texts[m.text_idx].len());
+                        panic!("Single match\n{m:?}\nwas not found in pattern search");
+                    }
                 }
             }
+            eprintln!();
+
+            assert_eq!(matches_batch_patterns, matches_batch_texts);
+            assert_eq!(matches_batch_texts, matches_single);
         }
     }
 }
-
-/*
-q: AAGGTTACACAAACCCTGGACAAG
-
-GAAGGCAGCAGGCGCGCAAATTAC
-CTTGTCCAGGGTTTGTGTAACCTT
-
-*/
