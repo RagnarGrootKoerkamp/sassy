@@ -554,8 +554,6 @@ impl<P: Profile> Searcher<P> {
     /// Returns a vector of (pattern index, match).
     ///
     /// Use `early_break_below` to return the best values as soon as a match is at least that good.
-    ///
-    /// FIXME: THIS STILL NEEDS TESTING FOR PADDING AND RC.
     pub fn search_patterns<I: RcSearchAble + ?Sized, PT: AsRef<[u8]>>(
         &mut self,
         patterns: &[PT],
@@ -1020,8 +1018,19 @@ impl<P: Profile> Searcher<P> {
                     log::trace!("lane 0 KEEP {end_pos} {cost}");
                 });
             }
+
+            let cur_lane_end = self.lanes[0].lane_end;
+            self.lanes[0].matches.retain(|&(end_pos, cost)| {
+                if end_pos >= cur_lane_end {
+                    log::trace!(
+                        "lane 0 drop {end_pos} {cost} because it's >= lane end {cur_lane_end}"
+                    );
+                }
+                end_pos < cur_lane_end
+            });
             for lane in 1..LANES {
                 let prev_lane_end = self.lanes[lane - 1].lane_end;
+                let cur_lane_end = self.lanes[lane].lane_end;
                 log::trace!("End of lane {}: {prev_lane_end}", lane - 1);
                 log::trace!(
                     "Last match of lane {}: {:?}",
@@ -1036,9 +1045,19 @@ impl<P: Profile> Searcher<P> {
                     } else {
                         log::trace!("lane {lane} KEEP {end_pos} {cost}");
                     }
+                    if end_pos >= cur_lane_end {
+                        log::trace!(
+                            "lane {lane} drop {end_pos} {cost} because it's >= lane end {cur_lane_end}"
+                        );
+                    }
                     // Keep matches that end after the previous lane's end position
                     // Note that `prev_lane_end` itself is handled by the current lane.
-                    end_pos >= prev_lane_end
+                    if end_pos == cur_lane_end {
+                        log::trace!(
+                            "lane {lane} drop {end_pos} {cost} because it equals {cur_lane_end}"
+                        );
+                    }
+                    end_pos >= prev_lane_end && (end_pos < cur_lane_end || lane == LANES-1)
                 });
             }
         }
