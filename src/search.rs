@@ -9,6 +9,7 @@ use crate::trace::{CostMatrix, fill, get_trace, simd_fill, simd_fill_multipatter
 use crate::{LANES, S};
 use crate::{bitpacking::compute_block_simd, delta_encoding::V};
 use pa_types::{Cigar, CigarOp, Cost, Pos};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 /// A match of the pattern against the text.
 ///
@@ -26,6 +27,10 @@ use pa_types::{Cigar, CigarOp, Cost, Pos};
 #[derive(Clone, PartialEq)]
 #[cfg_attr(feature = "python", pyo3::pyclass)]
 pub struct Match {
+    /// index of the pattern (when multiple patterns are given)
+    pub pattern_idx: usize,
+    /// index of the text (when multiple texts are given)
+    pub text_idx: usize,
     /// 0-based start position in text.
     pub text_start: usize,
     /// 0-based exclusive end position in text.
@@ -89,13 +94,8 @@ impl Match {
     /// Drop the cigar from the match. Convenient for debug printing.
     pub fn without_cigar(&self) -> Match {
         Match {
-            text_start: self.text_start,
-            text_end: self.text_end,
-            pattern_start: self.pattern_start,
-            pattern_end: self.pattern_end,
-            cost: self.cost,
-            strand: self.strand,
             cigar: Cigar::default(),
+            ..*self
         }
     }
 }
@@ -216,7 +216,7 @@ pub struct Searcher<P: Profile> {
     /// overhang cost
     /// If set, must satisfy `0.0 <= alpha <= 1.0`
     alpha: Option<f32>,
-    /// If set, only the best match is returned.
+    /// If set, only the best match of each (pattern, text) pair is returned.
     only_best_match: bool,
     /// If set, matches are returned without trace and starting position.
     without_trace: bool,
@@ -228,6 +228,8 @@ pub struct Searcher<P: Profile> {
     hp: Vec<S>,
     hm: Vec<S>,
     lanes: [LaneState<P>; LANES],
+
+    matches: Vec<Match>,
 
     _phantom: std::marker::PhantomData<P>,
 }
@@ -405,9 +407,10 @@ impl<P: Profile> Searcher<P> {
             without_trace: false,
             max_overhang: None,
             cost_matrices: std::array::from_fn(|_| CostMatrix::default()),
-            hp: Vec::new(),
-            hm: Vec::new(),
+            hp: vec![],
+            hm: vec![],
             lanes: std::array::from_fn(|_| LaneState::new(P::alloc_out(), 0)),
+            matches: vec![],
             _phantom: std::marker::PhantomData,
         }
     }
@@ -423,16 +426,15 @@ impl<P: Profile> Searcher<P> {
         text: &I,
         k: usize,
     ) -> Vec<Match> {
+        self.matches.clear();
         self.search_handle_rc(
             MultiPattern::one(pattern),
             MultiRcText::one(text),
             k,
             false,
             None::<fn(&[u8], &[u8], Strand) -> bool>,
-        )
-        .into_iter()
-        .map(|(_, m)| m)
-        .collect()
+        );
+        std::mem::take(&mut self.matches)
     }
 
     /// Search multiple patterns against multiple texts, using the algorithms given by `mode` (see [`SearchMode`]).
@@ -446,7 +448,7 @@ impl<P: Profile> Searcher<P> {
         k: usize,
         mode: SearchMode,
         num_threads: usize,
-    ) -> Vec<(usize, usize, Match)> {
+    ) -> Vec<Match> {
         rayon::ThreadPoolBuilder::new()
             .num_threads(num_threads)
             .build_global()
@@ -457,8 +459,12 @@ impl<P: Profile> Searcher<P> {
                 texts,
                 self,
                 |searcher, pattern, text, pi, ti| {
-                    let matches = searcher.search(pattern.as_ref(), *text, k);
-                    matches.into_iter().map(move |m| (pi, ti, m))
+                    let mut matches = searcher.search(pattern.as_ref(), *text, k);
+                    matches.iter_mut().for_each(move |m| {
+                        m.pattern_idx = pi;
+                        m.text_idx = ti;
+                    });
+                    matches
                 },
             ),
             SearchMode::BatchPatterns => {
@@ -469,10 +475,12 @@ impl<P: Profile> Searcher<P> {
                     texts,
                     self,
                     |searcher, pattern_batch, text, pbi, ti| {
-                        let matches = searcher.search_patterns(pattern_batch, *text, k, None);
+                        let mut matches = searcher.search_patterns(pattern_batch, *text, k);
+                        matches.iter_mut().for_each(move |m| {
+                            m.pattern_idx += pbi * LANES;
+                            m.text_idx = ti;
+                        });
                         matches
-                            .into_iter()
-                            .map(move |(pi, m)| (pbi * LANES + pi, ti, m))
                     },
                 )
             }
@@ -485,10 +493,12 @@ impl<P: Profile> Searcher<P> {
                     &text_batches,
                     self,
                     |searcher, pattern, text_batch, pi, tbi| {
-                        let matches = searcher.search_texts(pattern.as_ref(), *text_batch, k, None);
+                        let mut matches = searcher.search_texts(pattern.as_ref(), *text_batch, k);
+                        matches.iter_mut().for_each(move |m| {
+                            m.pattern_idx = pi;
+                            m.text_idx += tbi * LANES;
+                        });
                         matches
-                            .into_iter()
-                            .map(move |(ti, m)| (pi, tbi * LANES + ti, m))
                     },
                 )
             }
@@ -510,37 +520,22 @@ impl<P: Profile> Searcher<P> {
         pattern: &[u8],
         texts: &[&I],
         k: usize,
-        early_break_below: Option<usize>,
-    ) -> Vec<(usize, Match)> {
-        let mut matches = vec![];
-
+    ) -> Vec<Match> {
+        self.matches.clear();
         for (i, chunk) in texts.chunks(LANES).enumerate() {
-            let mut chunk_matches = self.search_handle_rc(
+            let chunk_matches = self.search_handle_rc(
                 MultiPattern::one(pattern),
                 MultiRcText::Multi(chunk),
                 k,
                 false,
                 None::<fn(&[u8], &[u8], Strand) -> bool>,
             );
-            let mut done = false;
-            matches.extend(
-                chunk_matches
-                    .drain(..)
-                    .map(|(lane, m)| (i * LANES + lane, m))
-                    .inspect(|(_, m)| {
-                        if let Some(t) = early_break_below {
-                            if m.cost <= t as Cost {
-                                done = true;
-                            }
-                        }
-                    }),
-            );
-            if done {
-                break;
-            }
+            chunk_matches.iter_mut().for_each(|m| {
+                m.text_idx += i * LANES;
+            });
         }
 
-        matches
+        std::mem::take(&mut self.matches)
     }
 
     /// Search multiple similar-length patterns in chunks of `LANES` at a time.
@@ -560,9 +555,8 @@ impl<P: Profile> Searcher<P> {
         patterns: &[PT],
         text: &I,
         k: usize,
-        early_break_below: Option<usize>,
-    ) -> Vec<(usize, Match)> {
-        let mut matches = vec![];
+    ) -> Vec<Match> {
+        self.matches.clear();
         for (i, chunk) in patterns.chunks(LANES).enumerate() {
             // Pad chunk.
             let max_len = chunk.iter().map(|p| p.as_ref().len()).max().unwrap_or(0);
@@ -577,32 +571,19 @@ impl<P: Profile> Searcher<P> {
                     .unwrap_or(vec![b'X'; max_len]);
                 p
             });
-            let mut chunk_matches = self.search_handle_rc(
+            let chunk_matches = self.search_handle_rc(
                 MultiPattern::Multi(&std::array::from_fn(|i| chunk[i].as_slice())),
                 MultiRcText::One(text),
                 k,
                 false,
                 None::<fn(&[u8], &[u8], Strand) -> bool>,
             );
-            let mut done = false;
-            matches.extend(
-                chunk_matches
-                    .drain(..)
-                    .map(|(lane, m)| (i * LANES + lane, m))
-                    .inspect(|(_, m)| {
-                        if let Some(t) = early_break_below {
-                            if m.cost <= t as Cost {
-                                done = true;
-                            }
-                        }
-                    }),
-            );
-            if done {
-                break;
-            }
+            chunk_matches.iter_mut().for_each(|m| {
+                m.pattern_idx += i * LANES;
+            });
         }
 
-        matches
+        std::mem::take(&mut self.matches)
     }
 
     /// Returns a match for *all* end positions with score <=k.
@@ -616,19 +597,21 @@ impl<P: Profile> Searcher<P> {
         input: &I,
         k: usize,
     ) -> Vec<Match> {
+        self.matches.clear();
         self.search_handle_rc(
             MultiPattern::one(pattern),
             MultiRcText::one(input),
             k,
             true,
             None::<fn(&[u8], &[u8], Strand) -> bool>,
-        )
-        .into_iter()
-        .map(|(_lane, m)| m)
-        .collect()
+        );
+        std::mem::take(&mut self.matches)
     }
 
     /// Returns matches for *all* end positions where `end_filter_fn` returns true.
+    ///
+    /// The extra `usize` field is always 0 here and is only present for
+    /// consistency with the mult-search functions.
     ///
     /// Used in CRISPR search to filter for only those end positions where the
     /// PAM (last three characters) matches exactly.
@@ -644,18 +627,18 @@ impl<P: Profile> Searcher<P> {
         all_minima: bool,
         filter_fn: impl Fn(&[u8], &[u8], Strand) -> bool,
     ) -> Vec<Match> {
+        self.matches.clear();
         self.search_handle_rc(
             MultiPattern::one(pattern),
             MultiRcText::one(text),
             k,
             all_minima,
             Some(filter_fn),
-        )
-        .into_iter()
-        .map(|(_lane, m)| m)
-        .collect()
+        );
+        std::mem::take(&mut self.matches)
     }
 
+    /// Appends results to `self.idx_matches`.
     fn search_handle_rc<I: RcSearchAble + ?Sized>(
         &mut self,
         pattern: MultiPattern,
@@ -663,7 +646,8 @@ impl<P: Profile> Searcher<P> {
         k: usize,
         all_minima: bool,
         filter_fn: Option<impl Fn(&[u8], &[u8], Strand) -> bool>,
-    ) -> Vec<(usize, Match)> {
+    ) -> &mut [Match] {
+        let old_len = self.matches.len();
         // FIXME: This stuff is so ugly :/
         let fwd_text;
         let fwd_texts: Vec<_>;
@@ -679,8 +663,7 @@ impl<P: Profile> Searcher<P> {
                 MultiText::Multi(fwd_slices.as_slice())
             }
         };
-        let mut matches =
-            self.search_one_strand(pattern, fwd_input, k, all_minima, &filter_fn, Strand::Fwd);
+        self.search_one_strand(pattern, fwd_input, k, all_minima, &filter_fn, Strand::Fwd);
 
         if self.rc {
             // FIXME: This stuff is so ugly :/
@@ -710,6 +693,7 @@ impl<P: Profile> Searcher<P> {
                     MultiPattern::Multi(&std::array::from_fn(|i| _ps[i].as_slice()))
                 }
             };
+            let without_trace = self.without_trace;
             let rc_matches = self.search_one_strand(
                 complement_pattern,
                 rev_input,
@@ -718,15 +702,15 @@ impl<P: Profile> Searcher<P> {
                 &filter_fn,
                 Strand::Rc,
             );
-            matches.extend(rc_matches.into_iter().map(|(lane, mut m)| {
+            rc_matches.iter_mut().for_each(|m| {
                 m.strand = Strand::Rc;
                 // Also adjust start and end positions to original text orientation
                 let rc_start = m.text_start;
                 let rc_end = m.text_end;
-                let t = text.get_lane(lane).unwrap();
+                let t = text.get_lane(m.text_idx).unwrap();
                 let len = t.text().as_ref().len();
                 m.text_start = len - rc_end;
-                if self.without_trace {
+                if without_trace {
                     m.text_end = usize::MAX;
                 } else {
                     m.text_end = len - rc_start;
@@ -734,12 +718,12 @@ impl<P: Profile> Searcher<P> {
                 // NOTE: We keep the cigar in the direction of the pattern.
                 // Thus, passing text or rc(text) gives the same CIGAR.
                 // m.cigar.ops.reverse();
-                (lane, m)
-            }));
+            });
         }
-        matches
+        &mut self.matches[old_len..]
     }
 
+    /// Appends results to `self.idx_matches`, and returns the new slice.
     fn search_one_strand<'t>(
         &mut self,
         pattern: MultiPattern<'t>,
@@ -748,7 +732,7 @@ impl<P: Profile> Searcher<P> {
         all_minima: bool,
         filter_fn: &Option<impl Fn(&[u8], &[u8], Strand) -> bool>,
         strand: Strand,
-    ) -> Vec<(usize, Match)> {
+    ) -> &mut [Match] {
         self.search_positions_bounded(pattern, text, k as Cost, all_minima);
         // If there is a filter fn, filter end positions based on function before processing matches
         if let Some(filter_fn) = filter_fn {
@@ -1350,20 +1334,29 @@ impl<P: Profile> Searcher<P> {
         }
     }
 
-    /// Returns pairs `(lane, Match)`.
+    /// Appends results to `self.idx_matches`, and returns the new slice.
     fn process_matches<'t>(
         &mut self,
         pattern: MultiPattern<'t>,
         text: MultiText<'t>,
         k: Cost,
-    ) -> Vec<(usize, Match)> {
-        let mut traces = Vec::new();
+    ) -> &mut [Match] {
+        let old_len = self.matches.len();
         let fill_len = pattern.len() + k as usize;
+
+        let multi_text = matches!(text, MultiText::Multi(_));
+        let multi_pattern = matches!(pattern, MultiPattern::Multi(_));
+        assert!(
+            !(multi_text && multi_pattern),
+            "process_matches does not support both
+        multiple patterns and multiple text at the same time"
+        );
 
         // Collect slices to process in batches
         let mut batch = MatchBatch::new();
 
         if self.only_best_match {
+            // only return 1 best match per (pattern, text) pair
             let mut best = [(Cost::MAX, Reverse(0), 0, [].as_slice(), [].as_slice()); LANES];
             for lane in 0..LANES {
                 for &(end_pos, cost) in &self.lanes[lane].matches {
@@ -1385,43 +1378,50 @@ impl<P: Profile> Searcher<P> {
             }
 
             let mut add_match =
-                |lane, t: &'t [u8], best: (i32, Reverse<usize>, usize, &'t [u8], &'t [u8])| {
+                |pattern_idx,
+                 text_idx,
+                 t: &'t [u8],
+                 best: (i32, Reverse<usize>, usize, &'t [u8], &'t [u8])| {
                     let (cost, Reverse(end_pos), offset, pattern, slice) = best;
                     if self.without_trace {
-                        traces.push((
-                            lane,
-                            Match {
-                                text_start: usize::MAX,
-                                text_end: end_pos.min(t.len()),
-                                pattern_start: usize::MAX,
-                                pattern_end: pattern.len() - end_pos.saturating_sub(t.len()),
-                                cost,
-                                strand: Strand::Fwd,
-                                cigar: Cigar::default(),
-                            },
-                        ));
+                        self.matches.push(Match {
+                            pattern_idx,
+                            text_idx,
+                            text_start: usize::MAX,
+                            text_end: end_pos.min(t.len()),
+                            pattern_start: usize::MAX,
+                            pattern_end: pattern.len() - end_pos.saturating_sub(t.len()),
+                            cost,
+                            strand: Strand::Fwd,
+                            cigar: Cigar::default(),
+                        });
                     } else {
-                        batch.add(lane, pattern, slice, offset, end_pos, cost);
+                        batch.add(pattern_idx, text_idx, pattern, slice, offset, end_pos, cost);
                     }
                 };
 
-            match text {
-                MultiText::One(t) => {
-                    let best = *best.iter().min().unwrap();
-                    if best.0 != Cost::MAX {
-                        add_match(0, t, best);
-                    }
+            if !multi_text && !multi_pattern {
+                // the lanes are text chunks, minimize over them
+                let best = *best.iter().min().unwrap();
+                if best.0 != Cost::MAX {
+                    add_match(0, 0, text.get_lane(0).unwrap(), best);
                 }
-                MultiText::Multi(ts) => {
-                    for lane in 0..LANES {
-                        if best[lane].0 != Cost::MAX {
-                            add_match(lane, ts[lane], best[lane]);
-                        }
+            } else {
+                // return a minimum per lane
+                for lane in 0..LANES {
+                    if best[lane].0 != Cost::MAX {
+                        add_match(
+                            if multi_pattern { lane } else { 0 },
+                            if multi_text { lane } else { 0 },
+                            text.get_lane(lane).unwrap(),
+                            best[lane],
+                        );
                     }
                 }
             }
         } else {
             for lane in 0..LANES {
+                // FIXME: Fix pattern_idx & text_idx
                 let Some(t) = text.get_lane(lane) else {
                     break;
                 };
@@ -1429,16 +1429,25 @@ impl<P: Profile> Searcher<P> {
                     let offset = end_pos.saturating_sub(fill_len);
                     let slice = &t[offset..end_pos.min(t.len())];
 
-                    batch.add(lane, pattern.get_lane(lane), slice, offset, end_pos, cost);
+                    batch.add(
+                        if multi_pattern { lane } else { 0 },
+                        if multi_text { lane } else { 0 },
+                        pattern.get_lane(lane),
+                        slice,
+                        offset,
+                        end_pos,
+                        cost,
+                    );
 
                     if batch.is_full() {
-                        traces.extend(batch.process::<P>(
+                        batch.process::<P>(
                             fill_len,
                             &mut self.cost_matrices,
                             self.alpha,
                             self.max_overhang,
                             k,
-                        ));
+                            &mut self.matches,
+                        );
                         batch.clear();
                     }
                 }
@@ -1446,16 +1455,16 @@ impl<P: Profile> Searcher<P> {
         }
 
         if !batch.is_empty() {
-            traces.extend(batch.process::<P>(
+            batch.process::<P>(
                 fill_len,
                 &mut self.cost_matrices,
                 self.alpha,
                 self.max_overhang,
                 k,
-            ));
+                &mut self.matches,
+            );
         }
-
-        traces
+        &mut self.matches[old_len..]
     }
 }
 
@@ -1463,48 +1472,37 @@ fn map_collect_cartesian_product<
     X: Sync,
     Y: Sync,
     O: Send,
-    I: Iterator<Item = O> + Send,
     C: Clone + Sync,
-    F: Fn(&mut C, &X, &Y, usize, usize) -> I + Sync,
+    F: Fn(&mut C, &X, &Y, usize, usize) -> Vec<O> + Sync,
 >(
     xs: &[X],
     ys: &[Y],
     context: &C,
     f: F,
 ) -> Vec<O> {
-    use rayon::prelude::*;
+    let xn = xs.len();
+    let yn = ys.len();
     let f = &f;
-    if xs.len() < ys.len() {
-        xs.par_iter()
-            .enumerate()
-            .flat_map(|(xi, x)| {
-                ys.par_iter()
-                    .enumerate()
-                    .map_init(
-                        || context.clone(),
-                        move |context, (yi, y)| f(context, x, y, xi, yi),
-                    )
-                    .flatten_iter()
-            })
-            .collect()
-    } else {
-        ys.par_iter()
-            .enumerate()
-            .flat_map(|(yi, y)| {
-                xs.par_iter()
-                    .enumerate()
-                    .map_init(
-                        || context.clone(),
-                        move |context, (xi, x)| f(context, x, y, xi, yi),
-                    )
-                    .flatten_iter()
-            })
-            .collect()
-    }
+
+    (0..xn * yn)
+        .into_par_iter()
+        .map_init(
+            || context.clone(),
+            move |context, index| {
+                let xi = index / yn;
+                let yi = index % yn;
+                let x = &xs[xi];
+                let y = &ys[yi];
+                f(context, x, y, xi, yi)
+            },
+        )
+        .flatten_iter()
+        .collect()
 }
 
 struct MatchBatch<'a> {
-    lanes: [usize; LANES],
+    pattern_idx: [usize; LANES],
+    text_idx: [usize; LANES],
     patterns: [&'a [u8]; LANES],
     text_slices: [&'a [u8]; LANES],
     offsets: [usize; LANES],
@@ -1516,7 +1514,8 @@ struct MatchBatch<'a> {
 impl<'a> MatchBatch<'a> {
     fn new() -> Self {
         Self {
-            lanes: [0; LANES],
+            pattern_idx: [0; LANES],
+            text_idx: [0; LANES],
             patterns: [b""; LANES],
             text_slices: [b""; LANES],
             offsets: [0; LANES],
@@ -1528,14 +1527,16 @@ impl<'a> MatchBatch<'a> {
 
     fn add(
         &mut self,
-        lane: usize,
+        pattern_idx: usize,
+        text_idx: usize,
         pattern: &'a [u8],
         slice: &'a [u8],
         offset: usize,
         end: usize,
         cost: Cost,
     ) {
-        self.lanes[self.count] = lane;
+        self.pattern_idx[self.count] = pattern_idx;
+        self.text_idx[self.count] = text_idx;
         self.patterns[self.count] = pattern;
         self.text_slices[self.count] = slice;
         self.offsets[self.count] = offset;
@@ -1566,7 +1567,8 @@ impl<'a> MatchBatch<'a> {
         alpha: Option<f32>,
         max_overhang: Option<usize>,
         k: Cost,
-    ) -> Vec<(usize, Match)> {
+        out: &mut Vec<Match>,
+    ) {
         if self.count > 1 {
             let equal_patterns = self
                 .patterns
@@ -1603,10 +1605,8 @@ impl<'a> MatchBatch<'a> {
             );
         }
 
-        let mut results = Vec::with_capacity(self.count);
-
         for i in 0..self.count {
-            let m = get_trace::<P>(
+            let mut m = get_trace::<P>(
                 &self.patterns[i],
                 self.offsets[i],
                 self.ends[i],
@@ -1615,6 +1615,8 @@ impl<'a> MatchBatch<'a> {
                 alpha,
                 max_overhang,
             );
+            m.pattern_idx = self.pattern_idx[i];
+            m.text_idx = self.text_idx[i];
 
             // Check if get_trace cost is same as expected end position cost
             assert!(
@@ -1632,10 +1634,8 @@ impl<'a> MatchBatch<'a> {
                 k,
             );
 
-            results.push((self.lanes[i], m));
+            out.push(m);
         }
-
-        results
     }
 }
 
@@ -1859,7 +1859,8 @@ mod tests {
     fn test_case1() {
         let pattern = b"AGATGTGTCC";
         let text = b"GAGAGATAACCGTGCGCTCACTGTTACAGTTTATGTGTCGAATTCTTTTAGGGCTGGTCACTGCCCATGCGTAGGAATGAATAGCGGTTGCGGATAACTAAGCAGTGCTTGTCGCTATTAAAGTTAGACCCCGCTCCCACCTTGCCACTCCTAGATGTCGACGAGATTCTCACCGCCAAGGGATCAGGCATATCATAGTAGCTGGCGCAGCCCGTCGTTTAAGGAGGCCCATATACTAATTCAAACGATGGGGTGGGCACATCCCCTAGAAGCACTTGTCCCTTGAGTCACGACTGATGCGTGGTCTCTCGCTAAATGTTCCGGCCTCTCGGACATTTAAAGGGTGGCATGTGACCATGGAGGATTAGTGAATGAGAGGTGTCCGCCTTTGTTCGCCAGAACTCTTATAGCGTAGGGGAGTGTACTCACCGCGAACCCGTATCAGCAATCTTGTCAGTGGCTCCTGACTCAAACATCGATGCGCTGCACATGGCCTTAGAATGAAGCAGCCCCTTTCTATTGTGGCCGGGCTGATTCTTTGTTTTGTTGAATGGTCGGGCCTGTCTGCCTTTTCCTAGTGTTGAAACTCCGAACCGCATGAACTGCGTTGCTAGCGAGCTATCACTGGACTGGCCGGGGGACGAAAGTTCGCGGGACCCACTACCCGCGCCCAGAAGACCACACTAGGGAGAAGGATTCTATCGGCATAGCCGTC";
-        let matches = Searcher::<Dna>::new_rc().search(pattern, &text, 2);
+        let mut searcher = Searcher::<Dna>::new_rc();
+        let matches = searcher.search(pattern, &text, 2);
         println!("Matches: {:?}", matches);
     }
 
@@ -1869,7 +1870,8 @@ mod tests {
         let expected_idx = 277;
         let pattern = b"TAAGCAGAAGGGAGGTATAAAGTCTGTCAGCGGTGCTTAAG";
         let text = b"ACCGTAACCGCTTGGTACCATCCGGCCAGTCGCTCGTTGCGCCCCACTATCGGGATCGACGCGCAGTAATTAAACACCACCCACGCCACGAGGTAGAACGAGAGCGGGGGGCTAGCAAATAATAGTGAGAGTGCGTTCAAAGGGTCTTTCGTAACCTCAGCGGGCGGGTACGGGGGAAATATCGCACCAATTTTGGAGATGCGATTAGCTCAGCGTAACGCGAATTCCCTATAACTTGCCTAGTGTGTGTGAATGGACAATTCGTTTTACAGTTTCAAGGTAGCAGAAGGGCAGGATAAGTCTGTCGCGGTGCTTAAGGCTTTCCATCCATGTTGCCCCCTACATGAATCGGATCGCCAGCCAGAATATCACATGGTTCCAAAAGTTGCAAGCTTCCCCGTACCGCTACTTCACCTCACGCCAGAGGCCTATCGCCGCTCGGCCGTTCCGTTTTGGGGAAGAATCTGCCTGTTCTCGTCACAAGCTTCTTAGTCCTTCCACCATGGTGCTGTTACTCATGCCATCAAATATTCGAGCTCTTGCCTAGGGGGGTTATACCTGTGCGATAGATACACCCCCTATGACCGTAGGTAGAGAGCCTATTTTCAACGTGTCGATCGTTTAATGACACCAACTCCCGGTGTCGAGGTCCCCAAGTTTCGTAGATCTACTGAGCGGGGGAATATTTGACGGTAAGGCATCGCTTGTAGGATCGTATCGCGACGGTAGATACCCATAAGCGTTGCTAACCTGCCAATAACTGTCTCGCGATCCCAATTTAGCACAAGTCGGTGGCCTTGATAAGGCTAACCAGTTTCGCACCGCTTCCGTTCCATTTTACGATCTACCGCTCGGATGGATCCGAAATACCGAGGTAGTAATATCAACACGTACCCAATGTCC";
-        let matches = Searcher::<Dna>::new_fwd().search(pattern, &text, edits);
+        let mut searcher = Searcher::<Dna>::new_fwd();
+        let matches = searcher.search(pattern, &text, edits);
         let m = matches
             .iter()
             .find(|m| m.text_start.abs_diff(expected_idx) <= edits);
@@ -1888,7 +1890,8 @@ mod tests {
         for _ in 0..1000 {
             let pattern = random_dna_string(random_range(10..100));
             let text = random_dna_string(1_000_000);
-            let matches = Searcher::<Dna>::new_fwd().search(&pattern, &text, 5);
+            let mut searcher = Searcher::<Dna>::new_fwd();
+            let matches = searcher.search(&pattern, &text, 5);
             total_matches += matches.len();
         }
         println!("total matches: {total_matches}");
@@ -1899,12 +1902,14 @@ mod tests {
         let pattern = b"ATCGATCA";
         let rc = Dna::reverse_complement(pattern);
         let text = [b"GGGGGGGG".as_ref(), &rc, b"GGGGGGGG"].concat();
-        let matches = Searcher::<Dna>::new_rc().search(pattern, &text, 0);
+        let mut searcher = Searcher::<Dna>::new_rc();
+        let matches = searcher.search(pattern, &text, 0);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].text_start, 8);
         assert_eq!(matches[0].text_end, 8 + pattern.len());
         // Now disableing rc search should yield no matches
-        let matches = Searcher::<Dna>::new_fwd().search(pattern, &text, 0);
+        let mut searcher = Searcher::<Dna>::new_fwd();
+        let matches = searcher.search(pattern, &text, 0);
         assert_eq!(matches.len(), 0);
     }
 
@@ -1917,13 +1922,14 @@ mod tests {
         text.splice(10..10, pattern.iter().copied());
         text.splice(50..50, pattern.iter().copied());
         let end_filter = |q: &[u8], text: &[u8], _strand: Strand| text.len() > 10 + q.len();
-        let matches =
-            Searcher::<Dna>::new_fwd().search_with_fn(pattern, &text, 0, false, end_filter);
+        let mut searcher = Searcher::<Dna>::new_fwd();
+        let matches = searcher.search_with_fn(pattern, &text, 0, false, end_filter);
         assert_eq!(matches.len(), 1); // First match *ending* at 10 should be discarded
         assert_eq!(matches[0].text_start, 50);
 
         // Sanity check, run the same without filter
-        let matches = Searcher::<Dna>::new_fwd().search(pattern, &text, 0);
+        let mut searcher = Searcher::<Dna>::new_fwd();
+        let matches = searcher.search(pattern, &text, 0);
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].text_start, 10);
         assert_eq!(matches[1].text_start, 50);
@@ -1960,8 +1966,8 @@ mod tests {
             }
         };
 
-        let matches =
-            Searcher::<Dna>::new_rc().search_with_fn(pattern_fwd, &text, 0, false, end_filter);
+        let mut searcher = Searcher::<Dna>::new_rc();
+        let matches = searcher.search_with_fn(pattern_fwd, &text, 0, false, end_filter);
         assert_eq!(matches.len(), 2); // Both matches should be found
         assert_eq!(matches[0].text_start, 10);
         assert_eq!(matches[1].text_start, 50);
@@ -2060,12 +2066,12 @@ mod tests {
                 assert!(m.is_some());
 
                 // search_texts should give the same result
-                let multi_matches = searcher.search_texts(&pattern, &[&text, &text], edits, None);
+                let multi_matches = searcher.search_texts(&pattern, &[&text, &text], edits);
+
                 eprintln!("multi matches {multi_matches:?}");
                 let multi_matches = multi_matches
                     .into_iter()
-                    .filter(|m| m.0 == 1)
-                    .map(|m| m.1)
+                    .filter(|m| m.text_idx == 1)
                     .collect::<Vec<_>>();
                 let m = multi_matches
                     .iter()
@@ -2081,8 +2087,9 @@ mod tests {
         let pattern = b"GCCGT";
         let text = b"AGCGCGTA";
         let k = 1;
-        let matches = Searcher::<Dna>::new_rc().search_all(pattern, text, k);
-        let match_local = Searcher::<Dna>::new_rc().search(pattern, text, k);
+        let mut searcher = Searcher::<Dna>::new_rc();
+        let matches = searcher.search_all(pattern, text, k);
+        let match_local = searcher.search(pattern, text, k);
         //   println!("matches: {:?}", matches);
         println!("fwd matches (ALL): {}", matches.len());
         for m in matches {
@@ -2094,8 +2101,8 @@ mod tests {
         }
         let pattern_rev = pattern.iter().rev().copied().collect::<Vec<_>>();
         let text_rev = text.iter().rev().copied().collect::<Vec<_>>();
-        let matches_rev = Searcher::<Dna>::new_rc().search_all(&pattern_rev, &text_rev, k);
-        let match_rev_local = Searcher::<Dna>::new_rc().search(&pattern_rev, &text_rev, k);
+        let matches_rev = searcher.search_all(&pattern_rev, &text_rev, k);
+        let match_rev_local = searcher.search(&pattern_rev, &text_rev, k);
         println!("rev matches (ALL): {}", matches_rev.len());
         for m in matches_rev {
             println!("m: {:?}", m.without_cigar());
@@ -3019,7 +3026,7 @@ mod tests {
 
             let texts: [_; B] = from_fn(|i| texts[i].as_slice());
             let matches_old = texts.map(|t| searcher.search(&pattern, &t, 5));
-            let matches_new = searcher.search_texts(&pattern, &texts, 5, None);
+            let matches_new = searcher.search_texts(&pattern, &texts, 5);
             assert_eq!(
                 matches_old.iter().map(|x| x.len()).sum::<usize>(),
                 matches_new.len(),
@@ -3029,7 +3036,7 @@ mod tests {
             // eprintln!("new matches: {:?}", matches_new);
             for i in 0..B {
                 for m in &matches_old[i] {
-                    assert!(matches_new.contains(&(i, m.clone())));
+                    assert!(matches_new.contains(&m));
                 }
             }
         }

@@ -68,7 +68,7 @@ fn main() {
             let start = std::time::Instant::now();
             let mut cnt = 0;
             for pattern in &patterns {
-                let matches = searcher.search_texts(&pattern, &texts, k, None);
+                let matches = searcher.search_texts(&pattern, &texts, k);
                 cnt += matches.len();
             }
             eprintln!("Text      {cnt}: {:?}", start.elapsed());
@@ -80,7 +80,7 @@ fn main() {
             let start = std::time::Instant::now();
             let mut cnt = 0;
             for text in &texts {
-                let matches = searcher.search_patterns(&patterns, &text, k, None);
+                let matches = searcher.search_patterns(&patterns, &text, k);
                 cnt += matches.len();
             }
             eprintln!("Patterns: {cnt}: {:?}", start.elapsed());

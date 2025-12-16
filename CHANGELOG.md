@@ -9,6 +9,10 @@
 - Add `Searcher::only_best_match` and `Searcher::without_trace`.
 - Add `Searcher::search_texts` to search a pattern in multiple short texts of
   similar length.
+- Add `Searcher::search_many` that searches multiple patterns in multiple texts
+  using multiple threads.
+- `Match` now contains `text_idx` and `pattern_idx` for multi-search variants.
+- Collect matches into an internal Vec before returning that.
 
 ## 0.1.10
 - **bugfix**: `sassy grep` had a bug in the batching logic, making it skip a

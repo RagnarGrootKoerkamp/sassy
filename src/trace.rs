@@ -361,6 +361,8 @@ pub fn get_trace<P: Profile>(
     cigar.reverse();
 
     Match {
+        pattern_idx: 0,
+        text_idx: 0,
         cost: total_cost,
         text_start: text_offset + i,
         text_end: text_offset + text.len(),
