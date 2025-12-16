@@ -1291,28 +1291,17 @@ impl<P: Profile> Searcher<P> {
         let mut prev_pos = base_pos;
 
         if base_pos >= max_pos {
-            if base_pos == max_pos {
-                if self.lanes[lane].decreasing && prev_cost <= k {
-                    log::trace!("lane {lane} push {prev_pos} {prev_cost} <last>");
-                    self.lanes[lane].matches.push((prev_pos, prev_cost));
-                }
-            }
-
             return;
         }
 
         for bit in 1..=64 {
-            cost += ((p >> (bit - 1)) & 1) as Cost;
-            cost -= ((m >> (bit - 1)) & 1) as Cost;
-
             let pos: usize = base_pos + bit;
             if pos > max_pos {
-                if !all_minima && self.lanes[lane].decreasing && prev_cost <= k {
-                    log::trace!("lane {lane} push {prev_pos} {prev_cost} <last>");
-                    self.lanes[lane].matches.push((prev_pos, prev_cost));
-                }
                 break;
             }
+
+            cost += ((p >> (bit - 1)) & 1) as Cost;
+            cost -= ((m >> (bit - 1)) & 1) as Cost;
 
             let total_cost = self.add_overshoot_cost(cost, pos, text_len);
 
@@ -1345,6 +1334,10 @@ impl<P: Profile> Searcher<P> {
 
             prev_cost = total_cost;
             prev_pos = pos;
+        }
+        if !all_minima && prev_pos == max_pos && self.lanes[lane].decreasing && prev_cost <= k {
+            log::debug!("lane {lane} push {prev_pos} {prev_cost} <last>");
+            self.lanes[lane].matches.push((prev_pos, prev_cost));
         }
     }
 
