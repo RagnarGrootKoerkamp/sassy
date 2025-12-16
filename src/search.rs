@@ -24,7 +24,8 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 /// In this case, the CIGAR tells the differences between `pattern` and `rc(&text[text_start..text_end])`.
 /// In the CIGAR, `I` represents a character in the text that is not in the pattern,
 /// and `D` represents a character in the pattern that is not in the text.
-#[derive(Clone, PartialEq)]
+#[derive(derivative::Derivative, Clone, PartialEq, Eq)]
+#[derivative(PartialOrd, Ord)]
 #[cfg_attr(feature = "python", pyo3::pyclass)]
 pub struct Match {
     /// index of the pattern (when multiple patterns are given)
@@ -50,12 +51,16 @@ pub struct Match {
     /// `X`: mismatch
     /// `I`: character in text but not in pattern.
     /// `D`: character in pattern but not in text.
+    #[derivative(PartialOrd = "ignore")]
+    #[derivative(Ord = "ignore")]
     pub cigar: Cigar,
 }
 
 impl Debug for Match {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Match")
+            .field("pattern_idx", &self.pattern_idx)
+            .field("text_idx", &self.text_idx)
             .field("text_start", &self.text_start)
             .field("text_end", &self.text_end)
             .field("pattern_start", &self.pattern_start)
@@ -101,7 +106,7 @@ impl Match {
 }
 
 /// Strand of a match. If Rc, pattern matches the reverse complement text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Strand {
     Fwd,
     Rc,
