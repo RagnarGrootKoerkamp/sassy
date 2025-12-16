@@ -11,11 +11,11 @@ use std::ops::{Index, IndexMut};
 
 use crate::LANES;
 
-pub trait Profile: Clone + std::fmt::Debug {
+pub trait Profile: Clone + std::fmt::Debug + Sync {
     /// Encoding for a single character in the pattern.
-    type A;
+    type A: Sync;
     /// Encoding for 64 characters in the text.
-    type B: Index<usize, Output = u64> + IndexMut<usize, Output = u64> + Copy;
+    type B: Index<usize, Output = u64> + IndexMut<usize, Output = u64> + Copy + Sync;
     fn encode_pattern(a: &[u8]) -> (Self, Vec<Self::A>);
     fn encode_patterns(_a: &[&[u8]]) -> (Self, Vec<[Self::A; LANES]>) {
         unimplemented!(

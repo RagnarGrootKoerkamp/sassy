@@ -299,6 +299,28 @@ impl<'x, I: RcSearchAble + ?Sized> MultiRcText<'x, I> {
     }
 }
 
+/// The algorithms to use for [`Searcher::search_many`].
+pub enum SearchMode {
+    /// Do one (pattern, text) search at a time.
+    /// SIMD lanes correspond to chunks of each text.
+    ///
+    /// Use when both patterns and texts have mixed lengths.
+    /// Not ideal when texts are short (roughly <500) because of overlapping text chunks.
+    Single,
+    /// When all patterns have similar/equal length, use one pattern per SIMD lane.
+    /// Avoids overlapping text chunks and usually faster.
+    ///
+    /// Consider sorting patterns by length beforehand.
+    /// Ideal when all patterns have length <32.
+    BatchPatterns,
+    /// Search one pattern against multiple texts at a time, with one SIMD lane per text.
+    ///
+    /// Ideal when texts have similar lengths.
+    /// Possibly has large overhead for texts of highly differing lengths.
+    /// Consider sorting texts by length beforehand.
+    BatchTexts,
+}
+
 impl<P: Profile> Searcher<P> {
     // The number of rows (pattern chars) we *at least*
     // mainly to avoid branching
@@ -411,6 +433,66 @@ impl<P: Profile> Searcher<P> {
         .into_iter()
         .map(|(_, m)| m)
         .collect()
+    }
+
+    /// Search multiple patterns against multiple texts, using the algorithms given by `mode` (see [`SearchMode`]).
+    ///
+    /// Does multithreading using `rayon`.
+    /// Returns a vector of (pattern index, text index, match).
+    pub fn search_many<PAT: AsRef<[u8]> + Sync, I: RcSearchAble + ?Sized + Sync>(
+        &mut self,
+        patterns: &[PAT],
+        texts: &[&I],
+        k: usize,
+        mode: SearchMode,
+        num_threads: usize,
+    ) -> Vec<(usize, usize, Match)> {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build_global()
+            .unwrap();
+        match mode {
+            SearchMode::Single => map_collect_cartesian_product(
+                patterns,
+                texts,
+                self,
+                |searcher, pattern, text, pi, ti| {
+                    let matches = searcher.search(pattern.as_ref(), *text, k);
+                    matches.into_iter().map(move |m| (pi, ti, m))
+                },
+            ),
+            SearchMode::BatchPatterns => {
+                let pattern_batches: Vec<&[PAT]> = patterns.chunks(LANES).collect();
+
+                map_collect_cartesian_product(
+                    &pattern_batches,
+                    texts,
+                    self,
+                    |searcher, pattern_batch, text, pbi, ti| {
+                        let matches = searcher.search_patterns(pattern_batch, *text, k, None);
+                        matches
+                            .into_iter()
+                            .map(move |(pi, m)| (pbi * LANES + pi, ti, m))
+                    },
+                )
+            }
+
+            SearchMode::BatchTexts => {
+                let text_batches: Vec<&[&I]> = texts.chunks(LANES).collect();
+
+                map_collect_cartesian_product(
+                    &patterns,
+                    &text_batches,
+                    self,
+                    |searcher, pattern, text_batch, pi, tbi| {
+                        let matches = searcher.search_texts(pattern.as_ref(), *text_batch, k, None);
+                        matches
+                            .into_iter()
+                            .map(move |(ti, m)| (pi, tbi * LANES + ti, m))
+                    },
+                )
+            }
+        }
     }
 
     /// Search multiple similar-length texts in chunks of `LANES` at a time.
@@ -1372,6 +1454,50 @@ impl<P: Profile> Searcher<P> {
         }
 
         traces
+    }
+}
+
+fn map_collect_cartesian_product<
+    X: Sync,
+    Y: Sync,
+    O: Send,
+    I: Iterator<Item = O> + Send,
+    C: Clone + Sync,
+    F: Fn(&mut C, &X, &Y, usize, usize) -> I + Sync,
+>(
+    xs: &[X],
+    ys: &[Y],
+    context: &C,
+    f: F,
+) -> Vec<O> {
+    use rayon::prelude::*;
+    let f = &f;
+    if xs.len() < ys.len() {
+        xs.par_iter()
+            .enumerate()
+            .flat_map(|(xi, x)| {
+                ys.par_iter()
+                    .enumerate()
+                    .map_init(
+                        || context.clone(),
+                        move |context, (yi, y)| f(context, x, y, xi, yi),
+                    )
+                    .flatten_iter()
+            })
+            .collect()
+    } else {
+        ys.par_iter()
+            .enumerate()
+            .flat_map(|(yi, y)| {
+                xs.par_iter()
+                    .enumerate()
+                    .map_init(
+                        || context.clone(),
+                        move |context, (xi, x)| f(context, x, y, xi, yi),
+                    )
+                    .flatten_iter()
+            })
+            .collect()
     }
 }
 
