@@ -13,6 +13,7 @@
   using multiple threads.
 - `Match` now contains `text_idx` and `pattern_idx` for multi-search variants.
 - Collect matches into an internal Vec before returning that.
+- Add python bindings for `search_many`
 
 ## 0.1.10
 - **bugfix**: `sassy grep` had a bug in the batching logic, making it skip a

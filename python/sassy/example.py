@@ -30,8 +30,8 @@ print("=== DNA Search Example ===")
 pattern = b"ATCGATCG"
 text = b"GGGGATCGATCGTTTT"
 
-# Search with DNA alphabet
-matches = sassy.Searcher("dna", alpha=0.5).search(pattern, text, k=0)
+# Search with extended IUPAC alphabet and allow overhang
+matches = sassy.Searcher("iupac", alpha=0.5).search(pattern, text, k=0)
 
 print(f"Pattern: {pattern.decode()}")
 print(f"Text:  {text.decode()}")
@@ -75,4 +75,19 @@ print(f"Found {len(matches3)} matches:")
 for i, match in enumerate(matches3):
     print(
         f"  Match {i+1}: start={match.text_start}, end={match.text_end}, cost={match.cost}"
+    )
+
+# Example 4: Search multiple patterns in multiple strings
+print("\n=== Search_Many Example ===")
+patterns4 = [b"hello", b"world"]
+texts4 = [b"hello world", b"hi Hello there!", b"the world wide web is full of words"]
+
+# mode controls the backend; see the documentation of `search::SearchMode`.
+matches4 = sassy.Searcher("ascii").search_many(
+    patterns4, texts4, k=1, mode="single", threads=2
+)
+
+for i, match in enumerate(matches4):
+    print(
+        f"  Match {i+1}: pattern={match.pattern_idx} text={match.text_idx} start={match.text_start}, end={match.text_end}, cost={match.cost}"
     )

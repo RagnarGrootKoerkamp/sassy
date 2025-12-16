@@ -437,7 +437,7 @@ impl<P: Profile> Searcher<P> {
         std::mem::take(&mut self.matches)
     }
 
-    /// Search multiple patterns against multiple texts, using the algorithms given by `mode` (see [`SearchMode`]).
+    /// Search each given pattern in each given text, using the algorithms given by `mode` (see [`SearchMode`]).
     ///
     /// Does multithreading using `rayon`.
     /// Returns a vector of (pattern index, text index, match).
@@ -446,8 +446,8 @@ impl<P: Profile> Searcher<P> {
         patterns: &[PAT],
         texts: &[&I],
         k: usize,
-        mode: SearchMode,
         num_threads: usize,
+        mode: SearchMode,
     ) -> Vec<Match> {
         rayon::ThreadPoolBuilder::new()
             .num_threads(num_threads)
@@ -538,7 +538,7 @@ impl<P: Profile> Searcher<P> {
         std::mem::take(&mut self.matches)
     }
 
-    /// Search multiple similar-length patterns in chunks of `LANES` at a time.
+    /// Search multiple equals-length patterns in chunks of `LANES` at a time.
     ///
     /// Use this instead of `for pattern in patterns { searcher.search(pattern, text, k) }`
     /// when the patterns have similar length.

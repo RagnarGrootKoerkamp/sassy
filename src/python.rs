@@ -1,7 +1,7 @@
 use crate::profiles::{Ascii, Dna, Iupac};
 use crate::search::{self, Match, Strand};
 use pyo3::prelude::*;
-use pyo3::types::PyBytes;
+use pyo3::types::{PyBytes, PyString};
 
 /// A Python module implemented in Rust.
 #[pymodule]
@@ -76,10 +76,54 @@ impl Searcher {
             SearcherType::Iupac(searcher) => searcher.search(&pattern, &text, k),
         }
     }
+
+    #[pyo3(signature = (patterns, texts, k, threads, mode))]
+    #[doc = "Search multiple patterns in multiple texts, using multiple threads. Returns a list of Matches."]
+    fn search_many(
+        &mut self,
+        patterns: Vec<Bound<'_, PyBytes>>,
+        texts: Vec<Bound<'_, PyBytes>>,
+        k: usize,
+        threads: usize,
+        mode: &Bound<'_, PyString>,
+    ) -> Vec<Match> {
+        let patterns: Vec<&[u8]> = patterns.iter().map(|p| p.as_bytes()).collect();
+        let texts: Vec<&[u8]> = texts.iter().map(|t| t.as_bytes()).collect();
+        // We don't let control go back to Python while we hold the slices.
+        let mode = match mode.to_string_lossy().as_ref() {
+            "single" => search::SearchMode::Single,
+            "batch_patterns" => search::SearchMode::BatchPatterns,
+            "batch_texts" => search::SearchMode::BatchTexts,
+            _ => panic!(
+                "Unsupported search mode. Must be one of 'single', 'batch_patterns', or 'batch_texts'"
+            ),
+        };
+        match &mut self.searcher {
+            SearcherType::Ascii(searcher) => {
+                searcher.search_many(&patterns, &texts, k, threads, mode)
+            }
+            SearcherType::Dna(searcher) => {
+                searcher.search_many(&patterns, &texts, k, threads, mode)
+            }
+            SearcherType::Iupac(searcher) => {
+                searcher.search_many(&patterns, &texts, k, threads, mode)
+            }
+        }
+    }
 }
 
 #[pymethods]
 impl Match {
+    #[getter]
+    fn pattern_idx(&self) -> usize {
+        self.pattern_idx
+    }
+
+    #[getter]
+    fn text_idx(&self) -> usize {
+        self.text_idx
+    }
+
     #[getter]
     fn text_start(&self) -> usize {
         self.text_start

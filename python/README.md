@@ -63,7 +63,9 @@ Match 3:
 
 Further options are `sassy.Searcher(alpha=0.5)` to allow overhang alignments,
 and `sassy.Searcher("dna", rc=False)` to disable reverse complements for DNA
-or IUPAC strings.
+or IUPAC strings. `searcher.search` is the simple function to search one pattern
+in one text, while `searcher.search_many` takes multiple patterns and multiple
+texts and searches each pattern in each text, possibly in multiple threads.
 
 See [sassy/example.py](sassy/example.py) for a larger example.
 

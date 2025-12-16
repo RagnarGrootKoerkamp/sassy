@@ -192,7 +192,7 @@ mod test {
         let positions = get_match_positions(&out);
         assert_eq!(positions[0], vec![0, 1]);
         assert_eq!(positions[1], vec![63]);
-        assert_eq!(positions[2], vec![]);
+        assert_eq!(positions[2], vec![] as Vec<usize>);
         assert_eq!(positions[3], (2..63).collect::<Vec<_>>());
     }
 
