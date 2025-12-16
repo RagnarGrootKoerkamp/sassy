@@ -262,7 +262,7 @@ impl<'t> MultiText<'t> {
 pub(crate) enum MultiPattern<'t> {
     One(&'t [u8]),
     /// All patterns must have the same length.
-    Multi(&'t [&'t [u8]; LANES]),
+    Multi(&'t [&'t [u8]]),
 }
 
 impl<'t> MultiPattern<'t> {
@@ -577,7 +577,7 @@ impl<P: Profile> Searcher<P> {
                 p
             });
             let chunk_matches = self.search_handle_rc(
-                MultiPattern::Multi(&std::array::from_fn(|i| chunk[i].as_slice())),
+                MultiPattern::Multi(&slice_chunk[..chunk.len()]),
                 MultiRcText::One(text),
                 k,
                 false,
@@ -688,14 +688,23 @@ impl<P: Profile> Searcher<P> {
             };
             let _p;
             let _ps: [_; LANES];
+            let _ps_slices: [_; LANES];
             let complement_pattern = match &pattern {
                 MultiPattern::One(p) => {
                     _p = P::complement(p);
                     MultiPattern::one(&_p)
                 }
                 MultiPattern::Multi(ps) => {
-                    _ps = std::array::from_fn(|i| P::complement(&ps[i]));
-                    MultiPattern::Multi(&std::array::from_fn(|i| _ps[i].as_slice()))
+                    _ps = std::array::from_fn(|i| {
+                        if let Some(p) = ps.get(i) {
+                            P::complement(p)
+                        } else {
+                            vec![]
+                        }
+                    });
+                    _ps_slices = std::array::from_fn(|i| _ps[i].as_slice());
+
+                    MultiPattern::Multi(&_ps_slices[..ps.len()])
                 }
             };
             let without_trace = self.without_trace;
@@ -1178,7 +1187,7 @@ impl<P: Profile> Searcher<P> {
             // We made it to the end of the pattern here.
 
             // Save positions with cost <= k directly after processing each row
-            for lane in 0..LANES {
+            for lane in 0..patterns.len() {
                 let v = V::from(vp.as_array()[lane], vm.as_array()[lane]);
                 let base_pos = self.lanes[lane].chunk_offset * 64 + 64 * i;
                 let cost = dist_to_start_of_lane.as_array()[lane] as Cost;
