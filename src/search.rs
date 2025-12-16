@@ -561,21 +561,17 @@ impl<P: Profile> Searcher<P> {
         text: &I,
         k: usize,
     ) -> Vec<Match> {
+        assert!(
+            patterns
+                .iter()
+                .all(|p| p.as_ref().len() == patterns[0].as_ref().len()),
+            "All patterns passed to search_patterns must have the same length"
+        );
+
         self.matches.clear();
         for (i, chunk) in patterns.chunks(LANES).enumerate() {
-            // Pad chunk.
-            let max_len = chunk.iter().map(|p| p.as_ref().len()).max().unwrap_or(0);
-            let chunk: [Vec<u8>; LANES] = std::array::from_fn(|lane| {
-                let p = chunk
-                    .get(lane)
-                    .map(|p| {
-                        let mut p = p.as_ref().to_vec();
-                        p.resize(max_len, b'N'); // Pad with N
-                        p
-                    })
-                    .unwrap_or(vec![b'X'; max_len]);
-                p
-            });
+            let slice_chunk: [&[u8]; LANES] =
+                std::array::from_fn(|lane| chunk.get(lane).map(|p| p.as_ref()).unwrap_or(&[]));
             let chunk_matches = self.search_handle_rc(
                 MultiPattern::Multi(&slice_chunk[..chunk.len()]),
                 MultiRcText::One(text),
