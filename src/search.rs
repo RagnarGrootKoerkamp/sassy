@@ -836,7 +836,7 @@ impl<P: Profile> Searcher<P> {
         // The pattern will match a pattern of length at most pattern.len() + k.
         // We round that up to a multiple of 64 to find the number of blocks overlap between chunks.
         // TODO: Do we need this when searching multiple texts?
-        let max_overlap_blocks = (pattern.len() + k as usize).next_multiple_of(64) / 64;
+        let max_overlap_blocks = (pattern.len() + k as usize).div_ceil(64);
 
         // When allowing overlaps, for simplicity we 'extend' the text a bit more with N.
         let text_padding = if self.alpha.is_some() {
@@ -852,7 +852,10 @@ impl<P: Profile> Searcher<P> {
         };
         // Total number of blocks to be processed, including overlaps.
         let blocks_per_chunk = match text {
-            MultiText::One(text) => (text.len() + text_padding).div_ceil(64).div_ceil(LANES),
+            MultiText::One(text) => (text.len() + text_padding)
+                .div_ceil(64)
+                .saturating_sub(max_overlap_blocks)
+                .div_ceil(LANES),
             MultiText::Multi(ts) => ts
                 .iter()
                 .map(|t| t.len() + text_padding)
