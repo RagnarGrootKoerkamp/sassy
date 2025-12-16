@@ -456,58 +456,59 @@ impl<P: Profile> Searcher<P> {
     ) -> Vec<Match> {
         rayon::ThreadPoolBuilder::new()
             .num_threads(num_threads)
-            .build_global()
-            .unwrap();
-        match mode {
-            SearchMode::Single => map_collect_cartesian_product(
-                patterns,
-                texts,
-                self,
-                |searcher, pattern, text, pi, ti| {
-                    let mut matches = searcher.search(pattern.as_ref(), *text, k);
-                    matches.iter_mut().for_each(move |m| {
-                        m.pattern_idx = pi;
-                        m.text_idx = ti;
-                    });
-                    matches
-                },
-            ),
-            SearchMode::BatchPatterns => {
-                let pattern_batches: Vec<&[PAT]> = patterns.chunks(LANES).collect();
-
-                map_collect_cartesian_product(
-                    &pattern_batches,
+            .build()
+            .unwrap()
+            .install(|| match mode {
+                SearchMode::Single => map_collect_cartesian_product(
+                    patterns,
                     texts,
                     self,
-                    |searcher, pattern_batch, text, pbi, ti| {
-                        let mut matches = searcher.search_patterns(pattern_batch, *text, k);
+                    |searcher, pattern, text, pi, ti| {
+                        let mut matches = searcher.search(pattern.as_ref(), *text, k);
                         matches.iter_mut().for_each(move |m| {
-                            m.pattern_idx += pbi * LANES;
+                            m.pattern_idx = pi;
                             m.text_idx = ti;
                         });
                         matches
                     },
-                )
-            }
+                ),
+                SearchMode::BatchPatterns => {
+                    let pattern_batches: Vec<&[PAT]> = patterns.chunks(LANES).collect();
 
-            SearchMode::BatchTexts => {
-                let text_batches: Vec<&[&I]> = texts.chunks(LANES).collect();
+                    map_collect_cartesian_product(
+                        &pattern_batches,
+                        texts,
+                        self,
+                        |searcher, pattern_batch, text, pbi, ti| {
+                            let mut matches = searcher.search_patterns(pattern_batch, *text, k);
+                            matches.iter_mut().for_each(move |m| {
+                                m.pattern_idx += pbi * LANES;
+                                m.text_idx = ti;
+                            });
+                            matches
+                        },
+                    )
+                }
 
-                map_collect_cartesian_product(
-                    &patterns,
-                    &text_batches,
-                    self,
-                    |searcher, pattern, text_batch, pi, tbi| {
-                        let mut matches = searcher.search_texts(pattern.as_ref(), *text_batch, k);
-                        matches.iter_mut().for_each(move |m| {
-                            m.pattern_idx = pi;
-                            m.text_idx += tbi * LANES;
-                        });
-                        matches
-                    },
-                )
-            }
-        }
+                SearchMode::BatchTexts => {
+                    let text_batches: Vec<&[&I]> = texts.chunks(LANES).collect();
+
+                    map_collect_cartesian_product(
+                        &patterns,
+                        &text_batches,
+                        self,
+                        |searcher, pattern, text_batch, pi, tbi| {
+                            let mut matches =
+                                searcher.search_texts(pattern.as_ref(), *text_batch, k);
+                            matches.iter_mut().for_each(move |m| {
+                                m.pattern_idx = pi;
+                                m.text_idx += tbi * LANES;
+                            });
+                            matches
+                        },
+                    )
+                }
+            })
     }
 
     /// Search multiple similar-length texts in chunks of `LANES` at a time.
