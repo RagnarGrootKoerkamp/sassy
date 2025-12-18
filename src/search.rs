@@ -829,6 +829,72 @@ impl<P: Profile> Searcher<P> {
     }
 
     #[inline(always)]
+    fn search_prep(
+        &mut self,
+        pattern: &MultiPattern,
+        text: &MultiText,
+        k: Cost,
+        is_multi_pattern: bool,
+    ) -> (usize, usize, usize) {
+        let pattern_len = pattern.len();
+        let is_single_text = matches!(text, MultiText::One(_));
+
+        let max_overlap_blocks = if is_single_text && !is_multi_pattern {
+            (pattern_len + k as usize).div_ceil(64)
+        } else {
+            0
+        };
+
+        let text_padding = self.alpha.map_or(0, |alpha| {
+            pattern_len
+                .min(((k as f32) / alpha).ceil() as usize)
+                .min(self.max_overhang.unwrap_or(usize::MAX))
+        });
+
+        let blocks_per_chunk = match text {
+            MultiText::One(t) => {
+                let base = (t.len() + text_padding).div_ceil(64);
+                if is_multi_pattern {
+                    base
+                } else {
+                    base.saturating_sub(max_overlap_blocks).div_ceil(LANES)
+                }
+            }
+            MultiText::Multi(ts) => ts
+                .iter()
+                .map(|t| t.len() + text_padding)
+                .max()
+                .unwrap_or(0)
+                .div_ceil(64),
+        };
+
+        let chunk_offset_blocks = if is_single_text && !is_multi_pattern {
+            blocks_per_chunk
+        } else {
+            0
+        };
+
+        for lane in 0..LANES {
+            self.lanes[lane].chunk_offset = lane * chunk_offset_blocks;
+            self.lanes[lane].lane_end = (lane + 1) * chunk_offset_blocks * 64;
+            self.lanes[lane].matches.clear();
+            self.lanes[lane].decreasing = true;
+        }
+
+        self.hp.clear();
+        self.hm.clear();
+        self.hp.resize(pattern_len, S::splat(1));
+        self.hm.resize(pattern_len, S::splat(0));
+
+        if is_multi_pattern || !is_single_text {
+            init_deltas_for_overshoot_all_lanes(&mut self.hp, self.alpha, self.max_overhang);
+        } else {
+            init_deltas_for_overshoot(&mut self.hp, self.alpha, self.max_overhang);
+        }
+
+        (blocks_per_chunk, max_overlap_blocks, pattern_len)
+    }
+
     #[inline(always)]
     fn search_internal<'t, F>(
         &mut self,
@@ -849,69 +915,9 @@ impl<P: Profile> Searcher<P> {
 
         // The pattern will match a pattern of length at most pattern.len() + k.
         // We round that up to a multiple of 64 to find the number of blocks overlap between chunks.
-        let pattern_len = pattern.len();
         let is_single_text = matches!(text, MultiText::One(_));
-
-        let max_overlap_blocks = if is_single_text && !is_multi_pattern {
-            (pattern_len + k as usize).div_ceil(64)
-        } else {
-            0
-        };
-
-        // The padding is at most the length of the pattern (since putting the entire pattern after the text is useless).
-        // The padding is at most ceil(k/alpha), since crossing longer padding costs more than k.
-        // The padding is at most `max_overhang`, if set.
-        let text_padding = self.alpha.map_or(0, |alpha| {
-            pattern_len
-                .min(((k as f32) / alpha).ceil() as usize)
-                .min(self.max_overhang.unwrap_or(usize::MAX))
-        });
-
-        // Total number of blocks to be processed, including overlaps.
-        let blocks_per_chunk = match text {
-            MultiText::One(t) => {
-                let base = (t.len() + text_padding).div_ceil(64);
-                if is_multi_pattern {
-                    base
-                } else {
-                    base.saturating_sub(max_overlap_blocks).div_ceil(LANES)
-                }
-            }
-            MultiText::Multi(ts) => ts
-                .iter()
-                .map(|t| t.len() + text_padding)
-                .max()
-                .unwrap_or(0)
-                .div_ceil(64),
-        };
-
-        // Length of each of the four chunks.
-        // if text is chunked each block has different offset, otherwise
-        // all chunks start at 0
-        let chunk_offset_blocks = if is_single_text && !is_multi_pattern {
-            blocks_per_chunk
-        } else {
-            0
-        };
-
-        for lane in 0..LANES {
-            self.lanes[lane].chunk_offset = lane * chunk_offset_blocks;
-            // Set lane_end for pruning; only relevant for chunking though
-            self.lanes[lane].lane_end = (lane + 1) * chunk_offset_blocks * 64;
-            self.lanes[lane].matches.clear();
-            self.lanes[lane].decreasing = true;
-        }
-
-        self.hp.clear();
-        self.hm.clear();
-        self.hp.resize(pattern_len, S::splat(1));
-        self.hm.resize(pattern_len, S::splat(0));
-
-        if is_multi_pattern || !is_single_text {
-            init_deltas_for_overshoot_all_lanes(&mut self.hp, self.alpha, self.max_overhang);
-        } else {
-            init_deltas_for_overshoot(&mut self.hp, self.alpha, self.max_overhang);
-        }
+        let (blocks_per_chunk, max_overlap_blocks, pattern_len) =
+            self.search_prep(&pattern, &text, k, is_multi_pattern);
 
         let mut prev_max_j = 0;
         let mut prev_end_last_below = 0;
