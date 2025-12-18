@@ -270,10 +270,10 @@ impl<'t> MultiPattern<'t> {
         MultiPattern::One(t)
     }
 
-    pub fn get_lane(&self, lane: usize) -> &'t [u8] {
+    pub fn get_lane(&self, lane: usize) -> Option<&'t [u8]> {
         match self {
-            MultiPattern::One(t) => t,
-            MultiPattern::Multi(ts) => &ts[lane],
+            MultiPattern::One(t) => Some(t),
+            MultiPattern::Multi(ts) => ts.get(lane).copied(),
         }
     }
 
@@ -746,14 +746,15 @@ impl<P: Profile> Searcher<P> {
         // If there is a filter fn, filter end positions based on function before processing matches
         if let Some(filter_fn) = filter_fn {
             for (l, lane) in self.lanes.iter_mut().enumerate() {
-                let p = pattern.get_lane(l);
                 let Some(t) = text.get_lane(l) else {
                     break;
                 };
-                lane.matches.retain(|(end_pos, _)| {
-                    let text_till_end = &t[..*end_pos];
-                    filter_fn(p, text_till_end, strand)
-                });
+                if let Some(p) = pattern.get_lane(l) {
+                    lane.matches.retain(|(end_pos, _)| {
+                        let text_till_end = &t[..*end_pos];
+                        filter_fn(p, text_till_end, strand)
+                    });
+                }
             }
         }
         self.process_matches(pattern, text, k as Cost)
@@ -767,10 +768,7 @@ impl<P: Profile> Searcher<P> {
         // Calculate the minimum possible cost in this lane
         // This is the best case scenario - if even this minimum is > k,
         // then no matches are possible in this lane
-        let min_in_lane =
-            prefix_min(v.0, v.1).0 as Cost + dist_to_start_of_lane.as_array()[lane] as Cost;
-
-        min_in_lane
+        prefix_min(v.0, v.1).0 as Cost + dist_to_start_of_lane.as_array()[lane] as Cost
     }
 
     /// Check if any value in any lane is <= k.
@@ -800,7 +798,7 @@ impl<P: Profile> Searcher<P> {
         None
     }
 
-    fn search_positions_bounded<'t>(
+    pub fn search_positions_bounded<'t>(
         &mut self,
         pattern: MultiPattern<'t>,
         text: MultiText<'t>,
@@ -809,24 +807,41 @@ impl<P: Profile> Searcher<P> {
     ) {
         match pattern {
             MultiPattern::One(p) => {
-                self.search_positions_bounded_one(p, text, k, all_minima);
+                let (profiler, pattern_profile) = P::encode_pattern(p);
+                let get_eq = |j: usize, lanes: &[LaneState<P>; LANES]| {
+                    let pattern_char = unsafe { pattern_profile.get_unchecked(j) };
+                    S::from(std::array::from_fn(|lane| {
+                        P::eq(pattern_char, &lanes[lane].text_profile)
+                    }))
+                };
+                self.search_internal(pattern, profiler, get_eq, text, k, all_minima, false);
             }
             MultiPattern::Multi(ps) => {
-                self.search_positions_bounded_multipattern(ps, text, k, all_minima);
+                let (profiler, pattern_profiles) = P::encode_patterns(ps);
+                let get_eq = |j: usize, lanes: &[LaneState<P>; LANES]| {
+                    S::from(std::array::from_fn(|lane| {
+                        P::eq(&pattern_profiles[j][lane], &lanes[lane].text_profile)
+                    }))
+                };
+                self.search_internal(pattern, profiler, get_eq, text, k, all_minima, true);
             }
         }
     }
 
-    // FIXME: DEDUP
-    fn search_positions_bounded_one<'t>(
+    #[inline(always)]
+    #[inline(always)]
+    fn search_internal<'t, F>(
         &mut self,
-        pattern: &'t [u8],
+        pattern: MultiPattern<'t>,
+        profiler: P,
+        mut get_eq: F,
         text: MultiText<'t>,
         k: Cost,
         all_minima: bool,
-    ) {
-        let (profiler, pattern_profile) = P::encode_pattern(pattern);
-
+        is_multi_pattern: bool,
+    ) where
+        F: FnMut(usize, &[LaneState<P>; LANES]) -> S,
+    {
         // Terminology:
         // - chunk: roughly 1/4th of the input text, with small overlaps.
         // - block: 64 bytes of text.
@@ -834,27 +849,34 @@ impl<P: Profile> Searcher<P> {
 
         // The pattern will match a pattern of length at most pattern.len() + k.
         // We round that up to a multiple of 64 to find the number of blocks overlap between chunks.
-        // TODO: Do we need this when searching multiple texts?
-        let max_overlap_blocks = (pattern.len() + k as usize).div_ceil(64);
+        let pattern_len = pattern.len();
+        let is_single_text = matches!(text, MultiText::One(_));
 
-        // When allowing overlaps, for simplicity we 'extend' the text a bit more with N.
-        let text_padding = if self.alpha.is_some() {
-            // The padding is at most the length of the pattern (since putting the entire pattern after the text is useless).
-            // The padding is at most ceil(k/alpha), since crossing longer padding costs more than k.
-            // The padding is at most `max_overhang`, if set.
-            pattern
-                .len()
-                .min(((k as f32) / self.alpha.unwrap()).ceil() as usize)
-                .min(self.max_overhang.unwrap_or(usize::MAX))
+        let max_overlap_blocks = if is_single_text && !is_multi_pattern {
+            (pattern_len + k as usize).div_ceil(64)
         } else {
             0
         };
+
+        // The padding is at most the length of the pattern (since putting the entire pattern after the text is useless).
+        // The padding is at most ceil(k/alpha), since crossing longer padding costs more than k.
+        // The padding is at most `max_overhang`, if set.
+        let text_padding = self.alpha.map_or(0, |alpha| {
+            pattern_len
+                .min(((k as f32) / alpha).ceil() as usize)
+                .min(self.max_overhang.unwrap_or(usize::MAX))
+        });
+
         // Total number of blocks to be processed, including overlaps.
         let blocks_per_chunk = match text {
-            MultiText::One(text) => (text.len() + text_padding)
-                .div_ceil(64)
-                .saturating_sub(max_overlap_blocks)
-                .div_ceil(LANES),
+            MultiText::One(t) => {
+                let base = (t.len() + text_padding).div_ceil(64);
+                if is_multi_pattern {
+                    base
+                } else {
+                    base.saturating_sub(max_overlap_blocks).div_ceil(LANES)
+                }
+            }
             MultiText::Multi(ts) => ts
                 .iter()
                 .map(|t| t.len() + text_padding)
@@ -864,331 +886,87 @@ impl<P: Profile> Searcher<P> {
         };
 
         // Length of each of the four chunks.
-        let chunk_offset = match text {
-            MultiText::One(_) => blocks_per_chunk,
-            MultiText::Multi(_) => 0,
-        };
-        // Start index in text of each chunk.
-        for lane in 0..LANES {
-            self.lanes[lane].chunk_offset = lane * chunk_offset;
-        }
-
-        // Clear matches in each lane
-        for lane in 0..LANES {
-            self.lanes[lane].matches.clear();
-            self.lanes[lane].decreasing = true;
-        }
-
-        // State tracking for early termination optimization:
-        // - prev_max_j: tracks the highest pattern row we've computed so far
-        // - prev_end_last_below: tracks the highest row where any lane had cost <= k
-        let mut prev_max_j = 0;
-        let mut prev_end_last_below = 0;
-
-        self.hp.clear();
-        self.hm.clear();
-        self.hp.resize(pattern.len(), S::splat(1));
-        self.hm.resize(pattern.len(), S::splat(0));
-
-        match text {
-            MultiText::One(_) => {
-                init_deltas_for_overshoot(&mut self.hp, self.alpha, self.max_overhang)
-            }
-            MultiText::Multi(_) => {
-                init_deltas_for_overshoot_all_lanes(&mut self.hp, self.alpha, self.max_overhang)
-            }
-        }
-
-        'text_chunk: for i in 0..blocks_per_chunk + max_overlap_blocks {
-            let mut vp = S::splat(0);
-            let mut vm = S::splat(0);
-
-            // Update text slices and profiles
-            for lane in 0..LANES {
-                let Some(t) = text.get_lane(lane) else {
-                    break;
-                };
-                self.lanes[lane].update_and_encode(t, i, &profiler, self.alpha.is_some());
-            }
-
-            let mut dist_to_start_of_lane = S::splat(0);
-            let mut dist_to_end_of_lane = S::splat(0);
-            let mut cur_end_last_below = 0;
-
-            // Iterate over pattern chars (rows in the DP matrix)
-            for j in 0..pattern.len() {
-                // These are needed to prevent bound checks on `self.hp[j]`.
-                // I'm not quite sure why those aren't optimized away automatically.
-                unsafe { assert_unchecked(j < self.hp.len()) };
-                unsafe { assert_unchecked(j < self.hm.len()) };
-                let hp = &mut self.hp[j];
-                let hm = &mut self.hm[j];
-                dist_to_start_of_lane += *hp;
-                dist_to_start_of_lane -= *hm;
-
-                let pattern_char = unsafe { pattern_profile.get_unchecked(j) };
-                let eq = S::from(std::array::from_fn(|lane| {
-                    P::eq(pattern_char, &self.lanes[lane].text_profile)
-                }));
-
-                compute_block_simd(hp, hm, &mut vp, &mut vm, eq);
-
-                // Early termination check: If we've moved past the last row that had any
-                // promising matches (cost <= k), we can potentially skip ahead or terminate
-                'check: {
-                    dist_to_end_of_lane += *hp;
-                    dist_to_end_of_lane -= *hm;
-
-                    // NOTE HOT: This bit is up to 25% of runtime, so only do it every few iterations.
-                    {
-                        // Check if any lane has cost <= k (ie <k+1) at the current row
-                        let cmp = dist_to_end_of_lane.simd_lt(S::splat(k as u64 + 1));
-                        // at least one lane true?
-                        let end_leq_k = cmp != wide::u64x4::splat(0);
-                        // Track the highest row where we found any promising matches
-                        cur_end_last_below = if end_leq_k { j } else { cur_end_last_below };
-                    }
-
-                    // Only do early termination checks if we've moved past the last promising row
-                    if j > prev_end_last_below {
-                        // Check if any lane has a minimum cost that could lead to matches <= k
-                        if let Some(new_end) =
-                            self.check_lanes(&vp, &vm, &dist_to_start_of_lane, k, j)
-                        {
-                            // Found a promising lane - update our tracking and continue
-                            prev_end_last_below = new_end;
-                            break 'check;
-                        }
-
-                        // No lanes have promising matches - we can skip ahead
-                        self.reset_rows(j + 1, prev_max_j);
-                        prev_end_last_below = cur_end_last_below.max(Self::CHECK_AT_LEAST_ROWS);
-                        prev_max_j = j;
-
-                        // Early termination: if we're in overlap region and too far from text end
-                        if self.should_terminate_early(i, blocks_per_chunk, j, k) {
-                            break 'text_chunk;
-                        }
-                        //  println!("Skipping {j}");
-                        continue 'text_chunk;
-                    }
-                }
-            }
-            // We made it to the end of the pattern here.
-
-            // Save positions with cost <= k directly after processing each row
-            for lane in 0..LANES {
-                let v = V::from(vp.as_array()[lane], vm.as_array()[lane]);
-                let base_pos = self.lanes[lane].chunk_offset * 64 + 64 * i;
-                let cost = dist_to_start_of_lane.as_array()[lane] as Cost;
-
-                // `check_lanes` only happens at most every 8 rows,
-                // so for short patterns there's a good chance things are bad by now.
-                let min_in_lane = self.min_in_lane(v, lane, &dist_to_start_of_lane);
-                if min_in_lane > k {
-                    continue;
-                }
-
-                let Some(t) = text.get_lane(lane) else {
-                    break;
-                };
-                self.find_minima_with_overhang(
-                    v,
-                    cost,
-                    k,
-                    t.len(),
-                    pattern.len(),
-                    base_pos,
-                    lane,
-                    all_minima,
-                );
-            }
-
-            prev_end_last_below = cur_end_last_below.max(Self::CHECK_AT_LEAST_ROWS);
-            prev_max_j = pattern.len() - 1;
-        }
-
-        // Clean up any remaining rows that weren't reset
-        self.reset_rows(0, prev_max_j);
-
-        // Prune matches in overlapping regions.
-        if let MultiText::One(_) = text {
-            if log::log_enabled!(log::Level::Trace) {
-                self.lanes[0].matches.iter().for_each(|&(end_pos, cost)| {
-                    log::trace!("lane 0 KEEP {end_pos} {cost}");
-                });
-            }
-
-            let cur_lane_end = self.lanes[0].lane_end;
-            self.lanes[0].matches.retain(|&(end_pos, cost)| {
-                if end_pos >= cur_lane_end {
-                    log::trace!(
-                        "lane 0 drop {end_pos} {cost} because it's >= lane end {cur_lane_end}"
-                    );
-                }
-                end_pos < cur_lane_end
-            });
-            for lane in 1..LANES {
-                let prev_lane_end = self.lanes[lane - 1].lane_end;
-                let cur_lane_end = self.lanes[lane].lane_end;
-                log::trace!("End of lane {}: {prev_lane_end}", lane - 1);
-                log::trace!(
-                    "Last match of lane {}: {:?}",
-                    lane - 1,
-                    self.lanes[lane - 1].matches.last()
-                );
-                self.lanes[lane].matches.retain(|&(end_pos, cost)| {
-                    if end_pos < prev_lane_end {
-                        log::trace!(
-                            "lane {lane} drop {end_pos} {cost} because it's before {prev_lane_end}"
-                        );
-                    } else {
-                        log::trace!("lane {lane} KEEP {end_pos} {cost}");
-                    }
-                    if end_pos >= cur_lane_end {
-                        log::trace!(
-                            "lane {lane} drop {end_pos} {cost} because it's >= lane end {cur_lane_end}"
-                        );
-                    }
-                    // Keep matches that end after the previous lane's end position
-                    // Note that `prev_lane_end` itself is handled by the current lane.
-                    if end_pos == cur_lane_end {
-                        log::trace!(
-                            "lane {lane} drop {end_pos} {cost} because it equals {cur_lane_end}"
-                        );
-                    }
-                    end_pos >= prev_lane_end && (end_pos < cur_lane_end || lane == LANES-1)
-                });
-            }
-        }
-    }
-
-    // FIXME: DEDUP
-    fn search_positions_bounded_multipattern<'t>(
-        &mut self,
-        patterns: &[&[u8]],
-        text: MultiText<'t>,
-        k: Cost,
-        all_minima: bool,
-    ) {
-        let (profiler, pattern_profiles) = P::encode_patterns(patterns);
-        let pattern = patterns[0];
-
-        // Terminology:
-        // - chunk: roughly 1/4th of the input text, with small overlaps.
-        // - block: 64 bytes of text.
-        // - lane: a u64 of a SIMD vec.
-
-        // The pattern will match a pattern of length at most pattern.len() + k.
-        // We round that up to a multiple of 64 to find the number of blocks overlap between chunks.
-        let max_overlap_blocks = 0;
-
-        // When allowing overlaps, for simplicity we 'extend' the text a bit more with N.
-        let text_padding = if self.alpha.is_some() {
-            // The padding is at most the length of the pattern (since putting the entire pattern after the text is useless).
-            // The padding is at most ceil(k/alpha), since crossing longer padding costs more than k.
-            // The padding is at most `max_overhang`, if set.
-            pattern
-                .len()
-                .min(((k as f32) / self.alpha.unwrap()).ceil() as usize)
-                .min(self.max_overhang.unwrap_or(usize::MAX))
+        // if text is chunked each block has different offset, otherwise
+        // all chunks start at 0
+        let chunk_offset_blocks = if is_single_text && !is_multi_pattern {
+            blocks_per_chunk
         } else {
             0
         };
-        // Total number of blocks to be processed, including overlaps.
-        let blocks_per_chunk = match text {
-            MultiText::One(text) => (text.len() + text_padding).div_ceil(64),
-            MultiText::Multi(_ts) => panic!(),
-        };
 
-        // Length of each of the four chunks.
-        let chunk_offset = 0;
-
-        // Start index in text of each chunk.
         for lane in 0..LANES {
-            self.lanes[lane].chunk_offset = lane * chunk_offset;
-        }
-
-        // Clear matches in each lane
-        for lane in 0..LANES {
+            self.lanes[lane].chunk_offset = lane * chunk_offset_blocks;
+            // Set lane_end for pruning; only relevant for chunking though
+            self.lanes[lane].lane_end = (lane + 1) * chunk_offset_blocks * 64;
             self.lanes[lane].matches.clear();
             self.lanes[lane].decreasing = true;
         }
 
-        // State tracking for early termination optimization:
-        // - prev_max_j: tracks the highest pattern row we've computed so far
-        // - prev_end_last_below: tracks the highest row where any lane had cost <= k
+        self.hp.clear();
+        self.hm.clear();
+        self.hp.resize(pattern_len, S::splat(1));
+        self.hm.resize(pattern_len, S::splat(0));
+
+        if is_multi_pattern || !is_single_text {
+            init_deltas_for_overshoot_all_lanes(&mut self.hp, self.alpha, self.max_overhang);
+        } else {
+            init_deltas_for_overshoot(&mut self.hp, self.alpha, self.max_overhang);
+        }
+
         let mut prev_max_j = 0;
         let mut prev_end_last_below = 0;
 
-        self.hp.clear();
-        self.hm.clear();
-        self.hp.resize(pattern.len(), S::splat(1));
-        self.hm.resize(pattern.len(), S::splat(0));
-
-        // Multiple patterns
-        init_deltas_for_overshoot_all_lanes(&mut self.hp, self.alpha, self.max_overhang);
-
         'text_chunk: for i in 0..blocks_per_chunk + max_overlap_blocks {
-            let mut vp = S::splat(0);
-            let mut vm = S::splat(0);
+            let (mut vp, mut vm) = (S::splat(0), S::splat(0));
 
-            // Update text slices and profiles
             for lane in 0..LANES {
-                let Some(t) = text.get_lane(lane) else {
-                    break;
-                };
-                self.lanes[lane].update_and_encode(t, i, &profiler, self.alpha.is_some());
+                if let Some(t) = text.get_lane(lane) {
+                    self.lanes[lane].update_and_encode(t, i, &profiler, self.alpha.is_some());
+                }
             }
 
-            let mut dist_to_start_of_lane = S::splat(0);
-            let mut dist_to_end_of_lane = S::splat(0);
+            let (mut dist_to_start, mut dist_to_end) = (S::splat(0), S::splat(0));
             let mut cur_end_last_below = 0;
 
             // Iterate over pattern chars (rows in the DP matrix)
-            for j in 0..pattern.len() {
+            for j in 0..pattern_len {
                 // These are needed to prevent bound checks on `self.hp[j]`.
                 // I'm not quite sure why those aren't optimized away automatically.
-                unsafe { assert_unchecked(j < self.hp.len()) };
-                unsafe { assert_unchecked(j < self.hm.len()) };
-                let hp = &mut self.hp[j];
+                unsafe {
+                    assert_unchecked(j < self.hp.len());
+                    assert_unchecked(j < self.hm.len());
+                }
+                let hp: &mut wide::u64x4 = &mut self.hp[j];
                 let hm = &mut self.hm[j];
-                dist_to_start_of_lane += *hp;
-                dist_to_start_of_lane -= *hm;
 
-                let eq = S::from(std::array::from_fn(|lane| {
-                    P::eq(&pattern_profiles[j][lane], &self.lanes[lane].text_profile)
-                }));
+                dist_to_start += *hp;
+                dist_to_start -= *hm;
 
+                let eq = get_eq(j, &self.lanes);
                 compute_block_simd(hp, hm, &mut vp, &mut vm, eq);
 
                 // Early termination check: If we've moved past the last row that had any
                 // promising matches (cost <= k), we can potentially skip ahead or terminate
                 'check: {
-                    dist_to_end_of_lane += *hp;
-                    dist_to_end_of_lane -= *hm;
+                    dist_to_end += *hp;
+                    dist_to_end -= *hm;
 
-                    // NOTE HOT: This bit is up to 25% of runtime, so only do it every few iterations.
-                    {
-                        // Check if any lane has cost <= k (ie <k+1) at the current row
-                        let cmp = dist_to_end_of_lane.simd_lt(S::splat(k as u64 + 1));
-                        // at least one lane true?
-                        let end_leq_k = cmp != wide::u64x4::splat(0);
+                    // Check if any lane has cost <= k (ie <k+1) at the current row
+                    let cmp = dist_to_end.simd_lt(S::splat(k as u64 + 1));
+                    if cmp != wide::u64x4::splat(0) {
                         // Track the highest row where we found any promising matches
-                        cur_end_last_below = if end_leq_k { j } else { cur_end_last_below };
+
+                        cur_end_last_below = j;
                     }
 
                     // Only do early termination checks if we've moved past the last promising row
                     if j > prev_end_last_below {
                         // Check if any lane has a minimum cost that could lead to matches <= k
-                        if let Some(new_end) =
-                            self.check_lanes(&vp, &vm, &dist_to_start_of_lane, k, j)
-                        {
+                        if let Some(new_end) = self.check_lanes(&vp, &vm, &dist_to_start, k, j) {
                             // Found a promising lane - update our tracking and continue
                             prev_end_last_below = new_end;
                             break 'check;
                         }
-
                         // No lanes have promising matches - we can skip ahead
                         self.reset_rows(j + 1, prev_max_j);
                         prev_end_last_below = cur_end_last_below.max(Self::CHECK_AT_LEAST_ROWS);
@@ -1198,47 +976,86 @@ impl<P: Profile> Searcher<P> {
                         if self.should_terminate_early(i, blocks_per_chunk, j, k) {
                             break 'text_chunk;
                         }
-                        //  println!("Skipping {j}");
                         continue 'text_chunk;
                     }
                 }
             }
-            // We made it to the end of the pattern here.
 
             // Save positions with cost <= k directly after processing each row
-            for lane in 0..patterns.len() {
+            for lane in 0..LANES {
                 let v = V::from(vp.as_array()[lane], vm.as_array()[lane]);
-                let base_pos = self.lanes[lane].chunk_offset * 64 + 64 * i;
-                let cost = dist_to_start_of_lane.as_array()[lane] as Cost;
+                let cost = dist_to_start.as_array()[lane] as Cost;
 
                 // `check_lanes` only happens at most every 8 rows,
                 // so for short patterns there's a good chance things are bad by now.
-                let min_in_lane = self.min_in_lane(v, lane, &dist_to_start_of_lane);
-                if min_in_lane > k {
-                    continue;
+                if self.min_in_lane(v, lane, &dist_to_start) <= k {
+                    // Both pattern and text should exist, guaranteed?
+                    if let (Some(t), Some(_p)) = (text.get_lane(lane), pattern.get_lane(lane)) {
+                        let base_pos = self.lanes[lane].chunk_offset * 64 + 64 * i;
+                        self.find_minima_with_overhang(
+                            v,
+                            cost,
+                            k,
+                            t.len(),
+                            pattern_len,
+                            base_pos,
+                            lane,
+                            all_minima,
+                        );
+                    }
                 }
-
-                let Some(t) = text.get_lane(lane) else {
-                    break;
-                };
-                self.find_minima_with_overhang(
-                    v,
-                    cost,
-                    k,
-                    t.len(),
-                    pattern.len(),
-                    base_pos,
-                    lane,
-                    all_minima,
-                );
             }
-
             prev_end_last_below = cur_end_last_below.max(Self::CHECK_AT_LEAST_ROWS);
-            prev_max_j = pattern.len() - 1;
+            prev_max_j = pattern_len - 1;
         }
 
-        // Clean up any remaining rows that weren't reset
         self.reset_rows(0, prev_max_j);
+
+        // If text was chunked we have to prune
+        if is_single_text && !is_multi_pattern {
+            self.prune_lane_overlaps();
+        }
+    }
+
+    #[inline(always)]
+    fn prune_lane_overlaps(&mut self) {
+        if log::log_enabled!(log::Level::Trace) {
+            self.lanes[0].matches.iter().for_each(|&(end_pos, cost)| {
+                log::trace!("lane 0 KEEP {end_pos} {cost}");
+            });
+        }
+
+        let cur_lane_end = self.lanes[0].lane_end;
+        self.lanes[0].matches.retain(|&(end_pos, cost)| {
+            if end_pos >= cur_lane_end {
+                log::trace!("lane 0 drop {end_pos} {cost} because it's >= lane end {cur_lane_end}");
+            }
+            end_pos < cur_lane_end
+        });
+
+        for lane in 1..LANES {
+            let prev_lane_end = self.lanes[lane - 1].lane_end;
+            let cur_lane_end = self.lanes[lane].lane_end;
+            log::trace!("End of lane {}: {prev_lane_end}", lane - 1);
+            self.lanes[lane].matches.retain(|&(end_pos, cost)| {
+                let too_early = end_pos < prev_lane_end;
+                let too_late = end_pos >= cur_lane_end && lane != LANES - 1;
+
+                if too_early {
+                    log::trace!(
+                        "lane {lane} drop {end_pos} {cost} because it's before {prev_lane_end}"
+                    );
+                } else if too_late {
+                    log::trace!(
+                        "lane {lane} drop {end_pos} {cost} because it's >= lane end {cur_lane_end}"
+                    );
+                } else {
+                    log::trace!("lane {lane} KEEP {end_pos} {cost}");
+                }
+
+                !too_early && !too_late
+            });
+        }
     }
 
     /// Reset rows that are no longer needed for future computations
@@ -1397,7 +1214,7 @@ impl<P: Profile> Searcher<P> {
                         cost,
                         Reverse(end_pos),
                         offset,
-                        pattern.get_lane(lane),
+                        pattern.get_lane(lane).unwrap(), // We always should have a pattern here
                         slice,
                     ));
                 }
@@ -1458,7 +1275,7 @@ impl<P: Profile> Searcher<P> {
                     batch.add(
                         if multi_pattern { lane } else { 0 },
                         if multi_text { lane } else { 0 },
-                        pattern.get_lane(lane),
+                        pattern.get_lane(lane).unwrap(), // guaranteed?
                         slice,
                         offset,
                         end_pos,
@@ -2198,7 +2015,7 @@ mod tests {
         }
 
         let mut skipped = 0;
-        let iter = 1000;
+        let iter = 10000;
 
         for _ in 0..iter {
             eprintln!("\n\n============================\n\n");
@@ -3031,7 +2848,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
         let mut searcher = Searcher::<Iupac>::new_fwd();
 
-        let iter = 1000;
+        let iter = 10000;
 
         for _ in 0..iter {
             searcher.rc = rng.random_bool(0.5);
