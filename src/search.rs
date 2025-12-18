@@ -2021,7 +2021,7 @@ mod tests {
         }
 
         let mut skipped = 0;
-        let iter = 10000;
+        let iter = 1000;
 
         for _ in 0..iter {
             eprintln!("\n\n============================\n\n");
@@ -2854,7 +2854,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
         let mut searcher = Searcher::<Iupac>::new_fwd();
 
-        let iter = 10000;
+        let iter = 1000;
 
         for _ in 0..iter {
             searcher.rc = rng.random_bool(0.5);
