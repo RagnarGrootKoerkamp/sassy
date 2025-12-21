@@ -333,6 +333,33 @@ pub enum SearchMode {
     /// Possibly has large overhead for texts of highly differing lengths.
     /// Consider sorting texts by length beforehand.
     BatchTexts,
+    /// When all patterns have  an equal length (<=64), use one pattern per SIMD lane.
+    /// Uses pattern tilling to search one pattern per lane against the same text
+    /// character
+    BatchPatternsShort,
+    /// Automatically selects searchmode based on pattern and text lengths.
+    Auto,
+}
+
+pub fn select_search_mode(patterns: &[&[u8]], texts: &[&[u8]]) -> SearchMode {
+    if patterns.len() == 1 && texts.len() == 1 {
+        return SearchMode::Single;
+    }
+
+    let max_pattern_len = patterns.iter().map(|p| p.len()).max().unwrap();
+    let patterns_euqal_length = patterns.iter().all(|p| p.len() == max_pattern_len);
+    let pats_fill_lanes = patterns.len() >= LANES;
+    let texts_fill_lanes = texts.len() >= LANES;
+
+    if pats_fill_lanes && patterns_euqal_length && max_pattern_len <= 64 {
+        return SearchMode::BatchPatternsShort;
+    }
+
+    if !pats_fill_lanes && texts_fill_lanes {
+        return SearchMode::BatchTexts;
+    }
+
+    return SearchMode::BatchPatterns;
 }
 
 #[inline(always)]
@@ -399,8 +426,8 @@ impl<P: Profile> Searcher<P> {
         self
     }
 
-    pub fn encode_queries(&mut self, queries: &[Vec<u8>]) -> EncodedQueries {
-        self.pattern_tilling_searcher.encode(queries, self.rc)
+    pub fn encode_patterns(&mut self, patterns: &[Vec<u8>]) -> EncodedQueries {
+        self.pattern_tilling_searcher.encode(&patterns, self.rc)
     }
 
     /// Returns a match for each *rightmost local pattern_tillingmum* end position with score <=k.
@@ -569,6 +596,8 @@ impl<P: Profile> Searcher<P> {
                         },
                     )
                 }
+                SearchMode::Auto => unreachable!("Not implemented yet"),
+                SearchMode::BatchPatternsShort => unreachable!("Not implemented yet"),
             })
     }
 

@@ -53,7 +53,7 @@ fn bench_searchers(c: &mut Criterion) {
 
         {
             let mut searcher = Searcher::<Iupac>::new_fwd();
-            let encoded = searcher.encode_queries(&queries);
+            let encoded = searcher.encode_patterns(&queries);
 
             group.bench_function(format!("sassy_pattern_tiling/q={}", num_queries), |b| {
                 b.iter(|| {
