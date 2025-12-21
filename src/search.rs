@@ -11,6 +11,10 @@ use crate::{bitpacking::compute_block_simd, delta_encoding::V};
 use pa_types::{Cigar, CigarOp, Cost, Pos};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
+// pattern_tilling imports
+use crate::pattern_tilling::general::EncodedQueries;
+use crate::pattern_tilling::general::Searcher as PatternTillingSearcher;
+
 /// A match of the pattern against the text.
 ///
 /// All indices are 0-based.
@@ -228,6 +232,9 @@ pub struct Searcher<P: Profile> {
     /// If set, overhang can be at most this long.
     max_overhang: Option<usize>,
 
+    // pattern_tilling searcher
+    pattern_tilling_searcher: PatternTillingSearcher,
+
     // Internal caches
     cost_matrices: [CostMatrix; LANES],
     hp: Vec<S>,
@@ -328,6 +335,18 @@ pub enum SearchMode {
     BatchTexts,
 }
 
+#[inline(always)]
+pub(crate) fn get_overhang_steps(
+    q_len: usize,
+    k: usize,
+    alpha: f32,
+    max_overhang: Option<usize>,
+) -> usize {
+    q_len
+        .min(((k as f32 + alpha) / alpha).ceil() as usize)
+        .min(max_overhang.unwrap_or(usize::MAX))
+}
+
 impl<P: Profile> Searcher<P> {
     // The number of rows (pattern chars) we *at least*
     // mainly to avoid branching
@@ -335,12 +354,16 @@ impl<P: Profile> Searcher<P> {
 
     /// Forward search only.
     pub fn new_fwd() -> Self {
-        Self::new(false, None)
+        // Init pattern_tilling searcher
+        let pattern_tilling_searcher = PatternTillingSearcher::new(None);
+        Self::new(false, None, pattern_tilling_searcher)
     }
 
     /// Forward and reverse complement search.
     pub fn new_rc() -> Self {
-        Self::new(true, None)
+        let pattern_tilling_searcher = PatternTillingSearcher::new(None);
+        // this sets self.rc == true, so pattern_tilling searcher/encoder knows to encode rc as well
+        Self::new(true, None, pattern_tilling_searcher)
     }
 
     fn _overhang_check(alpha: f32) {
@@ -358,13 +381,15 @@ impl<P: Profile> Searcher<P> {
     /// Forward search with overhang cost `0<=alpha<=1`.
     pub fn new_fwd_with_overhang(alpha: f32) -> Self {
         Self::_overhang_check(alpha);
-        Self::new(false, Some(alpha))
+        let pattern_tilling_searcher = PatternTillingSearcher::new(Some(alpha));
+        Self::new(false, Some(alpha), pattern_tilling_searcher)
     }
 
     /// Forward and reverse complement search with overhang cost `0<=alpha<=1`.
     pub fn new_rc_with_overhang(alpha: f32) -> Self {
         Self::_overhang_check(alpha);
-        Self::new(true, Some(alpha))
+        let pattern_tilling_searcher = PatternTillingSearcher::new(Some(alpha));
+        Self::new(true, Some(alpha), pattern_tilling_searcher)
     }
 
     /// Set overhang cost `0<=alpha<=1`.
@@ -372,6 +397,37 @@ impl<P: Profile> Searcher<P> {
         Self::_overhang_check(alpha);
         self.alpha = Some(alpha);
         self
+    }
+
+    pub fn encode_queries(&mut self, queries: &[Vec<u8>]) -> EncodedQueries {
+        self.pattern_tilling_searcher.encode(queries, self.rc)
+    }
+
+    /// Returns a match for each *rightmost local pattern_tillingmum* end position with score <=k.
+    ///
+    /// This avoids reporting matches that completely overlap apart from a few characters at the ends.
+    ///
+    /// Searches the forward text, and optionally the reverse complement of the text.
+    ///
+    /// Input queries have to be encoded using `encode_queries` prior to calling this
+    pub fn search_encoded_patterns(
+        &mut self,
+        encoded_queries: &EncodedQueries,
+        text: &[u8],
+        k: usize,
+    ) -> &[Match] {
+        self.pattern_tilling_searcher
+            .search(encoded_queries, text, k as u32)
+    }
+
+    pub fn search_all_encoded_patterns(
+        &mut self,
+        encoded_queries: &EncodedQueries,
+        text: &[u8],
+        k: usize,
+    ) -> &[Match] {
+        self.pattern_tilling_searcher
+            .search_all(encoded_queries, text, k as u32)
     }
 
     /// Set overhang cost `0<=alpha<=1`.
@@ -404,8 +460,13 @@ impl<P: Profile> Searcher<P> {
     }
 
     /// Create a new `Searcher`.
-    pub fn new(rc: bool, alpha: Option<f32>) -> Self {
+    pub fn new(
+        rc: bool,
+        alpha: Option<f32>,
+        pattern_tilling_searcher: PatternTillingSearcher,
+    ) -> Self {
         Self {
+            pattern_tilling_searcher,
             alpha,
             rc,
             only_best_match: false,
@@ -846,9 +907,7 @@ impl<P: Profile> Searcher<P> {
         };
 
         let text_padding = self.alpha.map_or(0, |alpha| {
-            pattern_len
-                .min(((k as f32) / alpha).ceil() as usize)
-                .min(self.max_overhang.unwrap_or(usize::MAX))
+            get_overhang_steps(pattern_len, k as usize, alpha, self.max_overhang)
         });
 
         let blocks_per_chunk = match text {
@@ -1121,9 +1180,12 @@ impl<P: Profile> Searcher<P> {
         let (p, m) = v.pm();
         let max_pos = if self.alpha.is_some() {
             text_len
-                + pattern_len
-                    .min(((k as f32) / self.alpha.unwrap()).ceil() as usize)
-                    .min(self.max_overhang.unwrap_or(usize::MAX))
+                + get_overhang_steps(
+                    pattern_len,
+                    k as usize,
+                    self.alpha.unwrap(), // safe check above for alpha
+                    self.max_overhang,
+                )
         } else {
             text_len
         };
@@ -1134,6 +1196,12 @@ impl<P: Profile> Searcher<P> {
 
         if base_pos >= max_pos {
             return;
+        }
+
+        // Entire pattern is before the text only valid for first block
+        // of lane 0 (prev_pos == 0)
+        if all_minima && cost <= k && prev_pos == 0 {
+            self.lanes[lane].matches.push((prev_pos, cost));
         }
 
         for bit in 1..=64 {

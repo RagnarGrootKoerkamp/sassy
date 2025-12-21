@@ -283,9 +283,17 @@ impl Args {
                 s.spawn(move || {
                     // Each thread has own searcher here
                     let mut searcher = match &args.base.alphabet {
-                        Alphabet::Dna => Either::Left(Searcher::<Dna>::new(rc, args.base.overhang)),
+                        Alphabet::Dna => Either::Left(if let Some(overhang) = args.base.overhang {
+                            Searcher::<Dna>::new_fwd_with_overhang(overhang)
+                        } else {
+                            Searcher::<Dna>::new_fwd()
+                        }),
                         Alphabet::Iupac => {
-                            Either::Right(Searcher::<Iupac>::new(rc, args.base.overhang))
+                            Either::Right(if let Some(overhang) = args.base.overhang {
+                                Searcher::<Iupac>::new_fwd_with_overhang(overhang)
+                            } else {
+                                Searcher::<Iupac>::new_fwd()
+                            })
                         }
                     };
 

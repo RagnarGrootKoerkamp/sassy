@@ -116,8 +116,8 @@ mod trace;
 
 // (PARTIALLY) PUBLIC MODS
 
+mod pattern_tilling;
 pub mod profiles;
-
 pub use search::CachedRev;
 pub use search::Match;
 pub use search::RcSearchAble;
@@ -225,7 +225,7 @@ pub fn test_throughput() {
     let text: Vec<u8> = (0..n).map(|_| b"ACGT"[rng.random_range(0..4)]).collect();
     let pattern: Vec<u8> = (0..m).map(|_| b"ACGT"[rng.random_range(0..4)]).collect();
 
-    let mut searcher = Searcher::<profiles::Iupac>::new(false, None);
+    let mut searcher = Searcher::<profiles::Iupac>::new_fwd();
     let start = std::time::Instant::now();
     let _matches = searcher.search(&pattern, &text, k);
     let duration = start.elapsed();

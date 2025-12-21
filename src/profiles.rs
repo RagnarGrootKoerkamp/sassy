@@ -1,6 +1,6 @@
 mod ascii;
 mod dna;
-mod iupac;
+pub(crate) mod iupac;
 
 pub use ascii::{Ascii, CaseInsensitiveAscii, CaseSensitiveAscii};
 pub use dna::Dna;

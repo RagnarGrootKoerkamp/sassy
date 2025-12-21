@@ -218,6 +218,11 @@ impl Profile for Iupac {
     }
 }
 
+#[inline(always)]
+pub(crate) fn reverse_complement(seq: &[u8]) -> Vec<u8> {
+    Iupac::reverse_complement(seq)
+}
+
 /// Do a shuffle within each half of table.
 /// Matching `__mm256_shuffle_epi8`.
 #[inline(always)]
@@ -310,7 +315,7 @@ const IUPAC_CODE: [u8; 32] = {
 };
 
 #[inline(always)]
-pub fn get_encoded(c: u8) -> u8 {
+pub(crate) fn get_encoded(c: u8) -> u8 {
     IUPAC_CODE[(c & 0x1F) as usize]
 }
 

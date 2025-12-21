@@ -194,7 +194,11 @@ pub fn crispr(args: &CrisprArgs) {
         for _ in 0..num_threads {
             scope.spawn(|| {
                 // Searcher, IUPAC and always reverse complement
-                let mut searcher = Searcher::<Iupac>::new(!args.no_rc, None);
+                let mut searcher = if args.no_rc {
+                    Searcher::<Iupac>::new_fwd()
+                } else {
+                    Searcher::<Iupac>::new_rc()
+                };
 
                 let filter_fn = |_q: &[u8], text_up_to_end: &[u8], strand: Strand| {
                     let pam_slice = &text_up_to_end[text_up_to_end.len() - 3..];

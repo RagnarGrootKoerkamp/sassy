@@ -179,19 +179,31 @@ fn get_search_fn(param_set: &ParamSet) -> SearchFn {
     match param_set.profile {
         // IUPAC profile
         "iupac" => {
-            let mut searcher = Searcher::<sassy::profiles::Iupac>::new(rc, None);
+            let mut searcher = if rc {
+                Searcher::<sassy::profiles::Iupac>::new_rc()
+            } else {
+                Searcher::<sassy::profiles::Iupac>::new_fwd()
+            };
             Box::new(move |q, t, k| searcher.search(q, &t, k))
         }
 
         // DNA profile
         "dna" => {
-            let mut searcher = Searcher::<sassy::profiles::Dna>::new(rc, None);
+            let mut searcher = if rc {
+                Searcher::<sassy::profiles::Dna>::new_rc()
+            } else {
+                Searcher::<sassy::profiles::Dna>::new_fwd()
+            };
             Box::new(move |q, t, k| searcher.search(q, &t, k))
         }
 
         // ASCII profile
         "ascii" => {
-            let mut searcher = Searcher::<sassy::profiles::Ascii>::new(rc, None);
+            let mut searcher = if rc {
+                Searcher::<sassy::profiles::Ascii>::new_rc()
+            } else {
+                Searcher::<sassy::profiles::Ascii>::new_fwd()
+            };
             Box::new(move |q, t, k| searcher.search(q, &t, k))
         }
 
