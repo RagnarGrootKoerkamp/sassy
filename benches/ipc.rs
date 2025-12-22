@@ -1,10 +1,11 @@
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use perfcnt::AbstractPerfCounter;
 use perfcnt::linux::{HardwareEventType, PerfCounterBuilderLinux};
 use rand::random_range;
 use sassy::Searcher;
 use sassy::profiles::Iupac;
+use std::hint::black_box;
 
+// Measure IPC (Instructions per CPU cycle)
 fn measure_ipc<F: FnOnce()>(f: F) -> f64 {
     let mut instr = PerfCounterBuilderLinux::from_hardware_event(HardwareEventType::Instructions)
         .finish()
@@ -31,23 +32,17 @@ fn measure_ipc<F: FnOnce()>(f: F) -> f64 {
     }
 }
 
-fn bench_searchers(c: &mut Criterion) {
+fn main() {
     let query_len = 23;
     let text_len = 100_000;
     let k = 3;
 
     let text: Vec<u8> = (0..text_len).map(|_| b"ACGT"[random_range(0..4)]).collect();
 
-    let mut num_queries_list: Vec<usize> = (0..=7)
+    let num_queries_list: Vec<usize> = (0..=7)
         .map(|i| 1usize << i)
         .chain(std::iter::once(96))
         .collect();
-
-    num_queries_list.sort_unstable();
-    num_queries_list.dedup();
-
-    let mut group = c.benchmark_group("search_performance");
-    group.sample_size(10);
 
     for &num_queries in &num_queries_list {
         let queries: Vec<Vec<u8>> = (0..num_queries)
@@ -58,56 +53,49 @@ fn bench_searchers(c: &mut Criterion) {
             })
             .collect();
 
-        group.throughput(Throughput::Bytes((text_len * num_queries) as u64));
-
-        group.bench_function(format!("sassy_search/q={}", num_queries), |b| {
+        // Warmup
+        for _ in 0..3 {
             let mut searcher = Searcher::<Iupac>::new_fwd();
-            b.iter(|| {
-                for query in &queries {
-                    black_box(searcher.search(query, &text, k));
-                }
-            });
-        });
-        let ipc1 = measure_ipc(|| {
+            for query in &queries {
+                black_box(searcher.search(query, &text, k));
+            }
+        }
+
+        let ipc_search = measure_ipc(|| {
             let mut searcher = Searcher::<Iupac>::new_fwd();
             for query in &queries {
                 black_box(searcher.search(query, &text, k));
             }
         });
 
-        group.bench_function(format!("sassy_search_patterns/q={}", num_queries), |b| {
+        // Warmup
+        for _ in 0..3 {
             let mut searcher = Searcher::<Iupac>::new_fwd();
-            b.iter(|| {
-                black_box(searcher.search_patterns(&queries, &text, k));
-            });
-        });
-        let ipc2 = measure_ipc(|| {
+            black_box(searcher.search_patterns(&queries, &text, k));
+        }
+
+        let ipc_patterns = measure_ipc(|| {
             let mut searcher = Searcher::<Iupac>::new_fwd();
             black_box(searcher.search_patterns(&queries, &text, k));
         });
 
+        // Encode patterns once
         let mut searcher = Searcher::<Iupac>::new_fwd();
         let encoded = searcher.encode_patterns(&queries);
 
-        group.bench_function(format!("sassy_pattern_tiling/q={}", num_queries), |b| {
-            b.iter(|| {
-                black_box(searcher.search_encoded_patterns(&encoded, &text, k));
-            });
-        });
-        let ipc3 = measure_ipc(|| {
+        // Warmup
+        for _ in 0..3 {
+            black_box(searcher.search_encoded_patterns(&encoded, &text, k));
+        }
+
+        let ipc_tiling = measure_ipc(|| {
             black_box(searcher.search_encoded_patterns(&encoded, &text, k));
         });
 
-        println!("\nIPC Stats for q={}:", num_queries);
-        println!(
-            "Search: {:.2} | Patterns: {:.2} | Tiling: {:.2}",
-            ipc1, ipc2, ipc3
-        );
-        println!("---------------------------\n");
+        println!("--- IPC Results for num_queries = {} ---", num_queries);
+        println!("Single-query search: {:.2}", ipc_search);
+        println!("Pattern search:      {:.2}", ipc_patterns);
+        println!("Encoded tiling:      {:.2}", ipc_tiling);
+        println!("--------------------------------------\n");
     }
-
-    group.finish();
 }
-
-criterion_group!(benches, bench_searchers);
-criterion_main!(benches);
