@@ -7,8 +7,8 @@ pub(crate) const IUPAC_MASKS: usize = 16;
 #[derive(Debug, Clone, Default)]
 pub struct TQueries<B: SimdBackend> {
     /// Holds [position][transposition_block_index]
-    pub vectors: Vec<Vec<B::QueryBlock>>,
-    pub query_length: usize,
+    pub vectors: Vec<Vec<B::PatternBlock>>,
+    pub pattern_length: usize,
     pub n_queries: usize,
     pub n_original_queries: usize,
     /// Number of SIMD vectors needed to hold all queries (for Peqs)
@@ -16,7 +16,7 @@ pub struct TQueries<B: SimdBackend> {
     pub peq_masks: [Vec<u64>; IUPAC_MASKS],
     pub peqs: Vec<B::Simd>,
     // Not sure if we should keep it here, but might be handy with
-    // get_query_seq(i) to make sure it aligns with the indices of `scan` result bools
+    // get_pattern_seq(i) to make sure it aligns with the indices of `scan` result bools
     pub queries: Vec<Vec<u8>>,
     _marker: PhantomData<B>,
 }
@@ -50,15 +50,15 @@ fn build_flat_peqs<B: SimdBackend>(
 impl<B: SimdBackend> TQueries<B> {
     pub fn new(queries: &[Vec<u8>], include_rc: bool) -> Self {
         assert!(!queries.is_empty(), "No queries provided");
-        let query_length = queries[0].len();
+        let pattern_length = queries[0].len();
         assert!(
-            query_length > 0 && query_length <= B::LIMB_BITS,
-            "Invalid query length {} (must be <= {})",
-            query_length,
+            pattern_length > 0 && pattern_length <= B::LIMB_BITS,
+            "Invalid pattern length {} (must be <= {})",
+            pattern_length,
             B::LIMB_BITS
         );
         assert!(
-            queries.iter().all(|q| q.len() == query_length),
+            queries.iter().all(|q| q.len() == pattern_length),
             "All queries must have the same length"
         );
 
@@ -79,10 +79,10 @@ impl<B: SimdBackend> TQueries<B> {
 
         let mut peq_masks: [Vec<u64>; IUPAC_MASKS] = std::array::from_fn(|_| vec![0u64; n_queries]);
 
-        let mut vectors = Vec::with_capacity(query_length);
+        let mut vectors = Vec::with_capacity(pattern_length);
         let mut temp_block_buffer = vec![0u8; B::LIMB_BITS];
 
-        for pos in 0..query_length {
+        for pos in 0..pattern_length {
             let mut pos_blocks = Vec::with_capacity(n_transposition_blocks);
 
             for block_idx in 0..n_transposition_blocks {
@@ -109,7 +109,7 @@ impl<B: SimdBackend> TQueries<B> {
                 }
 
                 // Convert to backend type
-                pos_blocks.push(B::to_query_block(&temp_block_buffer));
+                pos_blocks.push(B::to_pattern_block(&temp_block_buffer));
             }
             vectors.push(pos_blocks);
         }
@@ -118,7 +118,7 @@ impl<B: SimdBackend> TQueries<B> {
 
         Self {
             vectors,
-            query_length,
+            pattern_length,
             n_queries,
             n_original_queries,
             n_simd_blocks,
@@ -129,8 +129,8 @@ impl<B: SimdBackend> TQueries<B> {
         }
     }
 
-    pub fn get_query_seq(&self, query_idx: usize) -> &[u8] {
-        &self.queries[query_idx]
+    pub fn get_pattern_seq(&self, pattern_idx: usize) -> &[u8] {
+        &self.queries[pattern_idx]
     }
 
     pub fn reduce_to_suffix<NB: SimdBackend>(&self) -> TQueries<NB> {

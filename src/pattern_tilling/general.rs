@@ -69,7 +69,7 @@ pub fn hierarchical_search<S, F>(
     full_searcher.search_prep(
         full_tqueries.n_simd_blocks,
         full_tqueries.n_queries,
-        full_tqueries.query_length,
+        full_tqueries.pattern_length,
         full_searcher.alpha_pattern,
     );
 
@@ -147,7 +147,7 @@ pub enum EncodedQueries {
 }
 
 impl EncodedQueries {
-    pub fn max_query_length(&self) -> usize {
+    pub fn max_pattern_length(&self) -> usize {
         match self {
             EncodedQueries::U8(_) => U8::LIMB_BITS,
             EncodedQueries::U16 { .. } => U16::LIMB_BITS,
@@ -244,27 +244,27 @@ impl Searcher {
             panic!("No queries provided");
         }
 
-        let max_query_length = queries.iter().map(|q| q.len()).max().unwrap();
+        let max_pattern_length = queries.iter().map(|q| q.len()).max().unwrap();
 
         // all queries should be the same max length
-        assert!(queries.iter().all(|q| q.len() == max_query_length));
+        assert!(queries.iter().all(|q| q.len() == max_pattern_length));
 
-        if max_query_length <= U8::LIMB_BITS {
+        if max_pattern_length <= U8::LIMB_BITS {
             EncodedQueries::U8(TQueries::new(queries, include_rc))
-        } else if max_query_length <= U16::LIMB_BITS {
+        } else if max_pattern_length <= U16::LIMB_BITS {
             let full = TQueries::new(queries, include_rc);
             EncodedQueries::U16 {
                 suffix_u8: Some(Box::new(full.reduce_to_suffix::<U8>())),
                 full,
             }
-        } else if max_query_length <= U32::LIMB_BITS {
+        } else if max_pattern_length <= U32::LIMB_BITS {
             let full = TQueries::new(queries, include_rc);
             EncodedQueries::U32 {
                 suffix_u16: Some(Box::new(full.reduce_to_suffix::<U16>())),
                 suffix_u8: Some(Box::new(full.reduce_to_suffix::<U8>())),
                 full,
             }
-        } else if max_query_length <= U64::LIMB_BITS {
+        } else if max_pattern_length <= U64::LIMB_BITS {
             let full = TQueries::new(queries, include_rc);
             EncodedQueries::U64 {
                 suffix_u16: Some(Box::new(full.reduce_to_suffix::<U16>())),
@@ -274,8 +274,8 @@ impl Searcher {
             }
         } else {
             panic!(
-                "Query length {} exceeds maximum supported length {}",
-                max_query_length,
+                "pattern length {} exceeds maximum supported length {}",
+                max_pattern_length,
                 U64::LIMB_BITS
             );
         }

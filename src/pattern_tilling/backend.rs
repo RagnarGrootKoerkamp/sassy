@@ -26,7 +26,7 @@ pub trait SimdBackend: Copy + 'static + Send + Sync + Default + std::fmt::Debug 
 
     type Scalar: Copy + PartialEq + std::fmt::Debug;
     type LaneArray: AsRef<[Self::Scalar]> + AsMut<[Self::Scalar]> + Copy + Default;
-    type QueryBlock: Copy + std::fmt::Debug;
+    type PatternBlock: Copy + std::fmt::Debug;
 
     const LANES: usize;
     const LIMB_BITS: usize;
@@ -46,8 +46,8 @@ pub trait SimdBackend: Copy + 'static + Send + Sync + Default + std::fmt::Debug 
     /// Unsigned greater-than comparison
     fn simd_gt(lhs: Self::Simd, rhs: Self::Simd) -> Self::Simd;
 
-    /// Convert byte slice to query block type
-    fn to_query_block(slice: &[u8]) -> Self::QueryBlock;
+    /// Convert byte slice to pattern block type
+    fn to_pattern_block(slice: &[u8]) -> Self::PatternBlock;
     fn scalar_to_u64(value: Self::Scalar) -> u64;
 
     // We cant use general splats
@@ -67,7 +67,7 @@ impl SimdBackend for I32x8Backend {
     type Simd = u32x8;
     type Scalar = u32;
     type LaneArray = [u32; 8];
-    type QueryBlock = u8x32;
+    type PatternBlock = u8x32;
 
     const LANES: usize = 8;
     const LIMB_BITS: usize = 32;
@@ -93,7 +93,7 @@ impl SimdBackend for I32x8Backend {
     }
 
     #[inline(always)]
-    fn to_query_block(slice: &[u8]) -> Self::QueryBlock {
+    fn to_pattern_block(slice: &[u8]) -> Self::PatternBlock {
         u8x32::new(slice.try_into().expect("Slice must be 32 bytes"))
     }
 
@@ -171,7 +171,7 @@ impl SimdBackend for I64x4Backend {
     type Simd = u64x4;
     type Scalar = u64;
     type LaneArray = [u64; 4];
-    type QueryBlock = [u8; 64];
+    type PatternBlock = [u8; 64];
 
     const LANES: usize = 4;
     const LIMB_BITS: usize = 64;
@@ -197,7 +197,7 @@ impl SimdBackend for I64x4Backend {
     }
 
     #[inline(always)]
-    fn to_query_block(slice: &[u8]) -> Self::QueryBlock {
+    fn to_pattern_block(slice: &[u8]) -> Self::PatternBlock {
         slice.try_into().expect("Slice must be 64 bytes")
     }
 
@@ -275,7 +275,7 @@ impl SimdBackend for I16x16Backend {
     type Simd = u16x16;
     type Scalar = u16;
     type LaneArray = [u16; 16];
-    type QueryBlock = [u8; 16];
+    type PatternBlock = [u8; 16];
 
     const LANES: usize = 16;
     const LIMB_BITS: usize = 16;
@@ -301,7 +301,7 @@ impl SimdBackend for I16x16Backend {
     }
 
     #[inline(always)]
-    fn to_query_block(slice: &[u8]) -> Self::QueryBlock {
+    fn to_pattern_block(slice: &[u8]) -> Self::PatternBlock {
         slice.try_into().expect("Slice must be 16 bytes")
     }
 
@@ -565,7 +565,7 @@ impl SimdBackend for I8x32Backend {
     type Simd = WrapperU8x32;
     type Scalar = u8;
     type LaneArray = [u8; 32];
-    type QueryBlock = [u8; 8];
+    type PatternBlock = [u8; 8];
 
     const LANES: usize = 32;
     const LIMB_BITS: usize = 8;
@@ -591,7 +591,7 @@ impl SimdBackend for I8x32Backend {
     }
 
     #[inline(always)]
-    fn to_query_block(slice: &[u8]) -> Self::QueryBlock {
+    fn to_pattern_block(slice: &[u8]) -> Self::PatternBlock {
         slice.try_into().expect("Slice must be 8 bytes")
     }
 

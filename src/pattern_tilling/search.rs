@@ -1,6 +1,6 @@
 use crate::pattern_tilling::backend::SimdBackend;
 use crate::pattern_tilling::tqueries::TQueries;
-use crate::pattern_tilling::trace::QueryHistory;
+use crate::pattern_tilling::trace::patternHistory;
 use crate::profiles::iupac::get_encoded;
 use crate::search::get_overhang_steps;
 
@@ -27,7 +27,7 @@ pub(crate) struct BlockState<S: Copy> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HitRange {
-    pub query_idx: usize,
+    pub pattern_idx: usize,
     pub start: isize,
     pub end: isize,
 }
@@ -37,9 +37,9 @@ pub struct Myers<B: SimdBackend> {
     pub(crate) positions: Vec<Vec<usize>>,
     pub(crate) alpha_pattern: u64,
     pub(crate) alpha: f32,
-    pub(crate) history: Vec<QueryHistory<B::Simd>>,
+    pub(crate) history: Vec<patternHistory<B::Simd>>,
     pub(crate) hit_ranges: Vec<HitRange>,
-    // Per-query open-range start position; isize::MIN means no active range
+    // Per-pattern open-range start position; isize::MIN means no active range
     pub(crate) max_overhang: Option<usize>,
     pub(crate) active_ranges: Vec<isize>,
 }
@@ -91,7 +91,7 @@ impl<B: SimdBackend> Myers<B> {
         }
         if self.history.len() < total_queries {
             self.history
-                .resize_with(total_queries, QueryHistory::default);
+                .resize_with(total_queries, patternHistory::default);
         }
         if self.active_ranges.len() < total_queries {
             self.active_ranges.resize(total_queries, isize::MIN);
@@ -103,10 +103,10 @@ impl<B: SimdBackend> Myers<B> {
         &mut self,
         num_blocks: usize,
         n_queries: usize,
-        query_length: usize,
+        pattern_length: usize,
         alpha_pattern: u64,
     ) {
-        let length_mask = (!0u64) >> (64usize.saturating_sub(query_length));
+        let length_mask = (!0u64) >> (64usize.saturating_sub(pattern_length));
         let masked_alpha = alpha_pattern & length_mask;
         let initial_cost = B::splat_scalar(B::scalar_from_i64(masked_alpha.count_ones() as i64));
         let alpha_simd = B::splat_scalar(B::mask_word_to_scalar(alpha_pattern));
@@ -141,7 +141,7 @@ impl<B: SimdBackend> Myers<B> {
                 if qidx < n_queries {
                     let start = self.active_ranges[qidx];
                     self.hit_ranges.push(HitRange {
-                        query_idx: qidx,
+                        pattern_idx: qidx,
                         start,
                         end: final_pos,
                     });
@@ -189,7 +189,7 @@ impl<B: SimdBackend> Myers<B> {
         change: u64,
         prev_mask: u64,
         hit_mask: u64,
-        base_query_idx: usize,
+        base_pattern_idx: usize,
         current_pos: isize,
         n_queries: usize,
         start_ptr: *mut isize,
@@ -201,11 +201,11 @@ impl<B: SimdBackend> Myers<B> {
         let mut leaving = change & prev_mask;
         while leaving != 0 {
             let lane = leaving.trailing_zeros() as usize;
-            let qidx = base_query_idx + lane;
+            let qidx = base_pattern_idx + lane;
             if qidx < n_queries {
                 let start = unsafe { *start_ptr.add(qidx) };
                 self.hit_ranges.push(HitRange {
-                    query_idx: qidx,
+                    pattern_idx: qidx,
                     start,
                     end: current_pos - 1,
                 });
@@ -216,7 +216,7 @@ impl<B: SimdBackend> Myers<B> {
         let mut entering = change & hit_mask;
         while entering != 0 {
             let lane = entering.trailing_zeros() as usize;
-            let qidx = base_query_idx + lane;
+            let qidx = base_pattern_idx + lane;
             if qidx < n_queries {
                 unsafe { *start_ptr.add(qidx) = current_pos };
             }
@@ -242,7 +242,7 @@ impl<B: SimdBackend> Myers<B> {
         let eq: <B as SimdBackend>::Simd = B::splat_all_ones();
 
         let steps_needed = get_overhang_steps(
-            t_queries.query_length,
+            t_queries.pattern_length,
             k as usize,
             self.alpha,
             self.max_overhang,
@@ -251,7 +251,7 @@ impl<B: SimdBackend> Myers<B> {
         let blocks_ptr = self.blocks.as_mut_ptr();
         let mut current_text_pos = text.len();
         let all_ones = B::splat_all_ones();
-        let last_bit_shift = (t_queries.query_length - 1) as u32;
+        let last_bit_shift = (t_queries.pattern_length - 1) as u32;
         let last_bit_mask = B::splat_one() << last_bit_shift;
         let start_ptr = self.active_ranges.as_mut_ptr();
 
@@ -288,13 +288,13 @@ impl<B: SimdBackend> Myers<B> {
                     let prev_mask = block.active_mask;
                     let change = hit_mask ^ prev_mask;
                     let current_pos = current_text_pos as isize;
-                    let base_query_idx = block_i * B::LANES;
+                    let base_pattern_idx = block_i * B::LANES;
                     self.handle_range_mask_change(
                         block,
                         change,
                         prev_mask,
                         hit_mask,
-                        base_query_idx,
+                        base_pattern_idx,
                         current_pos,
                         n_queries,
                         start_ptr,
@@ -307,10 +307,10 @@ impl<B: SimdBackend> Myers<B> {
 
     #[inline(always)]
     fn handle_full_prefix_matches(&mut self, t_queries: &TQueries<B>, k: u32) {
-        let mask = if t_queries.query_length >= 64 {
+        let mask = if t_queries.pattern_length >= 64 {
             !0u64
         } else {
-            (1u64 << t_queries.query_length) - 1
+            (1u64 << t_queries.pattern_length) - 1
         };
 
         if self.alpha_pattern == !0 || (self.alpha_pattern & mask).count_ones() > k {
@@ -337,7 +337,7 @@ impl<B: SimdBackend> Myers<B> {
         is_end_block: bool,
     ) -> &[HitRange] {
         let num_blocks = t_queries.n_simd_blocks;
-        let length_mask = (!0u64) >> (64usize.saturating_sub(t_queries.query_length));
+        let length_mask = (!0u64) >> (64usize.saturating_sub(t_queries.pattern_length));
         let alpha_pattern = self.alpha_pattern & length_mask;
 
         self.ensure_capacity(num_blocks, t_queries.n_queries);
@@ -345,13 +345,13 @@ impl<B: SimdBackend> Myers<B> {
         self.search_prep(
             num_blocks,
             t_queries.n_queries,
-            t_queries.query_length,
+            t_queries.pattern_length,
             alpha_pattern,
         );
         self.hit_ranges.reserve(t_queries.n_queries);
 
         let k_simd = B::splat_scalar(B::scalar_from_i64(k as i64));
-        let last_bit_shift = (t_queries.query_length - 1) as u32;
+        let last_bit_shift = (t_queries.pattern_length - 1) as u32;
         let last_bit_mask = B::splat_one() << last_bit_shift;
         let all_ones = B::splat_all_ones();
 
@@ -411,7 +411,7 @@ impl<B: SimdBackend> Myers<B> {
                     let change = hit_bits ^ prev_mask;
 
                     let current_pos = idx as isize;
-                    let base_query_idx = block_i * B::LANES;
+                    let base_pattern_idx = block_i * B::LANES;
 
                     block.active_mask = hit_bits;
 
@@ -420,7 +420,7 @@ impl<B: SimdBackend> Myers<B> {
                         change,
                         prev_mask,
                         hit_bits,
-                        base_query_idx,
+                        base_pattern_idx,
                         current_pos,
                         n_queries,
                         start_ptr,
@@ -434,7 +434,7 @@ impl<B: SimdBackend> Myers<B> {
 
         //fixme: fix final pos based on alpha
         let final_pos = if self.alpha_pattern != !0 && is_end_block {
-            (text_len + t_queries.query_length).saturating_sub(1) as isize
+            (text_len + t_queries.pattern_length).saturating_sub(1) as isize
         } else if text_len == 0 {
             -1
         } else {
@@ -492,7 +492,7 @@ mod tests {
         let mut out = Vec::new();
 
         for r in ranges.iter() {
-            println!("Range: {} {} {}", r.start, r.end, r.query_idx);
+            println!("Range: {} {} {}", r.start, r.end, r.pattern_idx);
         }
         trace_batch_ranges(
             searcher, t_queries, text, &ranges, k, post, &mut out, None, None,
@@ -687,8 +687,8 @@ mod tests {
             let mut text = random_dna_seq(text_len);
             let queries: Vec<Vec<u8>> = (0..batch_size).map(|_| random_dna_seq(q_len)).collect();
 
-            if let Some(query) = queries.first() {
-                let mutated = apply_edits(query, k / 2);
+            if let Some(pattern) = queries.first() {
+                let mutated = apply_edits(pattern, k / 2);
                 let text_end = text.len().saturating_sub(mutated.len());
                 let prefix = &mutated[..mutated.len() / 2];
                 // Make sure we don't splice beyond text length
@@ -733,21 +733,21 @@ mod tests {
 
             let mut sassy_map: HashMap<usize, Vec<Match>> = HashMap::new();
 
-            for (idx, query) in queries.iter().enumerate() {
+            for (idx, pattern) in queries.iter().enumerate() {
                 let fwd_matches = if filter_local_pattern_tillingma {
-                    sassy_searcher.search(query, &text, k as usize)
+                    sassy_searcher.search(pattern, &text, k as usize)
                 } else {
-                    sassy_searcher.search_all(query, &text, k as usize)
+                    sassy_searcher.search_all(pattern, &text, k as usize)
                 };
 
                 let mut all_matches = fwd_matches;
 
                 if include_rc {
-                    let query_rc = crate::profiles::iupac::reverse_complement(query);
+                    let pattern_rc = crate::profiles::iupac::reverse_complement(pattern);
                     let mut rc_matches = if filter_local_pattern_tillingma {
-                        sassy_searcher.search(&query_rc, &text, k as usize)
+                        sassy_searcher.search(&pattern_rc, &text, k as usize)
                     } else {
-                        sassy_searcher.search_all(&query_rc, &text, k as usize)
+                        sassy_searcher.search_all(&pattern_rc, &text, k as usize)
                     };
                     rc_matches.iter_mut().for_each(|m| {
                         m.strand = crate::Strand::Rc;
@@ -775,12 +775,12 @@ mod tests {
                 }
             }
 
-            let sassy_query_ids: HashSet<_> = sassy_map.keys().copied().collect();
-            let pattern_tilling_query_ids: HashSet<_> =
+            let sassy_pattern_ids: HashSet<_> = sassy_map.keys().copied().collect();
+            let pattern_tilling_pattern_ids: HashSet<_> =
                 pattern_tilling_map.keys().copied().collect();
 
-            let pooled_keys: HashSet<_> = sassy_query_ids
-                .union(&pattern_tilling_query_ids)
+            let pooled_keys: HashSet<_> = sassy_pattern_ids
+                .union(&pattern_tilling_pattern_ids)
                 .copied()
                 .collect();
 
@@ -789,11 +789,11 @@ mod tests {
                 let pattern_tilling_val = pattern_tilling_map.get(&i).cloned().unwrap_or_default();
 
                 if sassy_val != pattern_tilling_val {
-                    eprintln!("Mismatch for query {}", i);
+                    eprintln!("Mismatch for pattern {}", i);
                     eprintln!("Text: {:?}", String::from_utf8_lossy(&text));
-                    eprintln!("Query: {:?}", String::from_utf8_lossy(&queries[i]));
+                    eprintln!("pattern: {:?}", String::from_utf8_lossy(&queries[i]));
                     eprintln!(
-                        "k: {}, query length: {}, text length: {}",
+                        "k: {}, pattern length: {}, text length: {}",
                         k,
                         queries[i].len(),
                         text.len()
@@ -837,23 +837,23 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    fn search_sassy_query_local_pattern_tillingma(
+    fn search_sassy_pattern_local_pattern_tillingma(
         searcher: &mut SassySearcher<Iupac>,
-        query: &[u8],
+        pattern: &[u8],
         text: &[u8],
         k: usize,
     ) -> Vec<Match> {
-        searcher.search(query, &text, k)
+        searcher.search(pattern, &text, k)
     }
 
     #[allow(dead_code)]
-    fn search_sassy_query(
+    fn search_sassy_pattern(
         searcher: &mut SassySearcher<Iupac>,
-        query: &[u8],
+        pattern: &[u8],
         text: &[u8],
         k: usize,
     ) -> Vec<Match> {
-        searcher.search_all(query, &text, k)
+        searcher.search_all(pattern, &text, k)
     }
 
     #[test]
@@ -889,10 +889,10 @@ mod tests {
 
         let k = 1;
         let mut searcher = Myers::<TestBackend>::new(None);
-        let query_transposed = TQueries::<TestBackend>::new(&[q.to_vec()], true);
+        let pattern_transposed = TQueries::<TestBackend>::new(&[q.to_vec()], true);
         let pattern_tilling_matches = trace_all_for_test(
             &mut searcher,
-            &query_transposed,
+            &pattern_transposed,
             t,
             k as u32,
             TracePostProcess::All,
