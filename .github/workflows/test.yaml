@@ -18,4 +18,4 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Use portable config
         run: mv .cargo/config-portable.toml .cargo/config.toml
-      - run: cargo test
+      - run: cargo test -r
