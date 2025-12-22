@@ -1,6 +1,6 @@
 use crate::pattern_tilling::backend::SimdBackend;
 use crate::pattern_tilling::tqueries::TQueries;
-use crate::pattern_tilling::trace::patternHistory;
+use crate::pattern_tilling::trace::PatternHistory;
 use crate::profiles::iupac::get_encoded;
 use crate::search::get_overhang_steps;
 
@@ -37,7 +37,7 @@ pub struct Myers<B: SimdBackend> {
     pub(crate) positions: Vec<Vec<usize>>,
     pub(crate) alpha_pattern: u64,
     pub(crate) alpha: f32,
-    pub(crate) history: Vec<patternHistory<B::Simd>>,
+    pub(crate) history: Vec<PatternHistory<B::Simd>>,
     pub(crate) hit_ranges: Vec<HitRange>,
     // Per-pattern open-range start position; isize::MIN means no active range
     pub(crate) max_overhang: Option<usize>,
@@ -65,12 +65,6 @@ impl<B: SimdBackend> Myers<B> {
         }
     }
 
-    pub fn with_max_overhang(mut self, max_overhang: Option<usize>) -> Self {
-        self.max_overhang = max_overhang;
-        self.alpha_pattern = Self::generate_alpha_mask(self.alpha, 64, max_overhang);
-        self
-    }
-
     #[inline(always)]
     pub(crate) fn ensure_capacity(&mut self, num_blocks: usize, total_queries: usize) {
         if self.blocks.len() < num_blocks {
@@ -91,7 +85,7 @@ impl<B: SimdBackend> Myers<B> {
         }
         if self.history.len() < total_queries {
             self.history
-                .resize_with(total_queries, patternHistory::default);
+                .resize_with(total_queries, PatternHistory::default);
         }
         if self.active_ranges.len() < total_queries {
             self.active_ranges.resize(total_queries, isize::MIN);

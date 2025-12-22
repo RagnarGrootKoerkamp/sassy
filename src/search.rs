@@ -867,7 +867,7 @@ impl<P: Profile> Searcher<P> {
         None
     }
 
-    pub fn search_positions_bounded<'t>(
+    fn search_positions_bounded<'t>(
         &mut self,
         pattern: MultiPattern<'t>,
         text: MultiText<'t>,

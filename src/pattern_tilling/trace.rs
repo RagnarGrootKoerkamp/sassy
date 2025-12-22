@@ -13,11 +13,11 @@ pub enum TracePostProcess {
     LocalMinima,
 }
 
-pub struct patternHistory<S: Copy> {
+pub struct PatternHistory<S: Copy> {
     pub steps: Vec<SimdHistoryStep<S>>,
 }
 
-impl<S: Copy> Default for patternHistory<S> {
+impl<S: Copy> Default for PatternHistory<S> {
     fn default() -> Self {
         Self { steps: Vec::new() }
     }
