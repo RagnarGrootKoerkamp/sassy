@@ -44,6 +44,12 @@ fn main() {
         .chain(std::iter::once(96))
         .collect();
 
+    println!(
+        "{:<12} | {:<20} | {:<20} | {:<20}",
+        "Num Queries", "Single-query IPC", "Pattern IPC", "Encoded Tiling IPC"
+    );
+    println!("{}", "-".repeat(80));
+
     for &num_queries in &num_queries_list {
         let queries: Vec<Vec<u8>> = (0..num_queries)
             .map(|_| {
@@ -92,10 +98,9 @@ fn main() {
             black_box(searcher.search_encoded_patterns(&encoded, &text, k));
         });
 
-        println!("--- IPC Results for num_queries = {} ---", num_queries);
-        println!("Single-query search: {:.2}", ipc_search);
-        println!("Pattern search:      {:.2}", ipc_patterns);
-        println!("Encoded tiling:      {:.2}", ipc_tiling);
-        println!("--------------------------------------\n");
+        println!(
+            "{:<12} | {:<20.2} | {:<20.2} | {:<20.2}",
+            num_queries, ipc_search, ipc_patterns, ipc_tiling
+        );
     }
 }
