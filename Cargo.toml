@@ -84,6 +84,3 @@ harness = false
 [[bench]]
 name = "ipc"
 harness = false
-
-[profile.bench]
-inherits = "release"
