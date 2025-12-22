@@ -1,6 +1,6 @@
-use crate::pattern_tilling::backend::SimdBackend;
-use crate::pattern_tilling::tqueries::TQueries;
-use crate::pattern_tilling::trace::PatternHistory;
+use crate::pattern_tiling::backend::SimdBackend;
+use crate::pattern_tiling::tqueries::TQueries;
+use crate::pattern_tiling::trace::PatternHistory;
 use crate::profiles::iupac::get_encoded;
 use crate::search::get_overhang_steps;
 
@@ -461,15 +461,15 @@ mod tests {
 
     use super::*;
     use crate::Searcher as SassySearcher;
-    use crate::pattern_tilling::backend::SimdBackend;
-    use crate::pattern_tilling::general::Searcher;
-    use crate::pattern_tilling::trace::{TracePostProcess, trace_batch_ranges};
+    use crate::pattern_tiling::backend::SimdBackend;
+    use crate::pattern_tiling::general::Searcher;
+    use crate::pattern_tiling::trace::{TracePostProcess, trace_batch_ranges};
     use crate::profiles::Iupac;
     use crate::search::Match;
     use std::collections::{HashMap, HashSet};
 
     #[cfg(test)]
-    type TestBackend = crate::pattern_tilling::backend::U64;
+    type TestBackend = crate::pattern_tiling::backend::U64;
 
     const ITER: usize = 1_000_000;
 
@@ -658,14 +658,14 @@ mod tests {
         alpha: Option<f32>,
         include_rc: bool,
         use_hierarchical: bool,
-        filter_local_pattern_tillingma: bool,
+        filter_local_pattern_tilingma: bool,
     ) {
         let mut sassy_searcher = if let Some(a) = alpha {
             SassySearcher::<Iupac>::new_fwd_with_overhang(a)
         } else {
             SassySearcher::<Iupac>::new_fwd()
         };
-        let mut pattern_tilling_searcher = Searcher::new(alpha);
+        let mut pattern_tiling_searcher = Searcher::new(alpha);
 
         for _ in 0..ITER {
             let k = random_range(0..4);
@@ -693,27 +693,27 @@ mod tests {
                 );
             }
 
-            let pattern_tilling_encoded = pattern_tilling_searcher.encode(&queries, include_rc);
-            let matches = pattern_tilling_searcher.search_with_options(
-                &pattern_tilling_encoded,
+            let pattern_tiling_encoded = pattern_tiling_searcher.encode(&queries, include_rc);
+            let matches = pattern_tiling_searcher.search_with_options(
+                &pattern_tiling_encoded,
                 &text,
                 k as u32,
                 if use_hierarchical { Some(true) } else { None },
-                if filter_local_pattern_tillingma {
-                    crate::pattern_tilling::trace::TracePostProcess::LocalMinima
+                if filter_local_pattern_tilingma {
+                    crate::pattern_tiling::trace::TracePostProcess::LocalMinima
                 } else {
-                    crate::pattern_tilling::trace::TracePostProcess::All
+                    crate::pattern_tiling::trace::TracePostProcess::All
                 },
             );
 
-            let mut pattern_tilling_map: HashMap<usize, Vec<Match>> = HashMap::new();
+            let mut pattern_tiling_map: HashMap<usize, Vec<Match>> = HashMap::new();
             for m in matches {
-                pattern_tilling_map
+                pattern_tiling_map
                     .entry(m.pattern_idx)
                     .or_default()
                     .push(m.clone());
             }
-            pattern_tilling_map.values_mut().for_each(|matches| {
+            pattern_tiling_map.values_mut().for_each(|matches| {
                 matches.sort_unstable_by_key(|m| {
                     (
                         m.text_start,
@@ -728,7 +728,7 @@ mod tests {
             let mut sassy_map: HashMap<usize, Vec<Match>> = HashMap::new();
 
             for (idx, pattern) in queries.iter().enumerate() {
-                let fwd_matches = if filter_local_pattern_tillingma {
+                let fwd_matches = if filter_local_pattern_tilingma {
                     sassy_searcher.search(pattern, &text, k as usize)
                 } else {
                     sassy_searcher.search_all(pattern, &text, k as usize)
@@ -738,7 +738,7 @@ mod tests {
 
                 if include_rc {
                     let pattern_rc = crate::profiles::iupac::reverse_complement(pattern);
-                    let mut rc_matches = if filter_local_pattern_tillingma {
+                    let mut rc_matches = if filter_local_pattern_tilingma {
                         sassy_searcher.search(&pattern_rc, &text, k as usize)
                     } else {
                         sassy_searcher.search_all(&pattern_rc, &text, k as usize)
@@ -770,19 +770,19 @@ mod tests {
             }
 
             let sassy_pattern_ids: HashSet<_> = sassy_map.keys().copied().collect();
-            let pattern_tilling_pattern_ids: HashSet<_> =
-                pattern_tilling_map.keys().copied().collect();
+            let pattern_tiling_pattern_ids: HashSet<_> =
+                pattern_tiling_map.keys().copied().collect();
 
             let pooled_keys: HashSet<_> = sassy_pattern_ids
-                .union(&pattern_tilling_pattern_ids)
+                .union(&pattern_tiling_pattern_ids)
                 .copied()
                 .collect();
 
             for i in pooled_keys {
                 let sassy_val = sassy_map.get(&i).cloned().unwrap_or_default();
-                let pattern_tilling_val = pattern_tilling_map.get(&i).cloned().unwrap_or_default();
+                let pattern_tiling_val = pattern_tiling_map.get(&i).cloned().unwrap_or_default();
 
-                if sassy_val != pattern_tilling_val {
+                if sassy_val != pattern_tiling_val {
                     eprintln!("Mismatch for pattern {}", i);
                     eprintln!("Text: {:?}", String::from_utf8_lossy(&text));
                     eprintln!("pattern: {:?}", String::from_utf8_lossy(&queries[i]));
@@ -809,8 +809,8 @@ mod tests {
                     }
                     eprintln!();
 
-                    eprintln!("Pattern_tilling matches ({}):", pattern_tilling_val.len());
-                    for m in &pattern_tilling_val {
+                    eprintln!("Pattern_tiling matches ({}):", pattern_tiling_val.len());
+                    for m in &pattern_tiling_val {
                         eprintln!(
                             "  pattern_start: {}, pattern_end: {}, text_start: {}, text_end: {}, cigar: {}, cost: {}, strand: {:?}",
                             m.pattern_start,
@@ -831,7 +831,7 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    fn search_sassy_pattern_local_pattern_tillingma(
+    fn search_sassy_pattern_local_pattern_tilingma(
         searcher: &mut SassySearcher<Iupac>,
         pattern: &[u8],
         text: &[u8],
@@ -853,30 +853,30 @@ mod tests {
     #[test]
     // #[ignore]
     fn fuzz_against_sassy_alll() {
-        // This is just sassy search all in pattern_tilling
+        // This is just sassy search all in pattern_tiling
         fuzz_against_sassy_batch(Some(0.5), true, true, false);
     }
 
     #[test]
     fn fuzz_against_sassy_general_local() {
-        // This is sassy search in pattern_tilling
+        // This is sassy search in pattern_tiling
         fuzz_against_sassy_batch(Some(0.5), true, true, true);
     }
 
     #[test]
     fn fuzz_against_sassy_general_local_no_alpha() {
-        // This is sassy search in pattern_tilling (no overhang)
+        // This is sassy search in pattern_tiling (no overhang)
         fuzz_against_sassy_batch(None, true, true, true);
     }
 
     #[test]
     fn fuzz_against_sassy_general_local_no_alpha_no_rc() {
-        // This is sassy search in pattern_tilling (no overhang)
+        // This is sassy search in pattern_tiling (no overhang)
         fuzz_against_sassy_batch(None, false, true, true);
     }
 
     #[test]
-    fn pattern_tilling_trace_bug() {
+    fn pattern_tiling_trace_bug() {
         let q = b"GTCCGAC";
         let q_rc = crate::profiles::iupac::reverse_complement(q);
         let t = b"AAACGAAGTCCTTAGACTGACTTGGCACCAGTATACTCACTTTTTTGTCTCC";
@@ -884,16 +884,16 @@ mod tests {
         let k = 1;
         let mut searcher = Myers::<TestBackend>::new(None);
         let pattern_transposed = TQueries::<TestBackend>::new(&[q.to_vec()], true);
-        let pattern_tilling_matches = trace_all_for_test(
+        let pattern_tiling_matches = trace_all_for_test(
             &mut searcher,
             &pattern_transposed,
             t,
             k as u32,
             TracePostProcess::All,
         );
-        for m in pattern_tilling_matches {
+        for m in pattern_tiling_matches {
             println!(
-                "pattern_tilling edits: {} cigar: {} end: {} strand: {:?}",
+                "pattern_tiling edits: {} cigar: {} end: {} strand: {:?}",
                 m.cost,
                 m.cigar.to_string(),
                 m.text_end,
@@ -925,7 +925,7 @@ mod tests {
     }
 
     #[test]
-    fn pattern_tilling_test() {
+    fn pattern_tiling_test() {
         let q = b"TTCGCTAAAGCGGATTTTC";
         let t = b"TGGTTGTGTCTGAGGTGTTCTCTTGCGTGTTGCTAAAGCGGATCTCT";
         println!("Text len: {}", t.len());
@@ -943,19 +943,19 @@ mod tests {
             );
         }
 
-        let mut pattern_tilling_searcher = Searcher::new(Some(0.5));
+        let mut pattern_tiling_searcher = Searcher::new(Some(0.5));
         let queries = vec![q.to_vec()];
-        let encoded = pattern_tilling_searcher.encode(&queries, false);
-        let pattern_tilling_matches = pattern_tilling_searcher.search_with_options(
+        let encoded = pattern_tiling_searcher.encode(&queries, false);
+        let pattern_tiling_matches = pattern_tiling_searcher.search_with_options(
             &encoded,
             t,
             k as u32,
             Some(true),
-            crate::pattern_tilling::trace::TracePostProcess::LocalMinima,
+            crate::pattern_tiling::trace::TracePostProcess::LocalMinima,
         );
-        for m in pattern_tilling_matches.iter() {
+        for m in pattern_tiling_matches.iter() {
             println!(
-                "pattern_tilling match: {} {} {:?} {} {}",
+                "pattern_tiling match: {} {} {:?} {} {}",
                 m.text_start,
                 m.text_end,
                 m.strand,
@@ -982,7 +982,7 @@ mod tests {
             &text,
             k,
             Some(true),
-            crate::pattern_tilling::trace::TracePostProcess::All,
+            crate::pattern_tiling::trace::TracePostProcess::All,
         );
 
         // Just verify we got some results (or none, both are valid)
@@ -1005,7 +1005,7 @@ mod tests {
             &text,
             k,
             Some(true),
-            crate::pattern_tilling::trace::TracePostProcess::All,
+            crate::pattern_tiling::trace::TracePostProcess::All,
         );
 
         println!(
@@ -1022,7 +1022,7 @@ mod tests {
          ...TCTTAGCTCGGCTT
                          |
                          TGGTT (sassy)
-                          TGGTT (pattern_tilling) (5 * 0.5 = 2.5 = 2)
+                          TGGTT (pattern_tiling) (5 * 0.5 = 2.5 = 2)
 
 
         */
@@ -1055,28 +1055,28 @@ mod tests {
             );
         }
 
-        use crate::pattern_tilling::general::Searcher as pattern_tillingSearcher;
-        let mut pattern_tilling_searcher = pattern_tillingSearcher::new(Some(0.5));
-        let encoded = pattern_tilling_searcher.encode(&[p.to_vec()], false);
-        let pattern_tilling_matches = pattern_tilling_searcher.search_with_options(
+        use crate::pattern_tiling::general::Searcher as pattern_tilingSearcher;
+        let mut pattern_tiling_searcher = pattern_tilingSearcher::new(Some(0.5));
+        let encoded = pattern_tiling_searcher.encode(&[p.to_vec()], false);
+        let pattern_tiling_matches = pattern_tiling_searcher.search_with_options(
             &encoded,
             &t,
             k as u32,
             Some(false),
-            crate::pattern_tilling::trace::TracePostProcess::All,
+            crate::pattern_tiling::trace::TracePostProcess::All,
         );
 
-        // Sort the pattern_tilling matches by start, end, edits
-        let mut pattern_tilling_matches_sorted = pattern_tilling_matches.to_vec();
-        pattern_tilling_matches_sorted.sort_by(|a, b| {
+        // Sort the pattern_tiling matches by start, end, edits
+        let mut pattern_tiling_matches_sorted = pattern_tiling_matches.to_vec();
+        pattern_tiling_matches_sorted.sort_by(|a, b| {
             (a.text_start, a.text_end, a.cost).cmp(&(b.text_start, b.text_end, b.cost))
         });
         println!(
-            "pattern_tilling matches: {}",
-            pattern_tilling_matches_sorted.len()
+            "pattern_tiling matches: {}",
+            pattern_tiling_matches_sorted.len()
         );
 
-        for m in pattern_tilling_matches_sorted.iter() {
+        for m in pattern_tiling_matches_sorted.iter() {
             println!(
                 "m: {} {} edits {} cigar {}",
                 m.text_start,
@@ -1104,7 +1104,7 @@ mod tests {
             &t,
             k as u32,
             Some(true),
-            crate::pattern_tilling::trace::TracePostProcess::All,
+            crate::pattern_tiling::trace::TracePostProcess::All,
         );
         for m in matches {
             println!(
@@ -1145,7 +1145,7 @@ mod tests {
             &t,
             k as u32,
             Some(true),
-            crate::pattern_tilling::trace::TracePostProcess::All,
+            crate::pattern_tiling::trace::TracePostProcess::All,
         );
         let mut sorted_matches = matches.to_vec();
         sorted_matches

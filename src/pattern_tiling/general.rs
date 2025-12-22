@@ -1,7 +1,7 @@
-use crate::pattern_tilling::backend::{SimdBackend, U8, U16, U32, U64};
-use crate::pattern_tilling::search::{HitRange, Myers};
-use crate::pattern_tilling::tqueries::TQueries;
-use crate::pattern_tilling::trace::{TracePostProcess, trace_batch_ranges};
+use crate::pattern_tiling::backend::{SimdBackend, U8, U16, U32, U64};
+use crate::pattern_tiling::search::{HitRange, Myers};
+use crate::pattern_tiling::tqueries::TQueries;
+use crate::pattern_tiling::trace::{TracePostProcess, trace_batch_ranges};
 use crate::search::Match;
 use pa_types::Cost;
 

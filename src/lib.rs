@@ -116,7 +116,7 @@ mod trace;
 
 // (PARTIALLY) PUBLIC MODS
 
-mod pattern_tilling;
+mod pattern_tiling;
 pub mod profiles;
 pub use search::CachedRev;
 pub use search::Match;

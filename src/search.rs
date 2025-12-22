@@ -11,9 +11,9 @@ use crate::{bitpacking::compute_block_simd, delta_encoding::V};
 use pa_types::{Cigar, CigarOp, Cost, Pos};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
-// pattern_tilling imports
-use crate::pattern_tilling::general::EncodedQueries;
-use crate::pattern_tilling::general::Searcher as PatternTillingSearcher;
+// pattern_tiling imports
+use crate::pattern_tiling::general::EncodedQueries;
+use crate::pattern_tiling::general::Searcher as PatterntilingSearcher;
 
 /// A match of the pattern against the text.
 ///
@@ -232,8 +232,8 @@ pub struct Searcher<P: Profile> {
     /// If set, overhang can be at most this long.
     max_overhang: Option<usize>,
 
-    // pattern_tilling searcher
-    pattern_tilling_searcher: PatternTillingSearcher,
+    // pattern_tiling searcher
+    pattern_tiling_searcher: PatterntilingSearcher,
 
     // Internal caches
     cost_matrices: [CostMatrix; LANES],
@@ -334,7 +334,7 @@ pub enum SearchMode {
     /// Consider sorting texts by length beforehand.
     BatchTexts,
     /// When all patterns have  an equal length (<=64), use one pattern per SIMD lane.
-    /// Uses pattern tilling to search one pattern per lane against the same text
+    /// Uses pattern tiling to search one pattern per lane against the same text
     /// character
     BatchPatternsShort,
     /// Automatically selects searchmode based on pattern and text lengths.
@@ -360,16 +360,16 @@ impl<P: Profile> Searcher<P> {
 
     /// Forward search only.
     pub fn new_fwd() -> Self {
-        // Init pattern_tilling searcher
-        let pattern_tilling_searcher = PatternTillingSearcher::new(None);
-        Self::new(false, None, pattern_tilling_searcher)
+        // Init pattern_tiling searcher
+        let pattern_tiling_searcher = PatterntilingSearcher::new(None);
+        Self::new(false, None, pattern_tiling_searcher)
     }
 
     /// Forward and reverse complement search.
     pub fn new_rc() -> Self {
-        let pattern_tilling_searcher = PatternTillingSearcher::new(None);
-        // this sets self.rc == true, so pattern_tilling searcher/encoder knows to encode rc as well
-        Self::new(true, None, pattern_tilling_searcher)
+        let pattern_tiling_searcher = PatterntilingSearcher::new(None);
+        // this sets self.rc == true, so pattern_tiling searcher/encoder knows to encode rc as well
+        Self::new(true, None, pattern_tiling_searcher)
     }
 
     fn _overhang_check(alpha: f32) {
@@ -387,15 +387,15 @@ impl<P: Profile> Searcher<P> {
     /// Forward search with overhang cost `0<=alpha<=1`.
     pub fn new_fwd_with_overhang(alpha: f32) -> Self {
         Self::_overhang_check(alpha);
-        let pattern_tilling_searcher = PatternTillingSearcher::new(Some(alpha));
-        Self::new(false, Some(alpha), pattern_tilling_searcher)
+        let pattern_tiling_searcher = PatterntilingSearcher::new(Some(alpha));
+        Self::new(false, Some(alpha), pattern_tiling_searcher)
     }
 
     /// Forward and reverse complement search with overhang cost `0<=alpha<=1`.
     pub fn new_rc_with_overhang(alpha: f32) -> Self {
         Self::_overhang_check(alpha);
-        let pattern_tilling_searcher = PatternTillingSearcher::new(Some(alpha));
-        Self::new(true, Some(alpha), pattern_tilling_searcher)
+        let pattern_tiling_searcher = PatterntilingSearcher::new(Some(alpha));
+        Self::new(true, Some(alpha), pattern_tiling_searcher)
     }
 
     /// Set overhang cost `0<=alpha<=1`.
@@ -406,10 +406,10 @@ impl<P: Profile> Searcher<P> {
     }
 
     pub fn encode_patterns(&mut self, patterns: &[Vec<u8>]) -> EncodedQueries {
-        self.pattern_tilling_searcher.encode(&patterns, self.rc)
+        self.pattern_tiling_searcher.encode(&patterns, self.rc)
     }
 
-    /// Returns a match for each *rightmost local pattern_tillingmum* end position with score <=k.
+    /// Returns a match for each *rightmost local pattern_tilingmum* end position with score <=k.
     ///
     /// This avoids reporting matches that completely overlap apart from a few characters at the ends.
     ///
@@ -422,7 +422,7 @@ impl<P: Profile> Searcher<P> {
         text: &[u8],
         k: usize,
     ) -> &[Match] {
-        self.pattern_tilling_searcher
+        self.pattern_tiling_searcher
             .search(encoded_queries, text, k as u32)
     }
 
@@ -432,7 +432,7 @@ impl<P: Profile> Searcher<P> {
         text: &[u8],
         k: usize,
     ) -> &[Match] {
-        self.pattern_tilling_searcher
+        self.pattern_tiling_searcher
             .search_all(encoded_queries, text, k as u32)
     }
 
@@ -469,10 +469,10 @@ impl<P: Profile> Searcher<P> {
     pub fn new(
         rc: bool,
         alpha: Option<f32>,
-        pattern_tilling_searcher: PatternTillingSearcher,
+        pattern_tiling_searcher: PatterntilingSearcher,
     ) -> Self {
         Self {
-            pattern_tilling_searcher,
+            pattern_tiling_searcher,
             alpha,
             rc,
             only_best_match: false,

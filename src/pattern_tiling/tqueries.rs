@@ -1,4 +1,4 @@
-use crate::pattern_tilling::backend::SimdBackend;
+use crate::pattern_tiling::backend::SimdBackend;
 use crate::profiles::iupac::{get_encoded, reverse_complement};
 use std::marker::PhantomData;
 

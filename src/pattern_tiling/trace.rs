@@ -1,6 +1,6 @@
-use crate::pattern_tilling::backend::SimdBackend;
-use crate::pattern_tilling::search::{HitRange, Myers};
-use crate::pattern_tilling::tqueries::TQueries;
+use crate::pattern_tiling::backend::SimdBackend;
+use crate::pattern_tiling::search::{HitRange, Myers};
+use crate::pattern_tiling::tqueries::TQueries;
 use crate::profiles::iupac::get_encoded;
 use crate::search::Match;
 use crate::search::Strand;
@@ -303,7 +303,7 @@ pub fn post_process_alignments(
             }
         }
         TracePostProcess::LocalMinima => {
-            let mut pattern_tillingma_indices = Vec::new();
+            let mut pattern_tilingma_indices = Vec::new();
             let mut prev_cost = alignments[0].cost;
             let mut prev_idx = 0usize;
             let mut prev_end = bound(alignments[0].text_end);
@@ -317,7 +317,7 @@ pub fn post_process_alignments(
                 let aln_end = bound(aln.text_end); // Since we now use usize::MAX for left overhang, which is really -1 so 
                 // it's adjacent to 0
                 if aln_end - prev_end > 1 {
-                    pattern_tillingma_indices.push(prev_idx);
+                    pattern_tilingma_indices.push(prev_idx);
                     last_trend = 2;
                     prev_cost = cost;
                     prev_idx = idx;
@@ -330,7 +330,7 @@ pub fn post_process_alignments(
                 let equal = cost == prev_cost;
 
                 if increasing && last_trend != 1 {
-                    pattern_tillingma_indices.push(prev_idx);
+                    pattern_tilingma_indices.push(prev_idx);
                     last_trend = 1;
                 } else if decreasing {
                     last_trend = -1;
@@ -344,10 +344,10 @@ pub fn post_process_alignments(
             }
 
             if last_trend != 1 {
-                pattern_tillingma_indices.push(prev_idx);
+                pattern_tilingma_indices.push(prev_idx);
             }
 
-            for idx in pattern_tillingma_indices {
+            for idx in pattern_tilingma_indices {
                 let aln = &alignments[idx];
                 let mut chosen = aln.clone();
                 let (start, end) =
