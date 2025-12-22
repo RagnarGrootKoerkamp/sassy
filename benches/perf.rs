@@ -5,7 +5,7 @@ use sassy::profiles::Iupac;
 
 fn bench_searchers(c: &mut Criterion) {
     let query_len = 32;
-    let text_len = 1_000_000;
+    let text_len = 100_000;
     let k = 0;
 
     let text: Vec<u8> = (0..text_len).map(|_| b"ACGT"[random_range(0..4)]).collect();
@@ -13,7 +13,7 @@ fn bench_searchers(c: &mut Criterion) {
     let num_queries_list = vec![1, 10, 100, 1_000, 10_000];
 
     let mut group = c.benchmark_group("search_performance");
-    group.sample_size(10);
+    group.sample_size(10); // Otherwise bench takes forever
 
     for &num_queries in &num_queries_list {
         let queries: Vec<Vec<u8>> = (0..num_queries)

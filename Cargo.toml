@@ -77,3 +77,4 @@ members = [
 [[bench]]
 name = "perf"
 profile = "release"
+harness = false

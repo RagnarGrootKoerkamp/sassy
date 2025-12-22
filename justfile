@@ -7,3 +7,7 @@ doc:
 
 cbindgen:
     cbindgen --config cbindgen.toml --output c/sassy.h
+
+bench_patterns:
+    cargo bench --bench perf
+    python3 benches/table_it.py
