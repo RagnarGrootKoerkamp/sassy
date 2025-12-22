@@ -341,27 +341,6 @@ pub enum SearchMode {
     Auto,
 }
 
-pub fn select_search_mode(patterns: &[&[u8]], texts: &[&[u8]]) -> SearchMode {
-    if patterns.len() == 1 && texts.len() == 1 {
-        return SearchMode::Single;
-    }
-
-    let max_pattern_len = patterns.iter().map(|p| p.len()).max().unwrap();
-    let patterns_euqal_length = patterns.iter().all(|p| p.len() == max_pattern_len);
-    let pats_fill_lanes = patterns.len() >= LANES;
-    let texts_fill_lanes = texts.len() >= LANES;
-
-    if pats_fill_lanes && patterns_euqal_length && max_pattern_len <= 64 {
-        return SearchMode::BatchPatternsShort;
-    }
-
-    if !pats_fill_lanes && texts_fill_lanes {
-        return SearchMode::BatchTexts;
-    }
-
-    return SearchMode::BatchPatterns;
-}
-
 #[inline(always)]
 pub(crate) fn get_overhang_steps(
     q_len: usize,
