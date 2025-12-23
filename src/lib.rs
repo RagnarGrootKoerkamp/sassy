@@ -118,6 +118,7 @@ mod trace;
 
 mod pattern_tiling;
 pub mod profiles;
+pub use pattern_tiling::general::EncodedPatterns;
 pub use search::CachedRev;
 pub use search::Match;
 pub use search::RcSearchAble;

@@ -32,19 +32,19 @@ pub type U64Backend = crate::pattern_tiling::backend::U64_512;
 macro_rules! dispatch_encoded {
     ($self:ident, $encoded:expr, |$searcher:ident, $tq:ident| $body:expr) => {
         match $encoded {
-            EncodedQueries::U8($tq) => {
+            EncodedPatterns::U8($tq) => {
                 let $searcher = &mut $self.searcher_u8;
                 $body
             }
-            EncodedQueries::U16 { full: $tq, .. } => {
+            EncodedPatterns::U16 { full: $tq, .. } => {
                 let $searcher = &mut $self.searcher_u16;
                 $body
             }
-            EncodedQueries::U32 { full: $tq, .. } => {
+            EncodedPatterns::U32 { full: $tq, .. } => {
                 let $searcher = &mut $self.searcher_u32;
                 $body
             }
-            EncodedQueries::U64 { full: $tq, .. } => {
+            EncodedPatterns::U64 { full: $tq, .. } => {
                 let $searcher = &mut $self.searcher_u64;
                 $body
             }
@@ -150,7 +150,7 @@ fn trace_ranges_backend<S: SimdBackend>(
 }
 
 #[derive(Debug, Clone)]
-pub enum EncodedQueries {
+pub enum EncodedPatterns {
     U8(TQueries<U8Backend>),
     U16 {
         full: TQueries<U16Backend>,
@@ -169,46 +169,48 @@ pub enum EncodedQueries {
     },
 }
 
-impl EncodedQueries {
+impl EncodedPatterns {
     pub fn max_pattern_length(&self) -> usize {
         match self {
-            EncodedQueries::U8(_) => U8Backend::LIMB_BITS,
-            EncodedQueries::U16 { .. } => U16Backend::LIMB_BITS,
-            EncodedQueries::U32 { .. } => U32Backend::LIMB_BITS,
-            EncodedQueries::U64 { .. } => U64Backend::LIMB_BITS,
+            EncodedPatterns::U8(_) => U8Backend::LIMB_BITS,
+            EncodedPatterns::U16 { .. } => U16Backend::LIMB_BITS,
+            EncodedPatterns::U32 { .. } => U32Backend::LIMB_BITS,
+            EncodedPatterns::U64 { .. } => U64Backend::LIMB_BITS,
         }
     }
 
     pub fn n_queries(&self) -> usize {
         match self {
-            EncodedQueries::U8(tq) => tq.n_queries,
-            EncodedQueries::U16 { full, .. } => full.n_queries,
-            EncodedQueries::U32 { full, .. } => full.n_queries,
-            EncodedQueries::U64 { full, .. } => full.n_queries,
+            EncodedPatterns::U8(tq) => tq.n_queries,
+            EncodedPatterns::U16 { full, .. } => full.n_queries,
+            EncodedPatterns::U32 { full, .. } => full.n_queries,
+            EncodedPatterns::U64 { full, .. } => full.n_queries,
         }
     }
 
     pub fn suffix_u16(&self) -> Option<&TQueries<U16Backend>> {
         match self {
-            EncodedQueries::U8(_) | EncodedQueries::U16 { .. } => None,
-            EncodedQueries::U32 { suffix_u16, .. } => suffix_u16.as_deref(),
-            EncodedQueries::U64 { suffix_u16, .. } => suffix_u16.as_deref(),
+            EncodedPatterns::U8(_) | EncodedPatterns::U16 { .. } => None,
+            EncodedPatterns::U32 { suffix_u16, .. } => suffix_u16.as_deref(),
+            EncodedPatterns::U64 { suffix_u16, .. } => suffix_u16.as_deref(),
         }
     }
 
     pub fn suffix_u32(&self) -> Option<&TQueries<U32Backend>> {
         match self {
-            EncodedQueries::U8(_) | EncodedQueries::U16 { .. } | EncodedQueries::U32 { .. } => None,
-            EncodedQueries::U64 { suffix_u32, .. } => suffix_u32.as_deref(),
+            EncodedPatterns::U8(_) | EncodedPatterns::U16 { .. } | EncodedPatterns::U32 { .. } => {
+                None
+            }
+            EncodedPatterns::U64 { suffix_u32, .. } => suffix_u32.as_deref(),
         }
     }
 
     pub fn suffix_u8(&self) -> Option<&TQueries<U8Backend>> {
         match self {
-            EncodedQueries::U8(_) => None,
-            EncodedQueries::U16 { suffix_u8, .. } => suffix_u8.as_deref(),
-            EncodedQueries::U32 { suffix_u8, .. } => suffix_u8.as_deref(),
-            EncodedQueries::U64 { suffix_u8, .. } => suffix_u8.as_deref(),
+            EncodedPatterns::U8(_) => None,
+            EncodedPatterns::U16 { suffix_u8, .. } => suffix_u8.as_deref(),
+            EncodedPatterns::U32 { suffix_u8, .. } => suffix_u8.as_deref(),
+            EncodedPatterns::U64 { suffix_u8, .. } => suffix_u8.as_deref(),
         }
     }
 }
@@ -262,7 +264,7 @@ impl Searcher {
         }
     }
 
-    pub fn encode(&self, queries: &[Vec<u8>], include_rc: bool) -> EncodedQueries {
+    pub fn encode(&self, queries: &[Vec<u8>], include_rc: bool) -> EncodedPatterns {
         if queries.is_empty() {
             panic!("No queries provided");
         }
@@ -273,23 +275,23 @@ impl Searcher {
         assert!(queries.iter().all(|q| q.len() == max_pattern_length));
 
         if max_pattern_length <= U8Backend::LIMB_BITS {
-            EncodedQueries::U8(TQueries::new(queries, include_rc))
+            EncodedPatterns::U8(TQueries::new(queries, include_rc))
         } else if max_pattern_length <= U16Backend::LIMB_BITS {
             let full = TQueries::new(queries, include_rc);
-            EncodedQueries::U16 {
+            EncodedPatterns::U16 {
                 suffix_u8: Some(Box::new(full.reduce_to_suffix::<U8Backend>())),
                 full,
             }
         } else if max_pattern_length <= U32Backend::LIMB_BITS {
             let full = TQueries::new(queries, include_rc);
-            EncodedQueries::U32 {
+            EncodedPatterns::U32 {
                 suffix_u16: Some(Box::new(full.reduce_to_suffix::<U16Backend>())),
                 suffix_u8: Some(Box::new(full.reduce_to_suffix::<U8Backend>())),
                 full,
             }
         } else if max_pattern_length <= U64Backend::LIMB_BITS {
             let full = TQueries::new(queries, include_rc);
-            EncodedQueries::U64 {
+            EncodedPatterns::U64 {
                 suffix_u16: Some(Box::new(full.reduce_to_suffix::<U16Backend>())),
                 suffix_u32: Some(Box::new(full.reduce_to_suffix::<U32Backend>())),
                 suffix_u8: Some(Box::new(full.reduce_to_suffix::<U8Backend>())),
@@ -305,7 +307,7 @@ impl Searcher {
     }
 
     fn should_use_hierarchical(
-        encoded_queries: &EncodedQueries,
+        encoded_queries: &EncodedPatterns,
         k: u32,
         use_hierarchical: Option<bool>,
     ) -> Option<PrefilterBackend> {
@@ -314,13 +316,13 @@ impl Searcher {
         }
         // Based on emperical benchmarks
         match encoded_queries {
-            EncodedQueries::U8(_) => None,
-            EncodedQueries::U16 { .. } if k == 0 => Some(PrefilterBackend::U8),
-            EncodedQueries::U32 { .. } if k == 0 => Some(PrefilterBackend::U8),
-            EncodedQueries::U32 { .. } if k < 4 => Some(PrefilterBackend::U16),
-            EncodedQueries::U64 { .. } if k == 0 => Some(PrefilterBackend::U8),
-            EncodedQueries::U64 { .. } if k < 4 => Some(PrefilterBackend::U16),
-            EncodedQueries::U64 { .. } if k < 8 => Some(PrefilterBackend::U32),
+            EncodedPatterns::U8(_) => None,
+            EncodedPatterns::U16 { .. } if k == 0 => Some(PrefilterBackend::U8),
+            EncodedPatterns::U32 { .. } if k == 0 => Some(PrefilterBackend::U8),
+            EncodedPatterns::U32 { .. } if k < 4 => Some(PrefilterBackend::U16),
+            EncodedPatterns::U64 { .. } if k == 0 => Some(PrefilterBackend::U8),
+            EncodedPatterns::U64 { .. } if k < 4 => Some(PrefilterBackend::U16),
+            EncodedPatterns::U64 { .. } if k < 8 => Some(PrefilterBackend::U32),
             _ => None,
         }
     }
@@ -328,25 +330,25 @@ impl Searcher {
     #[rustfmt::skip]
     fn hierarchical_search_with_prefilter(
         &mut self,
-        full_queries: &EncodedQueries,
+        full_queries: &EncodedPatterns,
         text: &[u8],
         k: u32,
         prefilter: PrefilterBackend,
         post: TracePostProcess,
     ) -> &[Match] {
         match (prefilter, full_queries) {
-            (PrefilterBackend::U8, EncodedQueries::U16 { full, suffix_u8 }) => run_hierarchical!(self, full, suffix_u8, suffix_searcher_u8, searcher_u16, text, k, post, "U8"),
-            (PrefilterBackend::U8, EncodedQueries::U32 { full, suffix_u8, .. }) => run_hierarchical!(self, full, suffix_u8, suffix_searcher_u8, searcher_u32, text, k, post, "U8"),
-            (PrefilterBackend::U8, EncodedQueries::U64 { full, suffix_u8, .. }) => run_hierarchical!(self, full, suffix_u8, suffix_searcher_u8, searcher_u64, text, k, post, "U8"),
-            (PrefilterBackend::U16, EncodedQueries::U32 { full, suffix_u16, .. }) => run_hierarchical!(self, full, suffix_u16, suffix_searcher_u16, searcher_u32, text, k, post, "U16"),
-            (PrefilterBackend::U16, EncodedQueries::U64 { full, suffix_u16, .. }) => run_hierarchical!(self, full, suffix_u16, suffix_searcher_u16, searcher_u64, text, k, post, "U16"),
-            (PrefilterBackend::U32, EncodedQueries::U64 { full, suffix_u32, .. }) => run_hierarchical!(self, full, suffix_u32, suffix_searcher_u32, searcher_u64, text, k, post, "U32"),
+            (PrefilterBackend::U8, EncodedPatterns::U16 { full, suffix_u8 }) => run_hierarchical!(self, full, suffix_u8, suffix_searcher_u8, searcher_u16, text, k, post, "U8"),
+            (PrefilterBackend::U8, EncodedPatterns::U32 { full, suffix_u8, .. }) => run_hierarchical!(self, full, suffix_u8, suffix_searcher_u8, searcher_u32, text, k, post, "U8"),
+            (PrefilterBackend::U8, EncodedPatterns::U64 { full, suffix_u8, .. }) => run_hierarchical!(self, full, suffix_u8, suffix_searcher_u8, searcher_u64, text, k, post, "U8"),
+            (PrefilterBackend::U16, EncodedPatterns::U32 { full, suffix_u16, .. }) => run_hierarchical!(self, full, suffix_u16, suffix_searcher_u16, searcher_u32, text, k, post, "U16"),
+            (PrefilterBackend::U16, EncodedPatterns::U64 { full, suffix_u16, .. }) => run_hierarchical!(self, full, suffix_u16, suffix_searcher_u16, searcher_u64, text, k, post, "U16"),
+            (PrefilterBackend::U32, EncodedPatterns::U64 { full, suffix_u32, .. }) => run_hierarchical!(self, full, suffix_u32, suffix_searcher_u32, searcher_u64, text, k, post, "U32"),
             _ => panic!("Invalid prefilter backend combination"),
         }
         self.alignments_buf.as_slice()
     }
 
-    pub fn search(&mut self, encoded_queries: &EncodedQueries, text: &[u8], k: u32) -> &[Match] {
+    pub fn search(&mut self, encoded_queries: &EncodedPatterns, text: &[u8], k: u32) -> &[Match] {
         self.search_with_options(
             encoded_queries,
             text,
@@ -358,7 +360,7 @@ impl Searcher {
 
     pub fn search_all(
         &mut self,
-        encoded_queries: &EncodedQueries,
+        encoded_queries: &EncodedPatterns,
         text: &[u8],
         k: u32,
     ) -> &[Match] {
@@ -367,7 +369,7 @@ impl Searcher {
 
     pub fn search_with_options(
         &mut self,
-        encoded_queries: &EncodedQueries,
+        encoded_queries: &EncodedPatterns,
         text: &[u8],
         k: u32,
         use_hierarchical: Option<bool>,

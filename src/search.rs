@@ -12,7 +12,7 @@ use pa_types::{Cigar, CigarOp, Cost, Pos};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 // pattern_tiling imports
-use crate::pattern_tiling::general::EncodedQueries;
+use crate::pattern_tiling::general::EncodedPatterns;
 use crate::pattern_tiling::general::Searcher as PatterntilingSearcher;
 
 /// A match of the pattern against the text.
@@ -405,7 +405,7 @@ impl<P: Profile> Searcher<P> {
         self
     }
 
-    pub fn encode_patterns(&mut self, patterns: &[Vec<u8>]) -> EncodedQueries {
+    pub fn encode_patterns(&mut self, patterns: &[Vec<u8>]) -> EncodedPatterns {
         self.pattern_tiling_searcher.encode(&patterns, self.rc)
     }
 
@@ -418,7 +418,7 @@ impl<P: Profile> Searcher<P> {
     /// Input queries have to be encoded using `encode_queries` prior to calling this
     pub fn search_encoded_patterns(
         &mut self,
-        encoded_queries: &EncodedQueries,
+        encoded_queries: &EncodedPatterns,
         text: &[u8],
         k: usize,
     ) -> &[Match] {
@@ -428,7 +428,7 @@ impl<P: Profile> Searcher<P> {
 
     pub fn search_all_encoded_patterns(
         &mut self,
-        encoded_queries: &EncodedQueries,
+        encoded_queries: &EncodedPatterns,
         text: &[u8],
         k: usize,
     ) -> &[Match] {
