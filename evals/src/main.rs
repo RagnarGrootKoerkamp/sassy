@@ -1,16 +1,7 @@
 use clap::{Parser, Subcommand};
 
-mod edlib_bench;
-use edlib_bench::runner as edlib_runner;
-
-mod overhang;
-use overhang::runner as overhang_runner;
-
-mod profiles;
-use profiles::runner as profiles_runner;
-
-mod agrep_comparison;
-use agrep_comparison::runner as agrep_runner;
+mod sassy1;
+mod sassy2;
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -21,6 +12,21 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Run sassy1 benchmarks
+    Sassy1 {
+        #[command(subcommand)]
+        command: Sassy1Commands,
+    },
+
+    /// Run sassy2 benchmarks
+    Sassy2 {
+        #[command(subcommand)]
+        command: Sassy2Commands,
+    },
+}
+
+#[derive(Subcommand)]
+enum Sassy1Commands {
     /// Run the edlib grid benchmark
     Edlib {
         /// Path to the grid config TOML file
@@ -50,24 +56,54 @@ enum Commands {
     },
 }
 
+#[derive(Subcommand)]
+enum Sassy2Commands {
+    /// Run the pattern throughput benchmark
+    PatternThroughput {
+        /// Path to the pattern throughput config TOML file
+        #[arg(long)]
+        config: String,
+    },
+
+    /// Run the scaling throughput benchmark
+    ScalingBenchmark {
+        /// Path to the scaling benchmark config TOML file
+        #[arg(long)]
+        config: String,
+    },
+}
+
 fn main() {
     let args = Args::parse();
     match args.command {
-        Commands::Edlib { config } => {
-            println!("Running edlib grid");
-            edlib_runner::run(&config);
-        }
-        Commands::Overhang { config } => {
-            println!("Running overhang benchmark");
-            overhang_runner::run(&config);
-        }
-        Commands::Profiles { config } => {
-            println!("Running profiles benchmark");
-            profiles_runner::run(&config);
-        }
-        Commands::Agrep { config } => {
-            println!("Running agrep comparison benchmark");
-            agrep_runner::run(&config);
-        }
+        Commands::Sassy1 { command } => match command {
+            Sassy1Commands::Edlib { config } => {
+                println!("Running sassy1 edlib grid");
+                sassy1::edlib_bench::runner::run(&config);
+            }
+            Sassy1Commands::Overhang { config } => {
+                println!("Running sassy1 overhang benchmark");
+                sassy1::overhang::runner::run(&config);
+            }
+            Sassy1Commands::Profiles { config } => {
+                println!("Running sassy1 profiles benchmark");
+                sassy1::profiles::runner::run(&config);
+            }
+            Sassy1Commands::Agrep { config } => {
+                println!("Running sassy1 agrep comparison benchmark");
+                sassy1::agrep_comparison::runner::run(&config);
+            }
+        },
+
+        Commands::Sassy2 { command } => match command {
+            Sassy2Commands::PatternThroughput { config } => {
+                println!("Running sassy2 pattern throughput benchmark");
+                sassy2::pattern_throughput::run(&config);
+            }
+            Sassy2Commands::ScalingBenchmark { config } => {
+                println!("Running sassy2 scaling throughput benchmark");
+                sassy2::scaling_benchmark::run(&config);
+            }
+        },
     }
 }

@@ -497,6 +497,7 @@ dependencies = [
  "clap",
  "edlib_rs",
  "once_cell",
+ "perfcnt",
  "rand 0.9.2",
  "sassy",
  "serde",

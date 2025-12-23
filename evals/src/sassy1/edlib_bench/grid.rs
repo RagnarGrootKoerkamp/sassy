@@ -1,4 +1,4 @@
-use crate::edlib_bench::sim_data::Alphabet;
+use crate::sassy1::edlib_bench::sim_data::Alphabet;
 use serde::Deserialize;
 use std::fs;
 

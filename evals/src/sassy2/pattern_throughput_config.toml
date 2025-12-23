@@ -1,0 +1,10 @@
+# Pattern Throughput Benchmark Configuration
+query_len = 23
+text_len = 100000
+k = 3
+iterations = 100
+output_file = "pattern_throughput_results.csv"
+num_queries_list = [1, 2, 4, 8, 16, 32, 48,64, 96, 128]
+run_edlib = true
+edlib_alphabet = "iupac"
+warmup_iterations = 5

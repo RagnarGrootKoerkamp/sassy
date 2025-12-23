@@ -1,4 +1,4 @@
-use crate::edlib_bench::sim_data::Alphabet;
+use crate::sassy1::edlib_bench::sim_data::Alphabet;
 use ::std::os::raw::c_char;
 use edlib_rs::edlib_sys::*;
 use edlib_rs::*;
