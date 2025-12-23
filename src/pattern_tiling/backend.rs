@@ -476,13 +476,13 @@ impl_wide_backend!(I16x16Backend, u16x16, u16, 16, 16, [u8; 16]);
 impl_wide_backend!(I8x32Backend, WrapperU8x32, u8, 32, 8, [u8; 8]);
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-impl_wide_backend!(I32x16Backend, u32x16, u32, 16, 32, [u8; 64]);
+impl_wide_backend!(I32x16Backend, u32x16, u32, 16, 32, [u8; 32]);
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 impl_wide_backend!(I64x8Backend, u64x8, u64, 8, 64, [u8; 64]);
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl_wide_backend!(I8x64Backend, Avx512U8, u8, 64, 8, [u8; 8]);
+impl_wide_backend!(I16x32Backend, u16x32, u16, 32, 16, [u8; 16]);
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl_wide_backend!(I16x32Backend, u16x32, u16, 32, 16, [u8; 64]);
+impl_wide_backend!(I8x64Backend, Avx512U8, u8, 64, 8, [u8; 8]);
 
 // --- Aliases ---
 pub type U8 = I8x32Backend;
