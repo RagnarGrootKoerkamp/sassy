@@ -248,9 +248,17 @@ macro_rules! impl_u8_wrapper {
 impl_u8_wrapper!(WrapperU8x32, u8x32, i8x32, 32);
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
 pub struct Avx512U8(pub __m512i);
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
+impl Default for Avx512U8 {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::splat(0)
+    }
+}
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
 impl PartialEq for Avx512U8 {
@@ -289,7 +297,7 @@ impl Avx512U8 {
     #[inline(always)]
     pub fn simd_gt(self, rhs: Self) -> Self {
         unsafe {
-            let mask = _mm512_cmp_epu8_mask(self.0, rhs.0, _MM_CMPINT_GT);
+            let mask = _mm512_cmp_epu8_mask(self.0, rhs.0, 6); // is this safe to assume 6?
             Self(_mm512_maskz_set1_epi8(mask, -1))
         }
     }
@@ -434,7 +442,7 @@ impl_wide_backend!(I32x16Backend, u32x16, u32, 16, 32, [u8; 64]);
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 impl_wide_backend!(I64x8Backend, u64x8, u64, 8, 64, [u8; 64]);
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl_wide_backend!(I8x64Backend, WrapperU8x64, u8, 64, 8, [u8; 8]);
+impl_wide_backend!(I8x64Backend, Avx512U8, u8, 64, 8, [u8; 8]);
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
 impl_wide_backend!(I16x32Backend, u16x32, u16, 32, 16, [u8; 64]);
 

@@ -1,4 +1,4 @@
-use crate::pattern_tiling::backend::{SimdBackend, U8, U16, U32, U64};
+use crate::pattern_tiling::backend::SimdBackend;
 use crate::pattern_tiling::search::{HitRange, Myers};
 use crate::pattern_tiling::tqueries::TQueries;
 use crate::pattern_tiling::trace::{TracePostProcess, trace_batch_ranges};
@@ -9,22 +9,22 @@ use pa_types::Cost;
 // This allows processing twice as many patterns in parallel.
 
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512bw")))]
-pub type U8Backend = U8;
+pub type U8Backend = crate::pattern_tiling::backend::U8;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
 pub type U8Backend = crate::pattern_tiling::backend::U8_512;
 
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512bw")))]
-pub type U16Backend = U16;
+pub type U16Backend = crate::pattern_tiling::backend::U16;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
 pub type U16Backend = crate::pattern_tiling::backend::U16_512;
 
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
-pub type U32Backend = U32;
+pub type U32Backend = crate::pattern_tiling::backend::U32;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 pub type U32Backend = crate::pattern_tiling::backend::U32_512;
 
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
-pub type U64Backend = U64;
+pub type U64Backend = crate::pattern_tiling::backend::U64;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 pub type U64Backend = crate::pattern_tiling::backend::U64_512;
 
