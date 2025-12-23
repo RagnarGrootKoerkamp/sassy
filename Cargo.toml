@@ -77,10 +77,11 @@ members = [
 
 [[bench]]
 name = "perf"
-profile = "release"
 harness = false
 
 [[bench]]
 name = "ipc"
-profile = "release"
 harness = false
+
+[profile.bench]
+inherits = "release"
