@@ -8,6 +8,44 @@ use wide::{u16x32, u32x16, u64x8};
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
 use std::arch::x86_64::*;
 
+#[derive(Clone, Copy)]
+pub struct LaneArray<T: Copy, const N: usize>(pub [T; N]);
+
+impl<T: Copy, const N: usize> From<[T; N]> for LaneArray<T, N> {
+    #[inline(always)]
+    fn from(value: [T; N]) -> Self {
+        Self(value)
+    }
+}
+
+impl<T: Copy, const N: usize> From<LaneArray<T, N>> for [T; N] {
+    #[inline(always)]
+    fn from(value: LaneArray<T, N>) -> Self {
+        value.0
+    }
+}
+
+impl<T: Copy + Default, const N: usize> Default for LaneArray<T, N> {
+    #[inline(always)]
+    fn default() -> Self {
+        Self([T::default(); N])
+    }
+}
+
+impl<T: Copy, const N: usize> AsRef<[T]> for LaneArray<T, N> {
+    #[inline(always)]
+    fn as_ref(&self) -> &[T] {
+        &self.0
+    }
+}
+
+impl<T: Copy, const N: usize> AsMut<[T]> for LaneArray<T, N> {
+    #[inline(always)]
+    fn as_mut(&mut self) -> &mut [T] {
+        &mut self.0
+    }
+}
+
 pub trait SimdBackend: Copy + 'static + Send + Sync + Default + std::fmt::Debug {
     type Simd: Copy
         + Add<Output = Self::Simd>
@@ -53,7 +91,7 @@ macro_rules! impl_wide_backend {
         impl SimdBackend for $name {
             type Simd = $simd_ty;
             type Scalar = $scalar;
-            type LaneArray = [$scalar; $lanes];
+            type LaneArray = LaneArray<$scalar, $lanes>;
             type PatternBlock = $pattern;
 
             const LANES: usize = $lanes;
@@ -69,11 +107,11 @@ macro_rules! impl_wide_backend {
             }
             #[inline(always)]
             fn from_array(arr: Self::LaneArray) -> Self::Simd {
-                <$simd_ty>::new(arr)
+                <$simd_ty>::new(arr.into())
             }
             #[inline(always)]
             fn to_array(vec: Self::Simd) -> Self::LaneArray {
-                vec.to_array()
+                LaneArray::from(vec.to_array())
             }
             #[inline(always)]
             fn to_pattern_block(slice: &[u8]) -> Self::PatternBlock {
