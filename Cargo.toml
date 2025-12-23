@@ -44,7 +44,7 @@ needletail = "0.6.3"
 pyo3 = { version = "0.27", features = ["extension-module", "abi3-py38", "generate-import-lib"], optional = true }
 colored = "3.0.0"
 either = "1.15.0"
-wide = "0.8.1"
+wide = "1.1.1"
 ensure_simd = "0.1.0"
 rayon = "1.11.0"
 itertools = "0.14.0"

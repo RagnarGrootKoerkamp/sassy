@@ -5,6 +5,29 @@ use crate::pattern_tiling::trace::{TracePostProcess, trace_batch_ranges};
 use crate::search::Match;
 use pa_types::Cost;
 
+// If AVX-512 is available, we want to use the 512-bit backends instead of the default 256-bit ones.
+// This allows processing twice as many patterns in parallel.
+
+#[cfg(not(all(target_arch = "x86_64", target_feature = "avx512bw")))]
+pub type U8Backend = U8;
+#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
+pub type U8Backend = crate::pattern_tiling::backend::U8_512;
+
+#[cfg(not(all(target_arch = "x86_64", target_feature = "avx512bw")))]
+pub type U16Backend = U16;
+#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
+pub type U16Backend = crate::pattern_tiling::backend::U16_512;
+
+#[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
+pub type U32Backend = U32;
+#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+pub type U32Backend = crate::pattern_tiling::backend::U32_512;
+
+#[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
+pub type U64Backend = U64;
+#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+pub type U64Backend = crate::pattern_tiling::backend::U64_512;
+
 // Even with macros to generate most of the code this is still A LOT to look at
 macro_rules! dispatch_encoded {
     ($self:ident, $encoded:expr, |$searcher:ident, $tq:ident| $body:expr) => {
@@ -128,31 +151,31 @@ fn trace_ranges_backend<S: SimdBackend>(
 
 #[derive(Debug, Clone)]
 pub enum EncodedQueries {
-    U8(TQueries<U8>),
+    U8(TQueries<U8Backend>),
     U16 {
-        full: TQueries<U16>,
-        suffix_u8: Option<Box<TQueries<U8>>>,
+        full: TQueries<U16Backend>,
+        suffix_u8: Option<Box<TQueries<U8Backend>>>,
     },
     U32 {
-        full: TQueries<U32>,
-        suffix_u16: Option<Box<TQueries<U16>>>,
-        suffix_u8: Option<Box<TQueries<U8>>>,
+        full: TQueries<U32Backend>,
+        suffix_u16: Option<Box<TQueries<U16Backend>>>,
+        suffix_u8: Option<Box<TQueries<U8Backend>>>,
     },
     U64 {
-        full: TQueries<U64>,
-        suffix_u16: Option<Box<TQueries<U16>>>,
-        suffix_u32: Option<Box<TQueries<U32>>>,
-        suffix_u8: Option<Box<TQueries<U8>>>,
+        full: TQueries<U64Backend>,
+        suffix_u16: Option<Box<TQueries<U16Backend>>>,
+        suffix_u32: Option<Box<TQueries<U32Backend>>>,
+        suffix_u8: Option<Box<TQueries<U8Backend>>>,
     },
 }
 
 impl EncodedQueries {
     pub fn max_pattern_length(&self) -> usize {
         match self {
-            EncodedQueries::U8(_) => U8::LIMB_BITS,
-            EncodedQueries::U16 { .. } => U16::LIMB_BITS,
-            EncodedQueries::U32 { .. } => U32::LIMB_BITS,
-            EncodedQueries::U64 { .. } => U64::LIMB_BITS,
+            EncodedQueries::U8(_) => U8Backend::LIMB_BITS,
+            EncodedQueries::U16 { .. } => U16Backend::LIMB_BITS,
+            EncodedQueries::U32 { .. } => U32Backend::LIMB_BITS,
+            EncodedQueries::U64 { .. } => U64Backend::LIMB_BITS,
         }
     }
 
@@ -165,7 +188,7 @@ impl EncodedQueries {
         }
     }
 
-    pub fn suffix_u16(&self) -> Option<&TQueries<U16>> {
+    pub fn suffix_u16(&self) -> Option<&TQueries<U16Backend>> {
         match self {
             EncodedQueries::U8(_) | EncodedQueries::U16 { .. } => None,
             EncodedQueries::U32 { suffix_u16, .. } => suffix_u16.as_deref(),
@@ -173,14 +196,14 @@ impl EncodedQueries {
         }
     }
 
-    pub fn suffix_u32(&self) -> Option<&TQueries<U32>> {
+    pub fn suffix_u32(&self) -> Option<&TQueries<U32Backend>> {
         match self {
             EncodedQueries::U8(_) | EncodedQueries::U16 { .. } | EncodedQueries::U32 { .. } => None,
             EncodedQueries::U64 { suffix_u32, .. } => suffix_u32.as_deref(),
         }
     }
 
-    pub fn suffix_u8(&self) -> Option<&TQueries<U8>> {
+    pub fn suffix_u8(&self) -> Option<&TQueries<U8Backend>> {
         match self {
             EncodedQueries::U8(_) => None,
             EncodedQueries::U16 { suffix_u8, .. } => suffix_u8.as_deref(),
@@ -197,13 +220,13 @@ enum PrefilterBackend {
 }
 
 pub struct Searcher {
-    searcher_u8: Myers<U8>,
-    searcher_u16: Myers<U16>,
-    searcher_u32: Myers<U32>,
-    searcher_u64: Myers<U64>,
-    suffix_searcher_u8: Myers<U8>,
-    suffix_searcher_u16: Myers<U16>,
-    suffix_searcher_u32: Myers<U32>,
+    searcher_u8: Myers<U8Backend>,
+    searcher_u16: Myers<U16Backend>,
+    searcher_u32: Myers<U32Backend>,
+    searcher_u64: Myers<U64Backend>,
+    suffix_searcher_u8: Myers<U8Backend>,
+    suffix_searcher_u16: Myers<U16Backend>,
+    suffix_searcher_u32: Myers<U32Backend>,
     alignments_buf: Vec<Match>,
     batch_buf: Vec<Match>,
 }
@@ -249,34 +272,34 @@ impl Searcher {
         // all queries should be the same max length
         assert!(queries.iter().all(|q| q.len() == max_pattern_length));
 
-        if max_pattern_length <= U8::LIMB_BITS {
+        if max_pattern_length <= U8Backend::LIMB_BITS {
             EncodedQueries::U8(TQueries::new(queries, include_rc))
-        } else if max_pattern_length <= U16::LIMB_BITS {
+        } else if max_pattern_length <= U16Backend::LIMB_BITS {
             let full = TQueries::new(queries, include_rc);
             EncodedQueries::U16 {
-                suffix_u8: Some(Box::new(full.reduce_to_suffix::<U8>())),
+                suffix_u8: Some(Box::new(full.reduce_to_suffix::<U8Backend>())),
                 full,
             }
-        } else if max_pattern_length <= U32::LIMB_BITS {
+        } else if max_pattern_length <= U32Backend::LIMB_BITS {
             let full = TQueries::new(queries, include_rc);
             EncodedQueries::U32 {
-                suffix_u16: Some(Box::new(full.reduce_to_suffix::<U16>())),
-                suffix_u8: Some(Box::new(full.reduce_to_suffix::<U8>())),
+                suffix_u16: Some(Box::new(full.reduce_to_suffix::<U16Backend>())),
+                suffix_u8: Some(Box::new(full.reduce_to_suffix::<U8Backend>())),
                 full,
             }
-        } else if max_pattern_length <= U64::LIMB_BITS {
+        } else if max_pattern_length <= U64Backend::LIMB_BITS {
             let full = TQueries::new(queries, include_rc);
             EncodedQueries::U64 {
-                suffix_u16: Some(Box::new(full.reduce_to_suffix::<U16>())),
-                suffix_u32: Some(Box::new(full.reduce_to_suffix::<U32>())),
-                suffix_u8: Some(Box::new(full.reduce_to_suffix::<U8>())),
+                suffix_u16: Some(Box::new(full.reduce_to_suffix::<U16Backend>())),
+                suffix_u32: Some(Box::new(full.reduce_to_suffix::<U32Backend>())),
+                suffix_u8: Some(Box::new(full.reduce_to_suffix::<U8Backend>())),
                 full,
             }
         } else {
             panic!(
                 "pattern length {} exceeds maximum supported length {}",
                 max_pattern_length,
-                U64::LIMB_BITS
+                U64Backend::LIMB_BITS
             );
         }
     }
@@ -364,7 +387,7 @@ impl Searcher {
                     searcher,
                     tq,
                     text,
-                    &ranges,
+                    ranges.as_slice(),
                     k,
                     post,
                     &mut self.alignments_buf,

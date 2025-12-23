@@ -8,9 +8,11 @@ doc:
 cbindgen:
     cbindgen --config cbindgen.toml --output c/sassy.h
 
-bench_patterns:
-    cargo bench --bench perf
-    python3 benches/table_it.py
+sassy2_fig1:
+    cargo run -r -p evals -- sassy2 scaling-benchmark --config evals/src/sassy2/scaling_config.toml 
+    cargo run -r -p evals -- sassy2 pattern-throughput --config evals/src/sassy2/pattern_throughput_config.toml 
+    python3  evals/src/sassy2/scripts/generate_fig1.py
+
 
 perm:
     sudo sysctl -w kernel.perf_event_paranoid=-1

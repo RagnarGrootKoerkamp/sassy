@@ -31,7 +31,7 @@ plt.rcParams.update({
 
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8.27, 4.09))
 
-csv_files = ["scaling_benchmark_results.csv", "evals/scaling_benchmark_results.csv"]
+csv_files = ["evals/src/sassy2/output/scaling_benchmark_results.csv"]
 scaling_csv = None
 for candidate in csv_files:
     if os.path.exists(candidate):
@@ -169,7 +169,7 @@ else:
     )
 
 
-throughput_csv = "pattern_throughput_results.csv"
+throughput_csv = "evals/src/sassy2/output/pattern_throughput_results.csv"
 if not os.path.exists(throughput_csv):
     print("Warning: pattern_throughput_results.csv not found, skipping Panel B")
 else:
@@ -292,10 +292,10 @@ else:
 
 plt.tight_layout()
 
-plt.savefig('figure1_scaling_throughput.pdf', dpi=300, bbox_inches='tight')
-plt.savefig('figure1_scaling_throughput.png', dpi=300, bbox_inches='tight')
-plt.savefig('figure1_scaling_throughput.svg', dpi=300, bbox_inches='tight')
+plt.savefig('evals/src/sassy2/figs/figure1_scaling_throughput.pdf', dpi=300, bbox_inches='tight')
+plt.savefig('evals/src/sassy2/figs/figure1_scaling_throughput.png', dpi=300, bbox_inches='tight')
+plt.savefig('evals/src/sassy2/figs/figure1_scaling_throughput.svg', dpi=300, bbox_inches='tight')
 
-print("Saved figure1_scaling_throughput.pdf and .png")
+print("Saved evals/src/sassy2/figs/figure1_scaling_throughput.pdf and .png")
 
 plt.show()

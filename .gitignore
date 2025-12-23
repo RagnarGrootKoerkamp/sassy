@@ -8,3 +8,5 @@
 __pycache__
 *.so
 c/sassy_example
+/evals/src/sassy2/output/*
+/evals/src/sassy2/figs/*

@@ -5,6 +5,6 @@ ks = [0, 3, 4]
 iterations = 1000
 warmup_iterations = 5
 n_queries = 128
-output_file = "scaling_benchmark_results.csv"
+output_file = "evals/src/sassy2/output/scaling_benchmark_results.csv"
 run_edlib = true
 edlib_alphabet = "iupac"
