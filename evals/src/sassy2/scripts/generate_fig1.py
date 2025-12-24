@@ -29,7 +29,12 @@ plt.rcParams.update({
 })
 
 
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8.27, 4.09))
+global_min_throughput = np.inf
+global_max_throughput = 0.0
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8.27, 4.09), sharey=True)
+ax1.set_yscale("log", base=2)
+ax2.set_yscale("log", base=2)
 
 csv_files = ["evals/src/sassy2/output/scaling_benchmark_results.csv"]
 scaling_csv = None
@@ -46,6 +51,12 @@ else:
 
     df_scaling = df_scaling[df_scaling["k"] < df_scaling["query_len"]]
     print(f"After filtering: {len(df_scaling)} rows")
+
+    if not df_scaling.empty:
+        scaling_min = df_scaling["throughput_gbps"].min()
+        scaling_max = df_scaling["throughput_gbps"].max()
+        global_min_throughput = min(global_min_throughput, scaling_min)
+        global_max_throughput = max(global_max_throughput, scaling_max)
 
     sassy_search_color = "#0A9396"  # teal for sassy1 (search)
     sassy_tiling_color = "#9B5DE5"  # purple for sassy2 (tiling)
@@ -120,14 +131,13 @@ else:
 
     
     ax1.set_xscale("log", base=2)
-    ax1.set_yscale("log", base=2)
 
     ax1.grid(True, which="major", linewidth=0.4, alpha=0.5, color='#CCCCCC')
     ax1.grid(True, which="minor", linewidth=0.2, alpha=0.3, color='#E0E0E0')
     ax1.set_axisbelow(True)
     
-    ax1.set_xlabel("Target length (bp)", fontsize=9)
-    ax1.set_ylabel("Throughput (GB/s)", fontsize=9)
+    ax1.set_xlabel("Text length ($n$) (bp)", fontsize=9)
+    ax1.set_ylabel("Throughput per pattern (GB/s)", fontsize=9)
     ax1.set_title("A", fontweight='bold', loc='left', fontsize=11, pad=10)
 
     ax1.xaxis.set_major_locator(LogLocator(base=2.0, subs=[1.0], numticks=15))
@@ -199,11 +209,12 @@ else:
             lines1.append(line)
             labels1.append(f"{tool_labels[tool]} (k=3)")
 
-    ax2.set_xlabel("Number of patterns", fontsize=9)
-    ax2.set_ylabel("Throughput (GB/s)", fontsize=9)
+    ax2.set_xlabel("Number of patterns ($r$)", fontsize=9)
+    ax2.set_ylabel("Throughput per pattern (GB/s)", fontsize=9)
     ax2.set_xscale('log', base=2)
-    ax2.set_yscale("log", base=2)
     ax2.set_title("B", fontweight='bold', loc='left', fontsize=11, pad=10)
+    # Explicitly show y-axis labels on the second plot (sharey=True hides them by default)
+    ax2.tick_params(labelleft=True)
 
     # Show all num_queries values as x-ticks
     if not df_throughput.empty:
@@ -217,10 +228,11 @@ else:
         if throughput_cols:
             min_throughput = df_throughput[throughput_cols].min().min()
             max_throughput = df_throughput[throughput_cols].max().max()
+            global_min_throughput = min(global_min_throughput, min_throughput)
+            global_max_throughput = max(global_max_throughput, max_throughput)
             # Set y-ticks as powers of 2
             ax2.yaxis.set_major_locator(LogLocator(base=2.0, subs=[1.0], numticks=15))
-            ax2.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
-            ax2.set_ylim(min_throughput * 0.8, max_throughput * 1.1)
+            ax2.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
 
     ax2.grid(True, which='major', linewidth=0.4, alpha=0.5, color='#CCCCCC')
     ax2.grid(True, which='minor', linewidth=0.2, alpha=0.3, color='#E0E0E0')
@@ -295,6 +307,11 @@ plt.tight_layout()
 plt.savefig('evals/src/sassy2/figs/figure1_scaling_throughput.pdf', dpi=300, bbox_inches='tight')
 plt.savefig('evals/src/sassy2/figs/figure1_scaling_throughput.png', dpi=300, bbox_inches='tight')
 plt.savefig('evals/src/sassy2/figs/figure1_scaling_throughput.svg', dpi=300, bbox_inches='tight')
+
+if global_min_throughput != np.inf and global_max_throughput > 0:
+    y_min = global_min_throughput * 0.8
+    y_max = global_max_throughput * 1.1
+    ax1.set_ylim(y_min, y_max)
 
 print("Saved evals/src/sassy2/figs/figure1_scaling_throughput.pdf and .png")
 

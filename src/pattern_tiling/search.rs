@@ -397,7 +397,7 @@ impl<B: SimdBackend> Myers<B> {
                     // Compute hits, <=k cost
                     let gt_mask = B::simd_gt(cost_out, k_simd);
                     let hit_bits = if gt_mask != all_ones {
-                        B::lanes_with_zero(gt_mask) as u64
+                        B::lanes_with_zero(gt_mask)
                     } else {
                         0
                     };
