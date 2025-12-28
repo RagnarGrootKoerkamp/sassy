@@ -1,10 +1,14 @@
 use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
-use perfcnt::AbstractPerfCounter;
-use perfcnt::linux::{HardwareEventType, PerfCounterBuilderLinux};
 use rand::random_range;
 use sassy::Searcher;
 use sassy::profiles::Iupac;
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use perfcnt::AbstractPerfCounter;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use perfcnt::linux::{HardwareEventType, PerfCounterBuilderLinux};
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn measure_ipc<F: FnOnce()>(f: F) -> f64 {
     let mut instr = PerfCounterBuilderLinux::from_hardware_event(HardwareEventType::Instructions)
         .finish()
@@ -29,6 +33,13 @@ fn measure_ipc<F: FnOnce()>(f: F) -> f64 {
     } else {
         instructions as f64 / cycles as f64
     }
+}
+
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+fn measure_ipc<F: FnOnce()>(f: F) -> f64 {
+    // Perf counters aren't available/portable here (e.g. macOS / Apple Silicon).
+    f();
+    0.0
 }
 
 fn bench_searchers(c: &mut Criterion) {

@@ -1,9 +1,12 @@
-use perfcnt::AbstractPerfCounter;
-use perfcnt::linux::{HardwareEventType, PerfCounterBuilderLinux};
 use rand::random_range;
 use sassy::Searcher;
 use sassy::profiles::Iupac;
 use std::hint::black_box;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use perfcnt::AbstractPerfCounter;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use perfcnt::linux::{HardwareEventType, PerfCounterBuilderLinux};
 
 #[derive(Debug, Default)]
 struct PerfStats {
@@ -36,6 +39,7 @@ impl PerfStats {
     }
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn try_make(event: HardwareEventType) -> Option<Box<dyn AbstractPerfCounter>> {
     PerfCounterBuilderLinux::from_hardware_event(event)
         .finish()
@@ -43,6 +47,7 @@ fn try_make(event: HardwareEventType) -> Option<Box<dyn AbstractPerfCounter>> {
         .ok()
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn measure_perf<F: FnMut()>(mut f: F) -> PerfStats {
     let mut instr = try_make(HardwareEventType::Instructions);
     let mut cycles = try_make(HardwareEventType::CPUCycles);
@@ -103,6 +108,13 @@ fn measure_perf<F: FnMut()>(mut f: F) -> PerfStats {
         cache_references: read_opt(cache_references),
         cache_misses: read_opt(cache_misses),
     }
+}
+
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+fn measure_perf<F: FnMut()>(mut f: F) -> PerfStats {
+    // Perf counters aren't available/portable here (e.g. macOS / Apple Silicon).
+    f();
+    PerfStats::default()
 }
 
 fn main() {

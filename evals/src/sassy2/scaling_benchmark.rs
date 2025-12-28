@@ -1,4 +1,3 @@
-use perfcnt::AbstractPerfCounter;
 use rand::Rng;
 use sassy::Searcher;
 use sassy::profiles::Iupac;
@@ -11,6 +10,9 @@ use std::time::Instant;
 
 use crate::sassy1::edlib_bench::edlib::{get_edlib_config, run_edlib};
 use crate::sassy1::edlib_bench::sim_data::Alphabet;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use perfcnt::AbstractPerfCounter;
 
 #[derive(Deserialize)]
 struct Config {
@@ -36,6 +38,7 @@ struct BenchmarkResults {
     ci_upper_throughput_gbps: f64,
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn measure_ipc<F: FnOnce()>(f: F) -> f64 {
     let mut instr = perfcnt::linux::PerfCounterBuilderLinux::from_hardware_event(
         perfcnt::linux::HardwareEventType::Instructions,
@@ -63,6 +66,14 @@ fn measure_ipc<F: FnOnce()>(f: F) -> f64 {
     } else {
         instructions as f64 / cycles as f64
     }
+}
+
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+fn measure_ipc<F: FnOnce()>(f: F) -> f64 {
+    // Perf counters aren't available/portable here (e.g. macOS / Apple Silicon).
+    // Execute the workload once, then return a sentinel IPC value.
+    f();
+    0.0
 }
 
 fn benchmark_with_stats<F>(mut f: F, warmup: usize, iterations: usize) -> (f64, f64, f64, f64, f64)

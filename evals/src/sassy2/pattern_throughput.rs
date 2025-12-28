@@ -1,4 +1,3 @@
-use perfcnt::AbstractPerfCounter;
 use rand::Rng;
 use sassy::Searcher;
 use sassy::profiles::Iupac;
@@ -11,6 +10,9 @@ use std::time::Instant;
 
 use crate::sassy1::edlib_bench::edlib::{get_edlib_config, run_edlib};
 use crate::sassy1::edlib_bench::sim_data::Alphabet;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use perfcnt::AbstractPerfCounter;
 
 #[derive(Deserialize)]
 struct Config {
@@ -37,6 +39,7 @@ struct BenchmarkResults {
     ci_upper_throughput_gbps: f64,
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn measure_ipc_median<F: FnMut()>(mut f: F, iterations: usize) -> f64 {
     let mut ipc_values = Vec::with_capacity(iterations);
 
@@ -72,6 +75,14 @@ fn measure_ipc_median<F: FnMut()>(mut f: F, iterations: usize) -> f64 {
     // Calculate median
     ipc_values.sort_by(|a, b| a.partial_cmp(b).unwrap());
     ipc_values[ipc_values.len() / 2]
+}
+
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+fn measure_ipc_median<F: FnMut()>(mut f: F, _iterations: usize) -> f64 {
+    // Perf counters aren't available/portable here (e.g. macOS / Apple Silicon).
+    // Still execute the workload once so this call doesn't change side-effects.
+    f();
+    0.0
 }
 
 fn benchmark_with_stats<F>(mut f: F, warmup: usize, iterations: usize) -> (f64, f64, f64, f64, f64)
