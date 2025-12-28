@@ -1,4 +1,3 @@
-use std::convert::TryInto;
 use std::ops::{Add, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, Shl, Shr, Sub};
 use wide::{CmpEq, CmpGt, i8x32, u8x32, u16x16, u32x8, u64x4};
 
