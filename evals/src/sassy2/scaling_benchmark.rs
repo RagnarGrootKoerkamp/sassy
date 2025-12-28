@@ -29,7 +29,11 @@ struct BenchmarkResults {
     median: f64,
     mean: f64,
     std_dev: f64,
+    ci_lower: f64,
+    ci_upper: f64,
     throughput_gbps: f64,
+    ci_lower_throughput_gbps: f64,
+    ci_upper_throughput_gbps: f64,
 }
 
 fn measure_ipc<F: FnOnce()>(f: F) -> f64 {
@@ -61,7 +65,7 @@ fn measure_ipc<F: FnOnce()>(f: F) -> f64 {
     }
 }
 
-fn benchmark_with_stats<F>(mut f: F, warmup: usize, iterations: usize) -> (f64, f64, f64)
+fn benchmark_with_stats<F>(mut f: F, warmup: usize, iterations: usize) -> (f64, f64, f64, f64, f64)
 where
     F: FnMut(),
 {
@@ -85,7 +89,16 @@ where
     let variance = times.iter().map(|t| (t - mean).powi(2)).sum::<f64>() / times.len() as f64;
     let std_dev = variance.sqrt();
 
-    (median, mean, std_dev)
+    // Calculate 95% confidence interval using normal approximation
+    // CI = mean ± 1.96 * (std_dev / sqrt(n))
+    let n = iterations as f64;
+    let standard_error = std_dev / n.sqrt();
+    let z_score = 1.96; // 95% confidence interval
+    let margin = z_score * standard_error;
+    let ci_lower = mean - margin;
+    let ci_upper = mean + margin;
+
+    (median, mean, std_dev, ci_lower, ci_upper)
 }
 
 fn calculate_throughput(total_bytes: usize, median_ms: f64) -> f64 {
@@ -104,7 +117,7 @@ fn benchmark_individual_search(
 
     let mut searcher = Searcher::<Iupac>::new_fwd();
 
-    let (median, mean, std_dev) = benchmark_with_stats(
+    let (median, mean, std_dev, ci_lower, ci_upper) = benchmark_with_stats(
         || {
             for query in queries {
                 black_box(query);
@@ -117,12 +130,20 @@ fn benchmark_individual_search(
     );
 
     let throughput_gbps = calculate_throughput(total_bytes, median);
+    // Calculate throughput CI bounds from time CI bounds
+    // Note: higher time = lower throughput, so ci_upper gives lower throughput bound
+    let ci_lower_throughput_gbps = calculate_throughput(total_bytes, ci_upper);
+    let ci_upper_throughput_gbps = calculate_throughput(total_bytes, ci_lower);
 
     BenchmarkResults {
         median,
         mean,
         std_dev,
+        ci_lower,
+        ci_upper,
         throughput_gbps,
+        ci_lower_throughput_gbps,
+        ci_upper_throughput_gbps,
     }
 }
 
@@ -138,7 +159,7 @@ fn benchmark_patterns(
 
     let mut searcher = Searcher::<Iupac>::new_fwd();
 
-    let (median, mean, std_dev) = benchmark_with_stats(
+    let (median, mean, std_dev, ci_lower, ci_upper) = benchmark_with_stats(
         || {
             let _matches = searcher.search_patterns(queries, text, k);
             black_box(_matches);
@@ -148,12 +169,20 @@ fn benchmark_patterns(
     );
 
     let throughput_gbps = calculate_throughput(total_bytes, median);
+    // Calculate throughput CI bounds from time CI bounds
+    // Note: higher time = lower throughput, so ci_upper gives lower throughput bound
+    let ci_lower_throughput_gbps = calculate_throughput(total_bytes, ci_upper);
+    let ci_upper_throughput_gbps = calculate_throughput(total_bytes, ci_lower);
 
     BenchmarkResults {
         median,
         mean,
         std_dev,
+        ci_lower,
+        ci_upper,
         throughput_gbps,
+        ci_lower_throughput_gbps,
+        ci_upper_throughput_gbps,
     }
 }
 
@@ -170,7 +199,7 @@ fn benchmark_tiling(
     let mut searcher = Searcher::<Iupac>::new_fwd();
     let encoded = searcher.encode_patterns(queries);
 
-    let (median, mean, std_dev) = benchmark_with_stats(
+    let (median, mean, std_dev, ci_lower, ci_upper) = benchmark_with_stats(
         || {
             let _matches = searcher.search_encoded_patterns(&encoded, text, k);
             black_box(_matches);
@@ -180,12 +209,20 @@ fn benchmark_tiling(
     );
 
     let throughput_gbps = calculate_throughput(total_bytes, median);
+    // Calculate throughput CI bounds from time CI bounds
+    // Note: higher time = lower throughput, so ci_upper gives lower throughput bound
+    let ci_lower_throughput_gbps = calculate_throughput(total_bytes, ci_upper);
+    let ci_upper_throughput_gbps = calculate_throughput(total_bytes, ci_lower);
 
     BenchmarkResults {
         median,
         mean,
         std_dev,
+        ci_lower,
+        ci_upper,
         throughput_gbps,
+        ci_lower_throughput_gbps,
+        ci_upper_throughput_gbps,
     }
 }
 
@@ -202,7 +239,7 @@ fn benchmark_edlib(
 
     let edlib_config = get_edlib_config(k as i32, alphabet);
 
-    let (median, mean, std_dev) = benchmark_with_stats(
+    let (median, mean, std_dev, ci_lower, ci_upper) = benchmark_with_stats(
         || {
             for query in queries {
                 black_box(query);
@@ -215,19 +252,27 @@ fn benchmark_edlib(
     );
 
     let throughput_gbps = calculate_throughput(total_bytes, median);
+    // Calculate throughput CI bounds from time CI bounds
+    // Note: higher time = lower throughput, so ci_upper gives lower throughput bound
+    let ci_lower_throughput_gbps = calculate_throughput(total_bytes, ci_upper);
+    let ci_upper_throughput_gbps = calculate_throughput(total_bytes, ci_lower);
 
     BenchmarkResults {
         median,
         mean,
         std_dev,
+        ci_lower,
+        ci_upper,
         throughput_gbps,
+        ci_lower_throughput_gbps,
+        ci_upper_throughput_gbps,
     }
 }
 
 fn write_csv_header(file: &mut File) {
     writeln!(
         file,
-        "query_len,target_len,k,algorithm,median_ms,mean_ms,std_ms,throughput_gbps,total_bytes"
+        "query_len,target_len,k,algorithm,median_ms,mean_ms,std_ms,ci_lower_ms,ci_upper_ms,throughput_gbps,ci_lower_throughput_gbps,ci_upper_throughput_gbps,total_bytes"
     )
     .unwrap();
 }
@@ -243,7 +288,7 @@ fn write_csv_row(
 ) {
     writeln!(
         file,
-        "{},{},{},{},{:.3},{:.3},{:.3},{:.3},{}",
+        "{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{}",
         query_len,
         target_len,
         k,
@@ -251,7 +296,11 @@ fn write_csv_row(
         results.median,
         results.mean,
         results.std_dev,
+        results.ci_lower,
+        results.ci_upper,
         results.throughput_gbps,
+        results.ci_lower_throughput_gbps,
+        results.ci_upper_throughput_gbps,
         total_bytes
     )
     .unwrap();
@@ -392,12 +441,18 @@ pub fn run(config_path: &str) {
                 }
 
                 println!(
-                    "  Results: search={:.2}ms ({:.3}GB/s), patterns={:.2}ms ({:.3}GB/s), tiling={:.2}ms ({:.3}GB/s)",
+                    "  Results: search={:.2}ms [{:.2}, {:.2}] ({:.3}GB/s), patterns={:.2}ms [{:.2}, {:.2}] ({:.3}GB/s), tiling={:.2}ms [{:.2}, {:.2}] ({:.3}GB/s)",
                     search_results.median,
+                    search_results.ci_lower,
+                    search_results.ci_upper,
                     search_results.throughput_gbps,
                     patterns_results.median,
+                    patterns_results.ci_lower,
+                    patterns_results.ci_upper,
                     patterns_results.throughput_gbps,
                     tiling_results.median,
+                    tiling_results.ci_lower,
+                    tiling_results.ci_upper,
                     tiling_results.throughput_gbps
                 );
             }

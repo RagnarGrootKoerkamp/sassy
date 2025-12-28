@@ -7,7 +7,6 @@ pub(crate) const IUPAC_MASKS: usize = 16;
 #[derive(Debug, Clone, Default)]
 pub struct TQueries<B: SimdBackend> {
     /// Holds [position][transposition_block_index]
-    pub vectors: Vec<Vec<B::PatternBlock>>,
     pub pattern_length: usize,
     pub n_queries: usize,
     pub n_original_queries: usize,
@@ -79,12 +78,9 @@ impl<B: SimdBackend> TQueries<B> {
 
         let mut peq_masks: [Vec<u64>; IUPAC_MASKS] = std::array::from_fn(|_| vec![0u64; n_queries]);
 
-        let mut vectors = Vec::with_capacity(pattern_length);
         let mut temp_block_buffer = vec![0u8; B::LIMB_BITS];
 
         for pos in 0..pattern_length {
-            let mut pos_blocks = Vec::with_capacity(n_transposition_blocks);
-
             for block_idx in 0..n_transposition_blocks {
                 let start_q = block_idx * B::LIMB_BITS;
                 let end_q = (start_q + B::LIMB_BITS).min(n_queries);
@@ -107,17 +103,12 @@ impl<B: SimdBackend> TQueries<B> {
                         }
                     }
                 }
-
-                // Convert to backend type
-                pos_blocks.push(B::to_pattern_block(&temp_block_buffer));
             }
-            vectors.push(pos_blocks);
         }
 
         let peqs = build_flat_peqs::<B>(&peq_masks, n_queries, n_simd_blocks);
 
         Self {
-            vectors,
             pattern_length,
             n_queries,
             n_original_queries,

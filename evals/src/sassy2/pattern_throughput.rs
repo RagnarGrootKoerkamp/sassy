@@ -29,40 +29,52 @@ struct BenchmarkResults {
     median: f64,
     mean: f64,
     std_dev: f64,
+    ci_lower: f64,
+    ci_upper: f64,
     ipc: f64,
     throughput_gbps: f64,
+    ci_lower_throughput_gbps: f64,
+    ci_upper_throughput_gbps: f64,
 }
 
-fn measure_ipc<F: FnOnce()>(f: F) -> f64 {
-    let mut instr = perfcnt::linux::PerfCounterBuilderLinux::from_hardware_event(
-        perfcnt::linux::HardwareEventType::Instructions,
-    )
-    .finish()
-    .expect("Could not create instruction counter");
+fn measure_ipc_median<F: FnMut()>(mut f: F, iterations: usize) -> f64 {
+    let mut ipc_values = Vec::with_capacity(iterations);
 
-    let mut cycles = perfcnt::linux::PerfCounterBuilderLinux::from_hardware_event(
-        perfcnt::linux::HardwareEventType::CPUCycles,
-    )
-    .finish()
-    .expect("Could not create cycle counter");
+    for _ in 0..iterations {
+        let mut instr = perfcnt::linux::PerfCounterBuilderLinux::from_hardware_event(
+            perfcnt::linux::HardwareEventType::Instructions,
+        )
+        .finish()
+        .expect("Could not create instruction counter");
 
-    instr.start().unwrap();
-    cycles.start().unwrap();
-    f();
-    instr.stop().unwrap();
-    cycles.stop().unwrap();
+        let mut cycles = perfcnt::linux::PerfCounterBuilderLinux::from_hardware_event(
+            perfcnt::linux::HardwareEventType::CPUCycles,
+        )
+        .finish()
+        .expect("Could not create cycle counter");
 
-    let instructions = instr.read().unwrap();
-    let cycles = cycles.read().unwrap();
+        instr.start().unwrap();
+        cycles.start().unwrap();
+        f();
+        instr.stop().unwrap();
+        cycles.stop().unwrap();
 
-    if cycles == 0 {
-        0.0
-    } else {
-        instructions as f64 / cycles as f64
+        let instructions = instr.read().unwrap();
+        let cycles = cycles.read().unwrap();
+
+        if cycles == 0 {
+            ipc_values.push(0.0);
+        } else {
+            ipc_values.push(instructions as f64 / cycles as f64);
+        }
     }
+
+    // Calculate median
+    ipc_values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    ipc_values[ipc_values.len() / 2]
 }
 
-fn benchmark_with_stats<F>(mut f: F, warmup: usize, iterations: usize) -> (f64, f64, f64)
+fn benchmark_with_stats<F>(mut f: F, warmup: usize, iterations: usize) -> (f64, f64, f64, f64, f64)
 where
     F: FnMut(),
 {
@@ -86,7 +98,16 @@ where
     let variance = times.iter().map(|t| (t - mean).powi(2)).sum::<f64>() / times.len() as f64;
     let std_dev = variance.sqrt();
 
-    (median, mean, std_dev)
+    // Calculate 95% confidence interval using normal approximation
+    // CI = mean ± 1.96 * (std_dev / sqrt(n))
+    let n = iterations as f64;
+    let standard_error = std_dev / n.sqrt();
+    let z_score = 1.96; // 95% confidence interval
+    let margin = z_score * standard_error;
+    let ci_lower = mean - margin;
+    let ci_upper = mean + margin;
+
+    (median, mean, std_dev, ci_lower, ci_upper)
 }
 
 fn calculate_throughput(total_bytes: usize, median_ms: f64) -> f64 {
@@ -106,7 +127,7 @@ fn benchmark_individual_search(
     // Declare searcher outside timing loop
     let mut searcher = Searcher::<Iupac>::new_fwd();
 
-    let (median, mean, std_dev) = benchmark_with_stats(
+    let (median, mean, std_dev, ci_lower, ci_upper) = benchmark_with_stats(
         || {
             for query in queries {
                 black_box(query);
@@ -119,22 +140,32 @@ fn benchmark_individual_search(
     );
 
     let throughput_gbps = calculate_throughput(total_bytes, median);
+    // Calculate throughput CI bounds from time CI bounds
+    let ci_lower_throughput_gbps = calculate_throughput(total_bytes, ci_upper);
+    let ci_upper_throughput_gbps = calculate_throughput(total_bytes, ci_lower);
 
-    // IPC
-    let ipc = measure_ipc(|| {
-        for query in queries {
-            black_box(query);
-            let _matches = searcher.search(query, text, k);
-            black_box(_matches);
-        }
-    });
+    // IPC (median)
+    let ipc = measure_ipc_median(
+        || {
+            for query in queries {
+                black_box(query);
+                let _matches = searcher.search(query, text, k);
+                black_box(_matches);
+            }
+        },
+        iterations,
+    );
 
     BenchmarkResults {
         median,
         mean,
         std_dev,
+        ci_lower,
+        ci_upper,
         ipc,
         throughput_gbps,
+        ci_lower_throughput_gbps,
+        ci_upper_throughput_gbps,
     }
 }
 
@@ -151,7 +182,7 @@ fn benchmark_patterns(
     // Declare searcher outside timing loop
     let mut searcher = Searcher::<Iupac>::new_fwd();
 
-    let (median, mean, std_dev) = benchmark_with_stats(
+    let (median, mean, std_dev, ci_lower, ci_upper) = benchmark_with_stats(
         || {
             let _matches = searcher.search_patterns(queries, text, k);
             black_box(_matches);
@@ -161,19 +192,29 @@ fn benchmark_patterns(
     );
 
     let throughput_gbps = calculate_throughput(total_bytes, median);
+    // Calculate throughput CI bounds from time CI bounds
+    let ci_lower_throughput_gbps = calculate_throughput(total_bytes, ci_upper);
+    let ci_upper_throughput_gbps = calculate_throughput(total_bytes, ci_lower);
 
-    // IPC
-    let ipc = measure_ipc(|| {
-        let _matches = searcher.search_patterns(queries, text, k);
-        black_box(_matches);
-    });
+    // IPC (median)
+    let ipc = measure_ipc_median(
+        || {
+            let _matches = searcher.search_patterns(queries, text, k);
+            black_box(_matches);
+        },
+        iterations,
+    );
 
     BenchmarkResults {
         median,
         mean,
         std_dev,
+        ci_lower,
+        ci_upper,
         ipc,
         throughput_gbps,
+        ci_lower_throughput_gbps,
+        ci_upper_throughput_gbps,
     }
 }
 
@@ -191,7 +232,7 @@ fn benchmark_tiling(
     let mut searcher = Searcher::<Iupac>::new_fwd();
     let encoded = searcher.encode_patterns(queries);
 
-    let (median, mean, std_dev) = benchmark_with_stats(
+    let (median, mean, std_dev, ci_lower, ci_upper) = benchmark_with_stats(
         || {
             let _matches = searcher.search_encoded_patterns(&encoded, text, k);
             black_box(_matches);
@@ -201,19 +242,29 @@ fn benchmark_tiling(
     );
 
     let throughput_gbps = calculate_throughput(total_bytes, median);
+    // Calculate throughput CI bounds from time CI bounds
+    let ci_lower_throughput_gbps = calculate_throughput(total_bytes, ci_upper);
+    let ci_upper_throughput_gbps = calculate_throughput(total_bytes, ci_lower);
 
-    // IPC
-    let ipc = measure_ipc(|| {
-        let _matches = searcher.search_encoded_patterns(&encoded, text, k);
-        black_box(_matches);
-    });
+    // IPC (median)
+    let ipc = measure_ipc_median(
+        || {
+            let _matches = searcher.search_encoded_patterns(&encoded, text, k);
+            black_box(_matches);
+        },
+        iterations,
+    );
 
     BenchmarkResults {
         median,
         mean,
         std_dev,
+        ci_lower,
+        ci_upper,
         ipc,
         throughput_gbps,
+        ci_lower_throughput_gbps,
+        ci_upper_throughput_gbps,
     }
 }
 
@@ -231,7 +282,7 @@ fn benchmark_edlib(
     // Prepare config outside timing loop
     let edlib_config = get_edlib_config(k as i32, alphabet);
 
-    let (median, mean, std_dev) = benchmark_with_stats(
+    let (median, mean, std_dev, ci_lower, ci_upper) = benchmark_with_stats(
         || {
             for query in queries {
                 black_box(query);
@@ -244,29 +295,39 @@ fn benchmark_edlib(
     );
 
     let throughput_gbps = calculate_throughput(total_bytes, median);
+    // Calculate throughput CI bounds from time CI bounds
+    let ci_lower_throughput_gbps = calculate_throughput(total_bytes, ci_upper);
+    let ci_upper_throughput_gbps = calculate_throughput(total_bytes, ci_lower);
 
-    // IPC
-    let ipc = measure_ipc(|| {
-        for query in queries {
-            black_box(query);
-            let _result = run_edlib(query, text, &edlib_config);
-            black_box(_result);
-        }
-    });
+    // IPC (median)
+    let ipc = measure_ipc_median(
+        || {
+            for query in queries {
+                black_box(query);
+                let _result = run_edlib(query, text, &edlib_config);
+                black_box(_result);
+            }
+        },
+        iterations,
+    );
 
     BenchmarkResults {
         median,
         mean,
         std_dev,
+        ci_lower,
+        ci_upper,
         ipc,
         throughput_gbps,
+        ci_lower_throughput_gbps,
+        ci_upper_throughput_gbps,
     }
 }
 
 fn write_csv_header(file: &mut File) {
     writeln!(
         file,
-        "num_queries,search_median_ms,search_mean_ms,search_std_ms,patterns_median_ms,patterns_mean_ms,patterns_std_ms,tiling_median_ms,tiling_mean_ms,tiling_std_ms,edlib_median_ms,edlib_mean_ms,edlib_std_ms,search_ipc,patterns_ipc,tiling_ipc,edlib_ipc,search_throughput_gbps,patterns_throughput_gbps,tiling_throughput_gbps,edlib_throughput_gbps,throughput_bytes"
+        "num_queries,search_median_ms,search_mean_ms,search_std_ms,search_ci_lower_ms,search_ci_upper_ms,patterns_median_ms,patterns_mean_ms,patterns_std_ms,patterns_ci_lower_ms,patterns_ci_upper_ms,tiling_median_ms,tiling_mean_ms,tiling_std_ms,tiling_ci_lower_ms,tiling_ci_upper_ms,edlib_median_ms,edlib_mean_ms,edlib_std_ms,edlib_ci_lower_ms,edlib_ci_upper_ms,search_ipc,patterns_ipc,tiling_ipc,edlib_ipc,search_throughput_gbps,search_ci_lower_throughput_gbps,search_ci_upper_throughput_gbps,patterns_throughput_gbps,patterns_ci_lower_throughput_gbps,patterns_ci_upper_throughput_gbps,tiling_throughput_gbps,tiling_ci_lower_throughput_gbps,tiling_ci_upper_throughput_gbps,edlib_throughput_gbps,edlib_ci_lower_throughput_gbps,edlib_ci_upper_throughput_gbps,throughput_bytes"
     ).unwrap();
 }
 
@@ -281,14 +342,17 @@ fn write_csv_row(
 ) {
     writeln!(
         file,
-        "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.2},{:.2},{:.2},{:.2},{:.3},{:.3},{:.3},{:.3},{}",
+        "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.2},{:.2},{:.2},{:.2},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{}",
         num_queries,
-        search.median, search.mean, search.std_dev,
-        patterns.median, patterns.mean, patterns.std_dev,
-        tiling.median, tiling.mean, tiling.std_dev,
-        edlib.median, edlib.mean, edlib.std_dev,
+        search.median, search.mean, search.std_dev, search.ci_lower, search.ci_upper,
+        patterns.median, patterns.mean, patterns.std_dev, patterns.ci_lower, patterns.ci_upper,
+        tiling.median, tiling.mean, tiling.std_dev, tiling.ci_lower, tiling.ci_upper,
+        edlib.median, edlib.mean, edlib.std_dev, edlib.ci_lower, edlib.ci_upper,
         search.ipc, patterns.ipc, tiling.ipc, edlib.ipc,
-        search.throughput_gbps, patterns.throughput_gbps, tiling.throughput_gbps, edlib.throughput_gbps,
+        search.throughput_gbps, search.ci_lower_throughput_gbps, search.ci_upper_throughput_gbps,
+        patterns.throughput_gbps, patterns.ci_lower_throughput_gbps, patterns.ci_upper_throughput_gbps,
+        tiling.throughput_gbps, tiling.ci_lower_throughput_gbps, tiling.ci_upper_throughput_gbps,
+        edlib.throughput_gbps, edlib.ci_lower_throughput_gbps, edlib.ci_upper_throughput_gbps,
         total_bytes
     ).unwrap();
 }
@@ -377,8 +441,12 @@ pub fn run(config_path: &str) {
                 median: 0.0,
                 mean: 0.0,
                 std_dev: 0.0,
+                ci_lower: 0.0,
+                ci_upper: 0.0,
                 ipc: 0.0,
                 throughput_gbps: 0.0,
+                ci_lower_throughput_gbps: 0.0,
+                ci_upper_throughput_gbps: 0.0,
             }
         };
 
@@ -394,13 +462,16 @@ pub fn run(config_path: &str) {
         );
 
         println!(
-            "  Results: search={:.2}±{:.2}ms, patterns={:.2}±{:.2}ms, tiling={:.2}±{:.2}ms",
+            "  Results: search={:.2}ms [{:.2}, {:.2}], patterns={:.2}ms [{:.2}, {:.2}], tiling={:.2}ms [{:.2}, {:.2}]",
             search_results.median,
-            search_results.std_dev,
+            search_results.ci_lower,
+            search_results.ci_upper,
             patterns_results.median,
-            patterns_results.std_dev,
+            patterns_results.ci_lower,
+            patterns_results.ci_upper,
             tiling_results.median,
-            tiling_results.std_dev
+            tiling_results.ci_lower,
+            tiling_results.ci_upper
         );
     }
 

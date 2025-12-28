@@ -64,7 +64,6 @@ pub trait SimdBackend: Copy + 'static + Send + Sync + Default + std::fmt::Debug 
 
     type Scalar: Copy + PartialEq + std::fmt::Debug;
     type LaneArray: AsRef<[Self::Scalar]> + AsMut<[Self::Scalar]> + Copy + Default;
-    type PatternBlock: Copy + std::fmt::Debug;
 
     const LANES: usize;
     const LIMB_BITS: usize;
@@ -74,7 +73,6 @@ pub trait SimdBackend: Copy + 'static + Send + Sync + Default + std::fmt::Debug 
     fn from_array(arr: Self::LaneArray) -> Self::Simd;
     fn to_array(vec: Self::Simd) -> Self::LaneArray;
     fn simd_gt(lhs: Self::Simd, rhs: Self::Simd) -> Self::Simd;
-    fn to_pattern_block(slice: &[u8]) -> Self::PatternBlock;
     fn scalar_to_u64(value: Self::Scalar) -> u64;
     fn splat_all_ones() -> Self::Simd;
     fn splat_zero() -> Self::Simd;
@@ -92,7 +90,6 @@ macro_rules! impl_wide_backend {
             type Simd = $simd_ty;
             type Scalar = $scalar;
             type LaneArray = LaneArray<$scalar, $lanes>;
-            type PatternBlock = $pattern;
 
             const LANES: usize = $lanes;
             const LIMB_BITS: usize = $bits;
@@ -112,10 +109,6 @@ macro_rules! impl_wide_backend {
             #[inline(always)]
             fn to_array(vec: Self::Simd) -> Self::LaneArray {
                 LaneArray::from(vec.to_array())
-            }
-            #[inline(always)]
-            fn to_pattern_block(slice: &[u8]) -> Self::PatternBlock {
-                slice.try_into().expect("Invalid slice size")
             }
             #[inline(always)]
             fn splat_all_ones() -> Self::Simd {
