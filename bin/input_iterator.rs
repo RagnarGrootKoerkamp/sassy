@@ -32,6 +32,7 @@ pub struct TextRecord {
 pub struct InputIterator<'a> {
     patterns: &'a [PatternRecord],
     paths: &'a Vec<PathBuf>,
+    #[allow(dead_code)]
     batch_size: usize,
 
     batch_id: AtomicUsize,

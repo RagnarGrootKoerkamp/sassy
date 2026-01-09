@@ -1,4 +1,5 @@
-use crate::input_iterator::{self, InputIterator, Parser, PatternRecord, TextRecord};
+#![allow(for_loops_over_fallibles)]
+use crate::input_iterator::{InputIterator, Parser, PatternRecord, TextRecord};
 use paraseq::Record;
 use sassy::{
     CachedRev, RcSearchAble, Searcher, Strand,
