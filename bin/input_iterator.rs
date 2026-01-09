@@ -1,4 +1,3 @@
-use paraseq::fastx::RefRecord;
 use paraseq::prelude::ParallelReader;
 use sassy::CachedRev;
 use std::path::{Path, PathBuf};
@@ -19,7 +18,7 @@ pub struct PatternRecord {
 
 /// A text to be searched, with ID from fasta file.
 /// TODO: Reduce the number of allocations here.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TextRecord {
     pub id: ID,
     pub seq: CachedRev<Vec<u8>>,
@@ -37,6 +36,9 @@ pub struct InputIterator<'a> {
 
     batch_id: AtomicUsize,
 }
+
+const CONFIG: helicase::Config = helicase::ParserOptions::default().dna_string().config();
+pub type Parser<'a> = helicase::FastxParser<'a, CONFIG>;
 
 impl<'a> InputIterator<'a> {
     /// Create a new iterator over `fasta_path`, going through `patterns`.
@@ -58,26 +60,57 @@ impl<'a> InputIterator<'a> {
     pub fn process(
         &mut self,
         num_threads: usize,
-        f: impl FnMut(usize, &'a Path, &'a [PatternRecord], &mut dyn Iterator<Item = RefRecord>)
-        + Clone
-        + Send,
+        f: impl FnMut(usize, &'a Path, &'a [PatternRecord], Option<&Parser>) + Clone + Send,
     ) {
         for path in self.paths {
-            let mut reader = paraseq::fastx::Reader::from_path(path).unwrap();
-            reader.update_batch_size_in_bp(self.batch_size).unwrap();
+            // let mut reader = paraseq::fastx::Reader::from_path(path).unwrap();
+            // reader.update_batch_size_in_bp(self.batch_size).unwrap();
+            let reader = helicase::paraseq_reader::ParallelHelicaseReader::new(path, 16);
             let batch_id = &self.batch_id;
             let patterns = &self.patterns;
             let mut f = f.clone();
-            let mut processor = move |record_batch: &mut dyn Iterator<Item = RefRecord>| {
-                let batch_id = batch_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                f(batch_id, path, patterns, record_batch);
+            let mut first_in_batch = true;
+            let mut local_batch_id = 0;
+            let mut processor = RecordProcessor(move |record: Option<&Parser>| {
+                match record {
+                    Some(rec) => {
+                        if first_in_batch {
+                            first_in_batch = false;
+                            local_batch_id =
+                                batch_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        f(local_batch_id, path, patterns, Some(rec));
+                    }
+                    None => {
+                        // End the batch.
+                        f(local_batch_id, path, patterns, None);
+                        first_in_batch = true;
+                    }
+                }
                 Ok(())
-            };
+            });
 
             reader
                 .process_parallel(&mut processor, num_threads)
                 .unwrap();
         }
+    }
+}
+
+/// Little wrapper that will be added to paraseq
+#[derive(Clone)]
+pub struct RecordProcessor<F>(pub F);
+
+impl<Rf: paraseq::Record, F> paraseq::prelude::ParallelProcessor<Rf> for RecordProcessor<F>
+where
+    F: for<'a> FnMut(Option<Rf>) -> paraseq::Result<()> + Send + Clone,
+{
+    fn process_record(&mut self, record: Rf) -> paraseq::Result<()> {
+        (self.0)(Some(record))
+    }
+
+    fn on_batch_complete(&mut self) -> paraseq::Result<()> {
+        (self.0)(None)
     }
 }
 

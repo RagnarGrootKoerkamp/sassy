@@ -138,7 +138,7 @@ where
 }
 
 /// Struct that computes the reverse once on construction.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CachedRev<T: AsRef<[u8]>> {
     pub text: T,
     pub rev: Option<Vec<u8>>,

@@ -1,4 +1,4 @@
-use crate::input_iterator::{InputIterator, PatternRecord, TextRecord};
+use crate::input_iterator::{self, InputIterator, Parser, PatternRecord, TextRecord};
 use paraseq::Record;
 use sassy::{
     CachedRev, RcSearchAble, Searcher, Strand,
@@ -212,7 +212,8 @@ pub fn crispr(args: &CrisprArgs) {
                 move |_batch_id: usize,
                       _path: &Path,
                       patterns: &[PatternRecord],
-                      text_record_batch: &mut dyn Iterator<Item = paraseq::fastx::RefRecord>| {
+                      text_record_batch: Option<&Parser>| {
+                          // FIXME
                 for record in text_record_batch {
                     let text = TextRecord {
                         id: String::from_utf8(record.id().to_vec()).unwrap(),

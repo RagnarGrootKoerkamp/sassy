@@ -51,6 +51,10 @@ itertools = "0.14.0"
 derivative = "2.2.0"
 # paraseq = "0.4.3"
 paraseq.path = "../forks/paraseq"
+helicase = { git = "https://github.com/ragnargrootkoerkamp/helicase", branch = 'paraseq_reader', features = ["paraseq"] }
+
+[patch.crates-io]
+paraseq.path = "../forks/paraseq"
 
 [dev-dependencies]
 tempfile = "3.20.0"

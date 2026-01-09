@@ -10,7 +10,7 @@ use std::{
 use colored::Colorize;
 use either::Either;
 use needletail::parse_fastx_file;
-use paraseq::{Record, fastx::RefRecord};
+use paraseq::Record;
 use sassy::{
     CachedRev, Match, Searcher, Strand,
     pretty_print::{PrettyPrintDirection, PrettyPrintStyle},
@@ -19,7 +19,7 @@ use sassy::{
 
 use crate::{
     crispr::check_n_frac,
-    input_iterator::{InputIterator, PatternRecord, TextRecord},
+    input_iterator::{InputIterator, Parser, PatternRecord, TextRecord},
 };
 
 // TODO: Support ASCII alphabet.
@@ -333,66 +333,75 @@ impl Args {
                 }
             });
 
+            let mut results: Vec<(&Path, TextRecord, Vec<(&PatternRecord, Match)>)> = vec![];
             input_iterator.process(
                 num_threads,
                 move |batch_id: usize,
                       path: &Path,
                       patterns: &[PatternRecord],
-                      text_record_batch: &mut dyn Iterator<Item = RefRecord>| {
-                    let mut results: Vec<(&Path, TextRecord, Vec<(&PatternRecord, Match)>)> =
-                        vec![];
-                    for record in text_record_batch {
-                        let text = TextRecord {
-                            id: String::from_utf8(record.id().to_vec()).unwrap(),
-                            seq: CachedRev::new(record.seq().into_owned(), rc),
-                            quality: filter
-                                .then(|| record.qual().map_or(vec![], |q| q.to_owned()))
-                                .unwrap_or_default(),
-                        };
-                        let mut batch_matches = vec![];
-                        for pattern in patterns {
-                            let record_matches = match &mut searcher {
-                                Either::Left(s) => s.search(&pattern.seq, &text.seq, k),
-                                Either::Right(s) => s.search(&pattern.seq, &text.seq, k),
+                      record: Option<&Parser>| {
+                    match record {
+                        Some(record) => {
+                            let text = TextRecord {
+                                id: String::from_utf8(record.id().to_vec()).unwrap(),
+                                seq: CachedRev::new(record.seq().into_owned(), rc),
+                                quality: filter
+                                    .then(|| record.qual().map_or(vec![], |q| q.to_owned()))
+                                    .unwrap_or_default(),
                             };
-                            batch_matches.extend(
-                                record_matches
-                                    .into_iter()
-                                    .filter(|m| {
-                                        check_n_frac(
-                                            args.base.max_n_frac,
-                                            &text.seq.text[m.text_start..m.text_end],
-                                        )
-                                    })
-                                    .map(|m| (pattern, m)),
-                            );
+                            let mut batch_matches = vec![];
+                            for pattern in patterns {
+                                let record_matches = match &mut searcher {
+                                    Either::Left(s) => s.search(&pattern.seq, &text.seq, k),
+                                    Either::Right(s) => s.search(&pattern.seq, &text.seq, k),
+                                };
+                                batch_matches.extend(
+                                    record_matches
+                                        .into_iter()
+                                        .filter(|m| {
+                                            check_n_frac(
+                                                args.base.max_n_frac,
+                                                &text.seq.text[m.text_start..m.text_end],
+                                            )
+                                        })
+                                        .map(|m| (pattern, m)),
+                                );
+                            }
+                            for (_pat, m) in &batch_matches {
+                                local_histogram.0[m.cost as usize] += 1;
+                            }
+                            results.push((path, text, batch_matches));
                         }
-                        for (_pat, m) in &batch_matches {
-                            local_histogram.0[m.cost as usize] += 1;
-                        }
-                        results.push((path, text, batch_matches));
-                    }
+                        // end of batch
+                        None => {
+                            let (next_batch_id, output_buf) = &mut *output.lock().unwrap();
+                            let mut filter_writer = filter_writer.map(|w| w.lock().unwrap());
+                            let mut match_writer = match_writer.map(|w| w.lock().unwrap());
 
-                    let (next_batch_id, output_buf) = &mut *output.lock().unwrap();
-                    let mut filter_writer = filter_writer.map(|w| w.lock().unwrap());
-                    let mut match_writer = match_writer.map(|w| w.lock().unwrap());
+                            // Push to buffer.
+                            let idx = batch_id - *next_batch_id;
+                            if output_buf.len() <= idx {
+                                output_buf.resize_with(idx + 1, || None);
+                            }
+                            assert!(output_buf[idx].is_none());
+                            output_buf[idx] = Some(std::mem::take(&mut results));
 
-                    // Push to buffer.
-                    let idx = batch_id - *next_batch_id;
-                    if output_buf.len() <= idx {
-                        output_buf.resize_with(idx + 1, || None);
-                    }
-                    assert!(output_buf[idx].is_none());
-                    output_buf[idx] = Some(results);
-
-                    // Print pending results once ready.
-                    while let Some(front) = output_buf.front()
-                        && front.is_some()
-                    {
-                        *next_batch_id += 1;
-                        let front_results = output_buf.pop_front().unwrap().unwrap();
-                        for (path, text, matches) in front_results {
-                            args.output(path, text, matches, &mut filter_writer, &mut match_writer);
+                            // Print pending results once ready.
+                            while let Some(front) = output_buf.front()
+                                && front.is_some()
+                            {
+                                *next_batch_id += 1;
+                                let front_results = output_buf.pop_front().unwrap().unwrap();
+                                for (path, text, matches) in front_results {
+                                    args.output(
+                                        path,
+                                        text,
+                                        matches,
+                                        &mut filter_writer,
+                                        &mut match_writer,
+                                    );
+                                }
+                            }
                         }
                     }
                 },
