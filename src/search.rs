@@ -360,16 +360,12 @@ impl<P: Profile> Searcher<P> {
 
     /// Forward search only.
     pub fn new_fwd() -> Self {
-        // Init pattern_tiling searcher
-        let pattern_tiling_searcher = PatterntilingSearcher::new(None);
-        Self::new(false, None, pattern_tiling_searcher)
+        Self::new(false, None)
     }
 
     /// Forward and reverse complement search.
     pub fn new_rc() -> Self {
-        let pattern_tiling_searcher = PatterntilingSearcher::new(None);
-        // this sets self.rc == true, so pattern_tiling searcher/encoder knows to encode rc as well
-        Self::new(true, None, pattern_tiling_searcher)
+        Self::new(true, None)
     }
 
     fn _overhang_check(alpha: f32) {
@@ -387,15 +383,13 @@ impl<P: Profile> Searcher<P> {
     /// Forward search with overhang cost `0<=alpha<=1`.
     pub fn new_fwd_with_overhang(alpha: f32) -> Self {
         Self::_overhang_check(alpha);
-        let pattern_tiling_searcher = PatterntilingSearcher::new(Some(alpha));
-        Self::new(false, Some(alpha), pattern_tiling_searcher)
+        Self::new(false, Some(alpha))
     }
 
     /// Forward and reverse complement search with overhang cost `0<=alpha<=1`.
     pub fn new_rc_with_overhang(alpha: f32) -> Self {
         Self::_overhang_check(alpha);
-        let pattern_tiling_searcher = PatterntilingSearcher::new(Some(alpha));
-        Self::new(true, Some(alpha), pattern_tiling_searcher)
+        Self::new(true, Some(alpha))
     }
 
     /// Set overhang cost `0<=alpha<=1`.
@@ -466,11 +460,8 @@ impl<P: Profile> Searcher<P> {
     }
 
     /// Create a new `Searcher`.
-    pub fn new(
-        rc: bool,
-        alpha: Option<f32>,
-        pattern_tiling_searcher: PatterntilingSearcher,
-    ) -> Self {
+    pub fn new(rc: bool, alpha: Option<f32>) -> Self {
+        let pattern_tiling_searcher = PatterntilingSearcher::new(alpha);
         Self {
             pattern_tiling_searcher,
             alpha,
