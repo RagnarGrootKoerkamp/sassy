@@ -3,17 +3,33 @@
 <!-- next-header -->
 
 ## git
-- bugfix: `sassy grep` would crash on printing reverse complement matches with overhang.
-- misc: debug-printing a `Match` now uses stringified cigar.
+The main new feature of this v2 release is `search_encoded_patterns`, written by @RickBeeloo,
+for searching many short and equal length patterns (say 23 bp; should be at most
+32 or else 64) in parallel. This is 2x or more faster than eg `search_patterns`,
+because it packs deltas in the pattern (rather than text) direction, which
+removes a lot of overhead in the 'early break check' and makes the 'profile'
+much faster.
+
+v2 also adds new variants of the existing `Searcher::search` method:
+- `search_patterns`: search multiple similar-length patterns in a single text.
+  Useful for searching in short texts where chunking them in pieces via the
+  normal `search` has large overhead. This uses one SIMD lane per pattern.
+- `search_texts`: search a single pattern in multiple similar-length texts.
+  This uses one SIMD lane per text.
+- `search_many`: a more high-level wrapper that takes a list of
+  patterns and texts and does an all-vs-all search on multiple threads, using
+  a user-specified underlying algorithm.
+  
+Further changes:
+- feat: Support AVX512 for pattern tiling.
 - feat: moved pretty printing from `bin/grep.rs` to publicly available `Match::pretty_print`.
-- Add `Searcher::only_best_match` and `Searcher::without_trace`.
-- Add `Searcher::search_texts` to search a pattern in multiple short texts of
-  similar length.
-- Add `Searcher::search_many` that searches multiple patterns in multiple texts
-  using multiple threads.
-- `Match` now contains `text_idx` and `pattern_idx` for multi-search variants.
-- Collect matches into an internal Vec before returning that.
-- Add python bindings for `search_many`
+- feat: `Match` now contains `text_idx` and `pattern_idx` for multi-search variants.
+- feat: Add `Searcher::only_best_match` and `Searcher::without_trace`.
+- perf: Collect matches into an internal Vec before returning that.
+- fix: `sassy grep` would crash on printing reverse complement matches with overhang.
+- fix: fix issues with duplicate reported matches in overhang
+- misc: debug-printing a `Match` now uses stringified cigar.
+- misc: Add python bindings for `search_many`
 
 ## 0.1.10
 - **bugfix**: `sassy grep` had a bug in the batching logic, making it skip a
