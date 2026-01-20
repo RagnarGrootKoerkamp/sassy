@@ -336,6 +336,8 @@ pub enum SearchMode {
     /// When all patterns have  an equal length (<=64), use one pattern per SIMD lane.
     /// Uses pattern tiling to search one pattern per lane against the same text
     /// character
+    ///
+    /// FIXME: This is not implemented yet.
     BatchPatternsShort,
     /// Automatically selects searchmode based on pattern and text lengths.
     Auto,
@@ -503,7 +505,6 @@ impl<P: Profile> Searcher<P> {
     /// Search each given pattern in each given text, using the algorithms given by `mode` (see [`SearchMode`]).
     ///
     /// Does multithreading using `rayon`.
-    /// Returns a vector of (pattern index, text index, match).
     pub fn search_many<PAT: AsRef<[u8]> + Sync, I: RcSearchAble + ?Sized + Sync>(
         &mut self,
         patterns: &[PAT],
