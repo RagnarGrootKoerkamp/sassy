@@ -11,8 +11,9 @@ pub type CaseSensitiveAscii = Ascii<true>;
 pub type CaseInsensitiveAscii = Ascii<false>;
 
 impl<const CASE_SENSITIVE: bool> Profile for Ascii<CASE_SENSITIVE> {
+    const N_CHARS: usize = 256;
     type A = usize;
-    type B = [u64; 256]; // Maximum number of ASCII characters
+    type B = [u64; 256]; // Cant use const N_CHARS here
 
     fn encode_pattern(a: &[u8]) -> (Self, Vec<Self::A>) {
         let mut bases = Vec::new();
@@ -53,6 +54,11 @@ impl<const CASE_SENSITIVE: bool> Profile for Ascii<CASE_SENSITIVE> {
     #[inline(always)]
     fn alloc_out() -> Self::B {
         [0; 256]
+    }
+
+    #[inline(always)]
+    fn encode_char(c: u8) -> u8 {
+        c
     }
 
     #[inline(always)]

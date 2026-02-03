@@ -14,8 +14,9 @@ pub struct Iupac {
 }
 
 impl Profile for Iupac {
+    const N_CHARS: usize = 16;
     type A = usize;
-    type B = [u64; 16];
+    type B = [u64; Self::N_CHARS];
 
     fn encode_pattern(a: &[u8]) -> (Self, Vec<Self::A>) {
         if !Self::valid_seq(a) {
@@ -141,7 +142,12 @@ impl Profile for Iupac {
 
     #[inline(always)]
     fn alloc_out() -> Self::B {
-        [0; 16] //FIXME: is this always valid?
+        [0; Self::N_CHARS] //FIXME: is this always valid?
+    }
+
+    #[inline(always)]
+    fn encode_char(c: u8) -> u8 {
+        IUPAC_CODE[(c & 0x1F) as usize]
     }
 
     #[inline(always)]

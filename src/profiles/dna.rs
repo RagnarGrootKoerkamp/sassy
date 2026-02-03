@@ -14,8 +14,9 @@ pub struct Dna {
 }
 
 impl Profile for Dna {
+    const N_CHARS: usize = 4;
     type A = u8;
-    type B = [u64; 4];
+    type B = [u64; Self::N_CHARS];
 
     fn encode_pattern(a: &[u8]) -> (Self, Vec<Self::A>) {
         let bases = vec![b'A', b'C', b'T', b'G'];
@@ -41,7 +42,7 @@ impl Profile for Dna {
     }
 
     #[inline(always)]
-    fn eq(ca: &u8, cb: &[u64; 4]) -> u64 {
+    fn eq(ca: &u8, cb: &[u64; Self::N_CHARS]) -> u64 {
         unsafe { *cb.get_unchecked(*ca as usize) }
     }
 
@@ -52,7 +53,7 @@ impl Profile for Dna {
 
     #[inline(always)]
     fn alloc_out() -> Self::B {
-        [0; 4]
+        [0; Self::N_CHARS]
     }
 
     #[inline(always)]
@@ -87,7 +88,6 @@ impl Profile for Dna {
 
         // Whatever non 32 tail is left
         while i < len {
-            println!("Tail check");
             let c = seq[i] | 0x20; // lowercase
             if c != b'a' && c != b'c' && c != b'g' && c != b't' {
                 return false;
@@ -96,6 +96,11 @@ impl Profile for Dna {
         }
 
         true
+    }
+
+    #[inline(always)]
+    fn encode_char(c: u8) -> u8 {
+        (c >> 1) & 3
     }
 
     fn reverse_complement(query: &[u8]) -> Vec<u8> {
@@ -129,6 +134,7 @@ const RC: [u8; 256] = {
     rc
 };
 
+#[inline(always)]
 fn bases(chars: u8x32) -> u8x32 {
     u8x32_shr(chars, 1) & u8x32::splat(3)
 }
