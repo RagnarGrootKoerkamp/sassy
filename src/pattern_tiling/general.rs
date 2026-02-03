@@ -2,6 +2,7 @@ use crate::pattern_tiling::backend::SimdBackend;
 use crate::pattern_tiling::search::{HitRange, Myers};
 use crate::pattern_tiling::tqueries::TQueries;
 use crate::pattern_tiling::trace::{TracePostProcess, trace_batch_ranges};
+use crate::profiles::Profile;
 use crate::search::Match;
 use pa_types::Cost;
 
@@ -72,11 +73,11 @@ macro_rules! run_hierarchical {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn hierarchical_search<S, F>(
-    suffix_searcher: &mut Myers<S>,
-    suffix_tqueries: &TQueries<S>,
-    full_searcher: &mut Myers<F>,
-    full_tqueries: &TQueries<F>,
+pub fn hierarchical_search<S, F, P: Profile>(
+    suffix_searcher: &mut Myers<S, P>,
+    suffix_tqueries: &TQueries<S, P>,
+    full_searcher: &mut Myers<F, P>,
+    full_tqueries: &TQueries<F, P>,
     text: &[u8],
     k: u32,
     post: TracePostProcess,
@@ -125,9 +126,9 @@ pub fn hierarchical_search<S, F>(
 }
 
 #[inline(always)]
-fn trace_ranges_backend<S: SimdBackend>(
-    searcher: &mut Myers<S>,
-    tqueries: &TQueries<S>,
+fn trace_ranges_backend<S: SimdBackend, P: Profile>(
+    searcher: &mut Myers<S, P>,
+    tqueries: &TQueries<S, P>,
     text: &[u8],
     ranges: &[HitRange],
     k: u32,
@@ -150,26 +151,26 @@ fn trace_ranges_backend<S: SimdBackend>(
 }
 
 #[derive(Debug, Clone)]
-pub enum EncodedPatterns {
-    U8(TQueries<U8Backend>),
+pub enum EncodedPatterns<P: Profile> {
+    U8(TQueries<U8Backend, P>),
     U16 {
-        full: TQueries<U16Backend>,
-        suffix_u8: Option<Box<TQueries<U8Backend>>>,
+        full: TQueries<U16Backend, P>,
+        suffix_u8: Option<Box<TQueries<U8Backend, P>>>,
     },
     U32 {
-        full: TQueries<U32Backend>,
-        suffix_u16: Option<Box<TQueries<U16Backend>>>,
-        suffix_u8: Option<Box<TQueries<U8Backend>>>,
+        full: TQueries<U32Backend, P>,
+        suffix_u16: Option<Box<TQueries<U16Backend, P>>>,
+        suffix_u8: Option<Box<TQueries<U8Backend, P>>>,
     },
     U64 {
-        full: TQueries<U64Backend>,
-        suffix_u16: Option<Box<TQueries<U16Backend>>>,
-        suffix_u32: Option<Box<TQueries<U32Backend>>>,
-        suffix_u8: Option<Box<TQueries<U8Backend>>>,
+        full: TQueries<U64Backend, P>,
+        suffix_u16: Option<Box<TQueries<U16Backend, P>>>,
+        suffix_u32: Option<Box<TQueries<U32Backend, P>>>,
+        suffix_u8: Option<Box<TQueries<U8Backend, P>>>,
     },
 }
 
-impl EncodedPatterns {
+impl<P: Profile> EncodedPatterns<P> {
     pub fn max_pattern_length(&self) -> usize {
         match self {
             EncodedPatterns::U8(_) => U8Backend::LIMB_BITS,
@@ -188,7 +189,7 @@ impl EncodedPatterns {
         }
     }
 
-    pub fn suffix_u16(&self) -> Option<&TQueries<U16Backend>> {
+    pub fn suffix_u16(&self) -> Option<&TQueries<U16Backend, P>> {
         match self {
             EncodedPatterns::U8(_) | EncodedPatterns::U16 { .. } => None,
             EncodedPatterns::U32 { suffix_u16, .. } => suffix_u16.as_deref(),
@@ -196,7 +197,7 @@ impl EncodedPatterns {
         }
     }
 
-    pub fn suffix_u32(&self) -> Option<&TQueries<U32Backend>> {
+    pub fn suffix_u32(&self) -> Option<&TQueries<U32Backend, P>> {
         match self {
             EncodedPatterns::U8(_) | EncodedPatterns::U16 { .. } | EncodedPatterns::U32 { .. } => {
                 None
@@ -205,7 +206,7 @@ impl EncodedPatterns {
         }
     }
 
-    pub fn suffix_u8(&self) -> Option<&TQueries<U8Backend>> {
+    pub fn suffix_u8(&self) -> Option<&TQueries<U8Backend, P>> {
         match self {
             EncodedPatterns::U8(_) => None,
             EncodedPatterns::U16 { suffix_u8, .. } => suffix_u8.as_deref(),
@@ -221,19 +222,19 @@ enum PrefilterBackend {
     U32,
 }
 
-pub struct Searcher {
-    searcher_u8: Myers<U8Backend>,
-    searcher_u16: Myers<U16Backend>,
-    searcher_u32: Myers<U32Backend>,
-    searcher_u64: Myers<U64Backend>,
-    suffix_searcher_u8: Myers<U8Backend>,
-    suffix_searcher_u16: Myers<U16Backend>,
-    suffix_searcher_u32: Myers<U32Backend>,
+pub struct Searcher<P: Profile> {
+    searcher_u8: Myers<U8Backend, P>,
+    searcher_u16: Myers<U16Backend, P>,
+    searcher_u32: Myers<U32Backend, P>,
+    searcher_u64: Myers<U64Backend, P>,
+    suffix_searcher_u8: Myers<U8Backend, P>,
+    suffix_searcher_u16: Myers<U16Backend, P>,
+    suffix_searcher_u32: Myers<U32Backend, P>,
     alignments_buf: Vec<Match>,
     batch_buf: Vec<Match>,
 }
 
-impl Clone for Searcher {
+impl<P: Profile> Clone for Searcher<P> {
     fn clone(&self) -> Self {
         Self {
             searcher_u8: Myers::new(Some(self.searcher_u8.alpha)),
@@ -249,7 +250,7 @@ impl Clone for Searcher {
     }
 }
 
-impl Searcher {
+impl<P: Profile> Searcher<P> {
     pub fn new(alpha: Option<f32>) -> Self {
         Self {
             searcher_u8: Myers::new(alpha),
@@ -264,7 +265,7 @@ impl Searcher {
         }
     }
 
-    pub fn encode(&self, queries: &[Vec<u8>], include_rc: bool) -> EncodedPatterns {
+    pub fn encode(&self, queries: &[Vec<u8>], include_rc: bool) -> EncodedPatterns<P> {
         if queries.is_empty() {
             panic!("No queries provided");
         }
@@ -275,26 +276,26 @@ impl Searcher {
         assert!(queries.iter().all(|q| q.len() == max_pattern_length));
 
         if max_pattern_length <= U8Backend::LIMB_BITS {
-            EncodedPatterns::U8(TQueries::new(queries, include_rc))
+            EncodedPatterns::U8(TQueries::<U8Backend, P>::new(queries, include_rc))
         } else if max_pattern_length <= U16Backend::LIMB_BITS {
-            let full = TQueries::new(queries, include_rc);
+            let full = TQueries::<U16Backend, P>::new(queries, include_rc);
             EncodedPatterns::U16 {
-                suffix_u8: Some(Box::new(full.reduce_to_suffix::<U8Backend>())),
+                suffix_u8: Some(Box::new(full.reduce_to_suffix::<U8Backend, P>())),
                 full,
             }
         } else if max_pattern_length <= U32Backend::LIMB_BITS {
             let full = TQueries::new(queries, include_rc);
             EncodedPatterns::U32 {
-                suffix_u16: Some(Box::new(full.reduce_to_suffix::<U16Backend>())),
-                suffix_u8: Some(Box::new(full.reduce_to_suffix::<U8Backend>())),
+                suffix_u16: Some(Box::new(full.reduce_to_suffix::<U16Backend, P>())),
+                suffix_u8: Some(Box::new(full.reduce_to_suffix::<U8Backend, P>())),
                 full,
             }
         } else if max_pattern_length <= U64Backend::LIMB_BITS {
             let full = TQueries::new(queries, include_rc);
             EncodedPatterns::U64 {
-                suffix_u16: Some(Box::new(full.reduce_to_suffix::<U16Backend>())),
-                suffix_u32: Some(Box::new(full.reduce_to_suffix::<U32Backend>())),
-                suffix_u8: Some(Box::new(full.reduce_to_suffix::<U8Backend>())),
+                suffix_u16: Some(Box::new(full.reduce_to_suffix::<U16Backend, P>())),
+                suffix_u32: Some(Box::new(full.reduce_to_suffix::<U32Backend, P>())),
+                suffix_u8: Some(Box::new(full.reduce_to_suffix::<U8Backend, P>())),
                 full,
             }
         } else {
@@ -307,7 +308,7 @@ impl Searcher {
     }
 
     fn should_use_hierarchical(
-        encoded_queries: &EncodedPatterns,
+        encoded_queries: &EncodedPatterns<P>,
         k: u32,
         use_hierarchical: Option<bool>,
     ) -> Option<PrefilterBackend> {
@@ -330,7 +331,7 @@ impl Searcher {
     #[rustfmt::skip]
     fn hierarchical_search_with_prefilter(
         &mut self,
-        full_queries: &EncodedPatterns,
+        full_queries: &EncodedPatterns<P>,
         text: &[u8],
         k: u32,
         prefilter: PrefilterBackend,
@@ -348,7 +349,12 @@ impl Searcher {
         self.alignments_buf.as_slice()
     }
 
-    pub fn search(&mut self, encoded_queries: &EncodedPatterns, text: &[u8], k: u32) -> &[Match] {
+    pub fn search(
+        &mut self,
+        encoded_queries: &EncodedPatterns<P>,
+        text: &[u8],
+        k: u32,
+    ) -> &[Match] {
         self.search_with_options(
             encoded_queries,
             text,
@@ -360,7 +366,7 @@ impl Searcher {
 
     pub fn search_all(
         &mut self,
-        encoded_queries: &EncodedPatterns,
+        encoded_queries: &EncodedPatterns<P>,
         text: &[u8],
         k: u32,
     ) -> &[Match] {
@@ -369,7 +375,7 @@ impl Searcher {
 
     pub fn search_with_options(
         &mut self,
-        encoded_queries: &EncodedPatterns,
+        encoded_queries: &EncodedPatterns<P>,
         text: &[u8],
         k: u32,
         use_hierarchical: Option<bool>,
@@ -400,7 +406,7 @@ impl Searcher {
     }
 }
 
-impl Default for Searcher {
+impl<P: Profile> Default for Searcher<P> {
     fn default() -> Self {
         Self::new(None)
     }

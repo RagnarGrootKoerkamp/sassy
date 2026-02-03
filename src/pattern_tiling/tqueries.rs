@@ -1,11 +1,11 @@
 use crate::pattern_tiling::backend::SimdBackend;
-use crate::profiles::iupac::{get_encoded, reverse_complement};
+use crate::profiles::{Profile, iupac::reverse_complement};
 use std::marker::PhantomData;
 
 pub(crate) const IUPAC_MASKS: usize = 16;
 
 #[derive(Debug, Clone, Default)]
-pub struct TQueries<B: SimdBackend> {
+pub struct TQueries<B: SimdBackend, P: Profile> {
     /// Holds [position][transposition_block_index]
     pub pattern_length: usize,
     pub n_queries: usize,
@@ -17,7 +17,7 @@ pub struct TQueries<B: SimdBackend> {
     // Not sure if we should keep it here, but might be handy with
     // get_pattern_seq(i) to make sure it aligns with the indices of `scan` result bools
     pub queries: Vec<Vec<u8>>,
-    _marker: PhantomData<B>,
+    _marker: PhantomData<(B, P)>,
 }
 
 #[inline(always)]
@@ -46,7 +46,7 @@ fn build_flat_peqs<B: SimdBackend>(
 }
 
 #[allow(clippy::needless_range_loop)]
-impl<B: SimdBackend> TQueries<B> {
+impl<B: SimdBackend, P: Profile> TQueries<B, P> {
     pub fn new(queries: &[Vec<u8>], include_rc: bool) -> Self {
         assert!(!queries.is_empty(), "No queries provided");
         let pattern_length = queries[0].len();
@@ -91,7 +91,7 @@ impl<B: SimdBackend> TQueries<B> {
                 // iter queries
                 for i in 0..count {
                     let qi = start_q + i;
-                    let encoded = get_encoded(all_queries[qi][pos]);
+                    let encoded = P::encode_char(all_queries[qi][pos]);
                     temp_block_buffer[i] = encoded;
                     if encoded != 0 {
                         // Skipping X
@@ -124,7 +124,7 @@ impl<B: SimdBackend> TQueries<B> {
         &self.queries[pattern_idx]
     }
 
-    pub fn reduce_to_suffix<NB: SimdBackend>(&self) -> TQueries<NB> {
+    pub fn reduce_to_suffix<NB: SimdBackend, NP: Profile>(&self) -> TQueries<NB, NP> {
         let suffix_len = NB::LIMB_BITS;
         let suffix_queries: Vec<Vec<u8>> = self
             .queries
@@ -134,6 +134,6 @@ impl<B: SimdBackend> TQueries<B> {
                 q[start..].to_vec()
             })
             .collect();
-        TQueries::<NB>::new(&suffix_queries, false)
+        TQueries::<NB, NP>::new(&suffix_queries, false)
     }
 }

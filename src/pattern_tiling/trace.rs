@@ -1,7 +1,7 @@
 use crate::pattern_tiling::backend::SimdBackend;
 use crate::pattern_tiling::search::{HitRange, Myers};
 use crate::pattern_tiling::tqueries::TQueries;
-use crate::profiles::iupac::get_encoded;
+use crate::profiles::Profile;
 use crate::search::Match;
 use crate::search::Strand;
 use crate::search::get_overhang_steps;
@@ -30,9 +30,9 @@ pub struct SimdHistoryStep<S: Copy> {
 }
 
 /// Trace alignments for hit ranges using a single SIMD forward pass per range.
-pub fn trace_batch_ranges<B: SimdBackend>(
-    searcher: &mut Myers<B>,
-    t_queries: &TQueries<B>,
+pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
+    searcher: &mut Myers<B, P>,
+    t_queries: &TQueries<B, P>,
     text: &[u8],
     ranges: &[HitRange],
     k: u32,
@@ -159,7 +159,7 @@ pub fn trace_batch_ranges<B: SimdBackend>(
                 let abs_pos = (i as isize) + start;
                 if abs_pos >= 0 && (abs_pos as usize) < text.len() {
                     let cur_char = text[abs_pos as usize];
-                    let enc = get_encoded(cur_char) as usize;
+                    let enc = P::encode_char(cur_char) as usize;
                     eq_slice[lane] = B::mask_word_to_scalar(t_queries.peq_masks[enc][q_idx]);
                     keep_slice[lane] = one_mask;
                 } else {
@@ -172,7 +172,7 @@ pub fn trace_batch_ranges<B: SimdBackend>(
             let keep_mask = B::from_array(keep_mask_arr);
             let freeze_mask = all_ones ^ keep_mask;
 
-            let (vp_new, vn_new, cost_new) = Myers::<B>::myers_step(
+            let (vp_new, vn_new, cost_new) = Myers::<B, P>::myers_step(
                 block.vp,
                 block.vn,
                 block.cost,
@@ -212,7 +212,7 @@ pub fn trace_batch_ranges<B: SimdBackend>(
         for _i in 0..t_queries.pattern_length {
             unsafe {
                 let block = &mut *blocks_ptr;
-                let (vp_out, vn_out, _cost_out) = Myers::<B>::myers_step(
+                let (vp_out, vn_out, _cost_out) = Myers::<B, P>::myers_step(
                     block.vp,
                     block.vn,
                     block.cost,
@@ -368,8 +368,8 @@ fn extract_simd_lane<B: SimdBackend>(simd_val: B::Simd, lane: usize) -> u64 {
     B::scalar_to_u64(arr.as_ref()[lane])
 }
 
-fn get_cost_at<B: SimdBackend>(
-    searcher: &Myers<B>,
+fn get_cost_at<B: SimdBackend, P: Profile>(
+    searcher: &Myers<B, P>,
     lane_idx: usize,
     step_idx: isize,
     pattern_pos_idx: isize,
@@ -399,11 +399,11 @@ fn get_cost_at<B: SimdBackend>(
     pos - neg
 }
 
-fn traceback_single<B: SimdBackend>(
-    searcher: &Myers<B>,
+fn traceback_single<B: SimdBackend, P: Profile>(
+    searcher: &Myers<B, P>,
     lane_idx: usize,
     original_pattern_idx: usize,
-    t_queries: &TQueries<B>,
+    t_queries: &TQueries<B, P>,
     slice: (isize, isize),
     text_len: usize,
 ) -> Match {

@@ -1,8 +1,9 @@
 use crate::pattern_tiling::backend::SimdBackend;
 use crate::pattern_tiling::tqueries::TQueries;
 use crate::pattern_tiling::trace::PatternHistory;
-use crate::profiles::iupac::get_encoded;
+use crate::profiles::Profile;
 use crate::search::get_overhang_steps;
+use std::marker::PhantomData;
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::_mm_prefetch;
@@ -32,7 +33,7 @@ pub struct HitRange {
     pub end: isize,
 }
 
-pub struct Myers<B: SimdBackend> {
+pub struct Myers<B: SimdBackend, P: Profile> {
     pub(crate) blocks: Vec<BlockState<B::Simd>>,
     pub(crate) positions: Vec<Vec<usize>>,
     pub(crate) alpha_pattern: u64,
@@ -42,15 +43,16 @@ pub struct Myers<B: SimdBackend> {
     // Per-pattern open-range start position; isize::MIN means no active range
     pub(crate) max_overhang: Option<usize>,
     pub(crate) active_ranges: Vec<isize>,
+    _marker: PhantomData<P>,
 }
 
-impl<B: SimdBackend> Default for Myers<B> {
+impl<B: SimdBackend, P: Profile> Default for Myers<B, P> {
     fn default() -> Self {
         Self::new(None)
     }
 }
 
-impl<B: SimdBackend> Myers<B> {
+impl<B: SimdBackend, P: Profile> Myers<B, P> {
     pub fn new(alpha: Option<f32>) -> Self {
         let alpha_val = alpha.unwrap_or(1.0);
         Self {
@@ -62,6 +64,7 @@ impl<B: SimdBackend> Myers<B> {
             hit_ranges: Vec::new(),
             active_ranges: Vec::new(),
             max_overhang: None,
+            _marker: PhantomData,
         }
     }
 
@@ -223,7 +226,7 @@ impl<B: SimdBackend> Myers<B> {
     #[inline(always)]
     fn handle_suffix_overhang(
         &mut self,
-        t_queries: &TQueries<B>,
+        t_queries: &TQueries<B, P>,
         text: &[u8],
         k: u32,
         is_end_block: bool,
@@ -300,7 +303,7 @@ impl<B: SimdBackend> Myers<B> {
     }
 
     #[inline(always)]
-    fn handle_full_prefix_matches(&mut self, t_queries: &TQueries<B>, k: u32) {
+    fn handle_full_prefix_matches(&mut self, t_queries: &TQueries<B, P>, k: u32) {
         let mask = if t_queries.pattern_length >= 64 {
             !0u64
         } else {
@@ -324,7 +327,7 @@ impl<B: SimdBackend> Myers<B> {
     #[inline(always)]
     pub fn search_ranges(
         &mut self,
-        t_queries: &TQueries<B>,
+        t_queries: &TQueries<B, P>,
         text: &[u8],
         k: u32,
         is_start_block: bool,
@@ -363,13 +366,13 @@ impl<B: SimdBackend> Myers<B> {
 
         for idx in 0..text_len {
             let c = unsafe { *text_ptr.add(idx) };
-            let encoded = get_encoded(c) as usize;
+            let encoded = P::encode_char(c) as usize;
             let peq_base = unsafe { peqs_ptr.add(encoded * num_blocks) };
 
             // Prefetch next peq
             if idx + 1 < text_len {
                 let next_c = unsafe { *text_ptr.add(idx + 1) };
-                let next_encoded = get_encoded(next_c) as usize;
+                let next_encoded = P::encode_char(next_c) as usize;
                 unsafe { prefetch_read(peqs_ptr.add(next_encoded * num_blocks)) };
             }
 
@@ -465,6 +468,7 @@ mod tests {
     use crate::pattern_tiling::general::Searcher;
     use crate::pattern_tiling::trace::{TracePostProcess, trace_batch_ranges};
     use crate::profiles::Iupac;
+    use crate::profiles::Profile;
     use crate::search::Match;
     use std::collections::{HashMap, HashSet};
 
@@ -474,8 +478,8 @@ mod tests {
     const ITER: usize = 1_000_000;
 
     fn trace_all_for_test<B: SimdBackend>(
-        searcher: &mut Myers<B>,
-        t_queries: &TQueries<B>,
+        searcher: &mut Myers<B, Iupac>,
+        t_queries: &TQueries<B, Iupac>,
         text: &[u8],
         k: u32,
         post: TracePostProcess,
@@ -496,10 +500,10 @@ mod tests {
 
     #[test]
     fn test_trace_all_hits_integration() {
-        let mut searcher = Myers::<TestBackend>::new(None);
+        let mut searcher = Myers::<TestBackend, Iupac>::new(None);
 
         let queries = vec![b"ACGT".to_vec(), b"TGCA".to_vec()];
-        let t_queries = TQueries::<TestBackend>::new(&queries, false);
+        let t_queries = TQueries::<TestBackend, Iupac>::new(&queries, false);
         let text = b"AAACGTTTGCAAA";
         //                           ^    ^
         //                      0123456789-12
@@ -530,10 +534,10 @@ mod tests {
 
     #[test]
     fn test_alpha_overhang() {
-        let mut searcher = Myers::<TestBackend>::new(Some(0.5));
+        let mut searcher = Myers::<TestBackend, Iupac>::new(Some(0.5));
 
         let queries = vec![b"ACGT".to_vec()];
-        let t_queries = TQueries::<TestBackend>::new(&queries, false);
+        let t_queries = TQueries::<TestBackend, Iupac>::new(&queries, false);
 
         let text = b"AC";
         let k = 2;
@@ -545,10 +549,10 @@ mod tests {
 
     #[test]
     fn test_prefix_overhang() {
-        let mut searcher = Myers::<TestBackend>::new(Some(0.5));
+        let mut searcher = Myers::<TestBackend, Iupac>::new(Some(0.5));
 
         let queries = vec![b"AAAGT".to_vec()];
-        let t_queries = TQueries::<TestBackend>::new(&queries, false);
+        let t_queries = TQueries::<TestBackend, Iupac>::new(&queries, false);
         let text = b"GTCCCCCCCCC";
         let k = 2;
 
@@ -558,10 +562,10 @@ mod tests {
 
     #[test]
     fn test_no_matches() {
-        let mut searcher = Myers::<TestBackend>::new(None);
+        let mut searcher = Myers::<TestBackend, Iupac>::new(None);
 
         let queries = vec![b"ACGT".to_vec()];
-        let t_queries = TQueries::<TestBackend>::new(&queries, false);
+        let t_queries = TQueries::<TestBackend, Iupac>::new(&queries, false);
         let text = b"TTTTTTTT";
         let k = 1;
 
@@ -572,10 +576,10 @@ mod tests {
 
     #[test]
     fn test_range() {
-        let mut searcher = Myers::<TestBackend>::new(None);
+        let mut searcher = Myers::<TestBackend, Iupac>::new(None);
 
         let queries = vec![b"ACGT".to_vec()];
-        let t_queries = TQueries::<TestBackend>::new(&queries, false);
+        let t_queries = TQueries::<TestBackend, Iupac>::new(&queries, false);
         //                       ACGT
         let text = b"AAACGTAAA";
         //                     012345678
@@ -591,7 +595,7 @@ mod tests {
 
     #[test]
     fn test_batch_size_edge_case() {
-        let mut searcher = Myers::<TestBackend>::new(None);
+        let mut searcher = Myers::<TestBackend, Iupac>::new(None);
 
         let n_queries = TestBackend::LANES;
         let queries: Vec<Vec<u8>> = (0..n_queries)
@@ -599,7 +603,7 @@ mod tests {
             .map(|c| vec![c; 4])
             .collect();
 
-        let t_queries = TQueries::<TestBackend>::new(&queries, false);
+        let t_queries = TQueries::<TestBackend, Iupac>::new(&queries, false);
         let text = b"AAAACCCCGGGGTTTT";
         let k = 2;
 
@@ -665,7 +669,7 @@ mod tests {
         } else {
             SassySearcher::<Iupac>::new_fwd()
         };
-        let mut pattern_tiling_searcher = Searcher::new(alpha);
+        let mut pattern_tiling_searcher = Searcher::<Iupac>::new(alpha);
 
         for _ in 0..ITER {
             let k = random_range(0..4);
@@ -882,8 +886,8 @@ mod tests {
         let t = b"AAACGAAGTCCTTAGACTGACTTGGCACCAGTATACTCACTTTTTTGTCTCC";
 
         let k = 1;
-        let mut searcher = Myers::<TestBackend>::new(None);
-        let pattern_transposed = TQueries::<TestBackend>::new(&[q.to_vec()], true);
+        let mut searcher = Myers::<TestBackend, Iupac>::new(None);
+        let pattern_transposed = TQueries::<TestBackend, Iupac>::new(&[q.to_vec()], true);
         let pattern_tiling_matches = trace_all_for_test(
             &mut searcher,
             &pattern_transposed,
@@ -943,7 +947,7 @@ mod tests {
             );
         }
 
-        let mut pattern_tiling_searcher = Searcher::new(Some(0.5));
+        let mut pattern_tiling_searcher = Searcher::<Iupac>::new(Some(0.5));
         let queries = vec![q.to_vec()];
         let encoded = pattern_tiling_searcher.encode(&queries, false);
         let pattern_tiling_matches = pattern_tiling_searcher.search_with_options(
@@ -967,7 +971,7 @@ mod tests {
 
     #[test]
     fn test_performance_large_text() {
-        let mut searcher = Searcher::new(None);
+        let mut searcher = Searcher::<Iupac>::new(None);
 
         let text = random_dna_seq(1_000_000);
 
@@ -991,7 +995,7 @@ mod tests {
 
     #[test]
     fn profile_search_patterns_flipped() {
-        let mut searcher = Searcher::new(None);
+        let mut searcher = Searcher::<Iupac>::new(None);
 
         let text = random_dna_seq(100_000);
 
@@ -1056,7 +1060,7 @@ mod tests {
         }
 
         use crate::pattern_tiling::general::Searcher as pattern_tilingSearcher;
-        let mut pattern_tiling_searcher = pattern_tilingSearcher::new(Some(0.5));
+        let mut pattern_tiling_searcher = pattern_tilingSearcher::<Iupac>::new(Some(0.5));
         let encoded = pattern_tiling_searcher.encode(&[p.to_vec()], false);
         let pattern_tiling_matches = pattern_tiling_searcher.search_with_options(
             &encoded,
@@ -1097,7 +1101,7 @@ mod tests {
         let q = b"CCGTCTC".to_vec();
         let t = b"GCACAAAGCCGTTCAT".to_vec();
         let k = 2;
-        let mut searcher = Searcher::new(Some(0.5));
+        let mut searcher = Searcher::<Iupac>::new(Some(0.5));
         let encoded = searcher.encode(&[q.to_vec()], false);
         let matches = searcher.search_with_options(
             &encoded,
@@ -1138,7 +1142,7 @@ mod tests {
         //   let p = crate::profiles::iupac::reverse_complement(&p);
         let t = b"TGGTCAATTTGGCTATTCTCT".to_vec();
         let k = 3;
-        let mut searcher = Searcher::new(Some(0.5));
+        let mut searcher = Searcher::<Iupac>::new(Some(0.5));
         let encoded = searcher.encode(&[p.to_vec()], false);
         let matches = searcher.search_with_options(
             &encoded,

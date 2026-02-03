@@ -105,7 +105,7 @@ impl Profile for Iupac {
             let nib1 = is_hi_1.blend(hi_nib1, lo_nib1);
 
             for (i, &base) in [b'A', b'C', b'T', b'G'].iter().enumerate() {
-                let m = u8x32::splat(get_encoded(base));
+                let m = u8x32::splat(Self::encode_char(base));
 
                 let match0 = !(nib0 & m).simd_eq(zero);
                 let match1 = !(nib1 & m).simd_eq(zero);
@@ -117,7 +117,7 @@ impl Profile for Iupac {
             }
 
             for (i, &base) in extra_bases.iter().enumerate() {
-                let m = u8x32::splat(get_encoded(base));
+                let m = u8x32::splat(Self::encode_char(base));
 
                 let match0 = !(nib0 & m).simd_eq(zero);
                 let match1 = !(nib1 & m).simd_eq(zero);
@@ -137,7 +137,7 @@ impl Profile for Iupac {
 
     #[inline(always)]
     fn is_match(char1: u8, char2: u8) -> bool {
-        (get_encoded(char1) & get_encoded(char2)) > 0
+        (Self::encode_char(char1) & Self::encode_char(char2)) > 0
     }
 
     #[inline(always)]
@@ -319,11 +319,6 @@ const IUPAC_CODE: [u8; 32] = {
     
     t
 };
-
-#[inline(always)]
-pub(crate) fn get_encoded(c: u8) -> u8 {
-    IUPAC_CODE[(c & 0x1F) as usize]
-}
 
 const PACKED_NIBBLES: [u8; 16] = {
     let mut p = [0u8; 16];

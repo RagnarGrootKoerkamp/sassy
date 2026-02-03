@@ -233,7 +233,7 @@ pub struct Searcher<P: Profile> {
     max_overhang: Option<usize>,
 
     // pattern_tiling searcher
-    pattern_tiling_searcher: PatterntilingSearcher,
+    pattern_tiling_searcher: PatterntilingSearcher<P>,
 
     // Internal caches
     cost_matrices: [CostMatrix; LANES],
@@ -401,7 +401,7 @@ impl<P: Profile> Searcher<P> {
         self
     }
 
-    pub fn encode_patterns(&mut self, patterns: &[Vec<u8>]) -> EncodedPatterns {
+    pub fn encode_patterns(&mut self, patterns: &[Vec<u8>]) -> EncodedPatterns<P> {
         self.pattern_tiling_searcher.encode(&patterns, self.rc)
     }
 
@@ -414,7 +414,7 @@ impl<P: Profile> Searcher<P> {
     /// Input queries have to be encoded using `encode_queries` prior to calling this
     pub fn search_encoded_patterns(
         &mut self,
-        encoded_queries: &EncodedPatterns,
+        encoded_queries: &EncodedPatterns<P>,
         text: &[u8],
         k: usize,
     ) -> &[Match] {
@@ -424,7 +424,7 @@ impl<P: Profile> Searcher<P> {
 
     pub fn search_all_encoded_patterns(
         &mut self,
-        encoded_queries: &EncodedPatterns,
+        encoded_queries: &EncodedPatterns<P>,
         text: &[u8],
         k: usize,
     ) -> &[Match] {
@@ -3044,5 +3044,20 @@ mod tests {
             assert_eq!(matches_batch_patterns, matches_batch_texts);
             assert_eq!(matches_batch_texts, matches_single);
         }
+    }
+
+    #[test]
+    fn test_pattern_tilling_profiles() {
+        let p = b"ATG".to_vec();
+        let t = b"NTG".to_vec();
+        let mut searcher = Searcher::<Iupac>::new_fwd();
+        let encoded = searcher.encode_patterns(&[p.clone()]);
+        let matches = searcher.search_encoded_patterns(&encoded, &t, 0);
+        assert_eq!(matches.len(), 1);
+
+        let mut dna_searcher = Searcher::<Dna>::new_fwd();
+        let encoded = dna_searcher.encode_patterns(&[p]);
+        let matches = dna_searcher.search_encoded_patterns(&encoded, &t, 0);
+        assert_eq!(matches.len(), 0);
     }
 }
