@@ -240,15 +240,36 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
         let (r_start, r_end) = range_bounds[lane];
         let approx_start = approx_slices[lane].0;
         for pos in r_start..=r_end {
-            let aln = traceback_single(
+            // First check if the cost at this endpoint is within threshold
+            let step_idx = pos - approx_start;
+
+            // This gets the cost based on the calculated matrix
+            let mut cost_at_endpoint = get_cost_at::<B, P>(
                 searcher,
                 lane,
-                pattern_indices[lane],
-                t_queries,
-                (approx_start, pos),
-                text.len(),
+                step_idx,
+                t_queries.pattern_length as isize - 1,
             );
-            if aln.cost <= k as Cost {
+
+            // But, the matrix cost is not directly the cost with overhang in case of suffixes
+            // (it is for prefixes as deltas are manipulated)
+            let end_pos = pos as usize;
+            let max_valid_text_pos = text.len() - 1;
+            if end_pos > max_valid_text_pos && searcher.alpha != 1.0 {
+                let overshoot = end_pos - max_valid_text_pos;
+                let correction = (overshoot as f32 * searcher.alpha).floor() as isize;
+                cost_at_endpoint += correction;
+            }
+
+            if cost_at_endpoint <= k as isize {
+                let aln = traceback_single(
+                    searcher,
+                    lane,
+                    pattern_indices[lane],
+                    t_queries,
+                    (approx_start, pos),
+                    text.len(),
+                );
                 per_range_alignments[lane].push(aln);
             }
         }
