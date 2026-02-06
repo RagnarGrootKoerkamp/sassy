@@ -31,10 +31,10 @@ plt.rcParams.update({
     'savefig.dpi': 300
 })
 
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8.27, 4.09), sharey=True)
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8.27, 3.27), sharey=True)
 
 
-scaling_csv = "evals/src/sassy2/output/scaling_benchmark_results.csv"
+scaling_csv = "evals/src/sassy2/output/pattern_scaling_results.csv"
 if os.path.exists(scaling_csv):
     df_scaling = pd.read_csv(scaling_csv)
     df_scaling = df_scaling[df_scaling["k"] < df_scaling["query_len"]]
@@ -64,6 +64,7 @@ if os.path.exists(scaling_csv):
             if sub_df.empty:
                 continue
 
+            algo_markers = {"sassy_search": "D", "sassy_tiling": "s", "edlib": "o"}
             for algorithm in ["sassy_search", "sassy_tiling", "edlib"]:
                 algo_data = sub_df[sub_df["algorithm"] == algorithm].sort_values("target_len")
                 if algo_data.empty:
@@ -81,7 +82,7 @@ if os.path.exists(scaling_csv):
                     color=color,
                     linewidth=linewidth,
                     linestyle=linestyle,
-                    marker='o' if algorithm == "edlib" else None,
+                    marker=algo_markers[algorithm],
                     markersize=3,
                     markeredgewidth=0.5,
                     alpha=0.9
@@ -90,18 +91,23 @@ if os.path.exists(scaling_csv):
     ax1.set_xscale("log", base=2)
     ax1.set_yscale("log", base=2)
 
-    ax1.grid(True, which="major", linewidth=0.4, alpha=0.5, color='#DCDCDC')
-    ax1.grid(True, which="minor", linewidth=0.2, alpha=0.3, color='#EDEDED')
-    ax1.set_axisbelow(True)
-
-    ax1.set_xlabel("Target length (bp)")
+    ax1.set_xlabel("Text length (bp)")
     ax1.set_ylabel("Throughput (GB/s)")
     ax1.set_title("A", fontweight='bold', loc='left', pad=10)
 
     ax1.xaxis.set_major_locator(LogLocator(base=2.0))
     ax1.xaxis.set_major_formatter(FormatStrFormatter("%.0f"))
+    ax1.xaxis.set_minor_locator(LogLocator(base=2.0, subs=np.arange(2, 10)*0.1, numticks=100))
+    ax1.xaxis.set_minor_formatter(plt.NullFormatter())
+    
     ax1.yaxis.set_major_locator(LogLocator(base=2.0))
     ax1.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
+    ax1.yaxis.set_minor_locator(LogLocator(base=2.0, subs=np.arange(2, 10)*0.1, numticks=100))
+    ax1.yaxis.set_minor_formatter(plt.NullFormatter())
+    
+    ax1.grid(True, which="major", linewidth=0.4, alpha=0.5, color='#DCDCDC')
+    ax1.grid(True, which="minor", linewidth=0.3, alpha=0.45, color='#E8E8E8')
+    ax1.set_axisbelow(True)
 
     for spine in ax1.spines.values():
         spine.set_linewidth(0.5)
@@ -109,8 +115,10 @@ if os.path.exists(scaling_csv):
 
     # Legend
     legend_handles_a = [
-        Line2D([0], [0], color=sassy_search_color, lw=1.2, label="Sassy1"),
-        Line2D([0], [0], color=sassy_tiling_color, lw=1.2, label="Sassy2"),
+        Line2D([0], [0], color=sassy_search_color, lw=1.2, marker='D',
+               markersize=3, markeredgewidth=0.5, label="Sassy1"),
+        Line2D([0], [0], color=sassy_tiling_color, lw=1.2, marker='s',
+               markersize=3, markeredgewidth=0.5, label="Sassy2"),
         Line2D([0], [0], color=edlib_color, lw=1.2, marker='o',
                markersize=3, markeredgewidth=0.5, label="Edlib")
     ]
@@ -128,7 +136,7 @@ if os.path.exists(scaling_csv):
                fontsize=6)
 
 
-throughput_csv = "evals/src/sassy2/output/pattern_throughput_results.csv"
+throughput_csv = "evals/src/sassy2/output/text_scaling_results.csv"
 if os.path.exists(throughput_csv):
     df_throughput = pd.read_csv(throughput_csv)
     # median aggregation
@@ -158,6 +166,7 @@ if os.path.exists(throughput_csv):
 
     ax2.set_xscale('log', base=2)
     ax2.set_yscale('log', base=2)
+    
     ax2.set_xlabel("Number of patterns")
     ax2.set_ylabel("Throughput (GB/s)")
     ax2.set_title("B", fontweight='bold', loc='left', pad=10)
@@ -165,15 +174,19 @@ if os.path.exists(throughput_csv):
     # Use same y-axis formatter as ax1 (raw numbers instead of powers of 2)
     ax2.yaxis.set_major_locator(LogLocator(base=2.0))
     ax2.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
+    ax2.yaxis.set_minor_locator(LogLocator(base=2.0, subs=np.arange(2, 10)*0.1, numticks=100))
+    ax2.yaxis.set_minor_formatter(plt.NullFormatter())
     ax2.tick_params(labelleft=True)  # Show y-axis labels on the right plot
 
     num_queries = df_throughput['num_queries'].tolist()
     ax2.set_xticks(num_queries)
     ax2.get_xaxis().set_major_formatter(plt.ScalarFormatter())
     ax2.set_xticklabels([str(n) for n in num_queries])
+    ax2.xaxis.set_minor_locator(LogLocator(base=2.0, subs=np.arange(2, 10)*0.1, numticks=100))
+    ax2.xaxis.set_minor_formatter(plt.NullFormatter())
 
     ax2.grid(True, which='major', linewidth=0.4, alpha=0.5, color='#DCDCDC')
-    ax2.grid(True, which='minor', linewidth=0.2, alpha=0.3, color='#EDEDED')
+    ax2.grid(True, which='minor', linewidth=0.3, alpha=0.45, color='#E8E8E8')
     ax2.set_axisbelow(True)
 
     # IPC twin axis
@@ -187,8 +200,8 @@ if os.path.exists(throughput_csv):
             df_throughput[ipc_col],
             color=tool_colors[tool],
             linestyle=':',
-            linewidth=1.0,
-            alpha=0.35
+            linewidth=1.2,
+            alpha=0.75
         )
     ax2_twin.set_ylabel("IPC", fontsize=9, color='#666666')
     ax2_twin.tick_params(axis='y', labelcolor='#666666', labelsize=7, width=0.5)

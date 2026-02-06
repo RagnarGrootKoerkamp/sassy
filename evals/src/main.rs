@@ -58,16 +58,16 @@ enum Sassy1Commands {
 
 #[derive(Subcommand)]
 enum Sassy2Commands {
-    /// Run the pattern throughput benchmark
-    PatternThroughput {
-        /// Path to the pattern throughput config TOML file
+    /// Run the text scaling benchmark (throughput vs text length)
+    TextScaling {
+        /// Path to the text scaling config TOML file
         #[arg(long)]
         config: String,
     },
 
-    /// Run the scaling throughput benchmark
-    ScalingBenchmark {
-        /// Path to the scaling benchmark config TOML file
+    /// Run the pattern scaling benchmark (throughput vs number of patterns)
+    PatternScaling {
+        /// Path to the pattern scaling config TOML file
         #[arg(long)]
         config: String,
     },
@@ -96,13 +96,13 @@ fn main() {
         },
 
         Commands::Sassy2 { command } => match command {
-            Sassy2Commands::PatternThroughput { config } => {
-                println!("Running sassy2 pattern throughput benchmark");
-                sassy2::pattern_throughput::run(&config);
+            Sassy2Commands::TextScaling { config } => {
+                println!("Running sassy2 text scaling benchmark");
+                sassy2::text_scaling::run(&config);
             }
-            Sassy2Commands::ScalingBenchmark { config } => {
-                println!("Running sassy2 scaling throughput benchmark");
-                sassy2::scaling_benchmark::run(&config);
+            Sassy2Commands::PatternScaling { config } => {
+                println!("Running sassy2 pattern scaling benchmark");
+                sassy2::pattern_scaling::run(&config);
             }
         },
     }

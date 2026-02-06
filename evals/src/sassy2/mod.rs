@@ -1,2 +1,2 @@
-pub mod pattern_throughput;
-pub mod scaling_benchmark;
+pub mod text_scaling;
+pub mod pattern_scaling;

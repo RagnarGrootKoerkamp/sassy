@@ -321,7 +321,7 @@ pub fn run(config_path: &str) {
     let toml_str = fs::read_to_string(config_path).unwrap();
     let config: Config = toml::from_str(&toml_str).unwrap();
 
-    println!("Running scaling throughput benchmark");
+    println!("Running pattern scaling benchmark");
     println!("Config: {:?}", config_path);
     println!("Output: {}", config.output_file);
     println!("Target lengths: {:?}", config.target_lens);
@@ -471,7 +471,7 @@ pub fn run(config_path: &str) {
     }
 
     println!(
-        "\nScaling benchmark complete. Results written to {}",
+        "\nPattern scaling benchmark complete. Results written to {}",
         config.output_file
     );
 }

@@ -11,12 +11,15 @@ cbindgen:
 sassy2_fig1:
     mkdir -p evals/src/sassy2/output/
     mkdir -p evals/src/sassy2/figs/
-    cargo run -r -p evals -- sassy2 scaling-benchmark --config evals/src/sassy2/scaling_config.toml 
-    cargo run -r -p evals -- sassy2 pattern-throughput --config evals/src/sassy2/pattern_throughput_config.toml 
+    cargo run -r -p evals -- sassy2 pattern-scaling --config evals/src/sassy2/pattern_scaling_config.toml
+    cargo run -r -p evals -- sassy2 text-scaling --config evals/src/sassy2/text_scaling_config.toml
     python3  evals/src/sassy2/scripts/generate_fig1.py
-
 
 perm:
     sudo sysctl -w kernel.perf_event_paranoid=-1
-    sudo sh -c 'echo 0 > /proc/sys/kernel/kptr_restrict'
     sudo sh -c 'echo 1 > /proc/sys/kernel/perf_event_paranoid'
+
+
+unperm:
+	sudo sysctl -w kernel.perf_event_paranoid=2
+	sudo sysctl -w kernel.kptr_restrict=1

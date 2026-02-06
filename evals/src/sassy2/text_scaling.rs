@@ -372,7 +372,7 @@ pub fn run(config_path: &str) {
     let toml_str = fs::read_to_string(config_path).unwrap();
     let config: Config = toml::from_str(&toml_str).unwrap();
 
-    println!("Running pattern throughput benchmark");
+    println!("Running text scaling benchmark");
     println!("Config: {:?}", config_path);
     println!("Output: {}", config.output_file);
     println!("Warmup iterations: {}", config.warmup_iterations);
