@@ -544,13 +544,13 @@ pub fn benchmark_edlib_many_texts(
         threads.max(1)
     );
 
-    let edlib_config = get_edlib_config(k as i32, alphabet);
+    let edlib_config = Arc::new(get_edlib_config(k as i32, alphabet));
     let mut do_work = || {
         if threads <= 1 {
             for text in texts {
                 let t = text.as_ref();
                 for query in queries {
-                    let _result = run_edlib(query, t, &edlib_config);
+                    let _result = run_edlib(query, t, &*edlib_config);
                     black_box(_result);
                 }
             }
@@ -562,11 +562,11 @@ pub fn benchmark_edlib_many_texts(
             let chunk_size = (texts.len() + threads - 1) / threads;
             pool.install(|| {
                 texts.par_chunks(chunk_size).for_each(|chunk| {
-                    let worker_config = get_edlib_config(k as i32, alphabet);
+                    let config = Arc::clone(&edlib_config);
                     for text in chunk {
                         let t = text.as_ref();
                         for query in queries {
-                            let _result = run_edlib(query, t, &worker_config);
+                            let _result = run_edlib(query, t, &*config);
                             black_box(_result);
                         }
                     }
@@ -588,7 +588,7 @@ pub fn benchmark_edlib_many_texts(
         acc + queries
             .iter()
             .filter(|q| {
-                let result = run_edlib(q, text.as_ref(), &edlib_config);
+                let result = run_edlib(q, text.as_ref(), &*edlib_config);
                 result.editDistance <= k as i32 && result.editDistance != -1
             })
             .count()
