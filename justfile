@@ -24,6 +24,7 @@ unperm:
 # Off-targets
 sassy2_prep_off_targets:
     mkdir -p evals/src/sassy2/data
+    mkdir -p evals/src/sassy2/data/downloaded
     wget -O evals/src/sassy2/data/downloaded/chm13v2.0.fa.gz https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz
     gunzip evals/src/sassy2/data/downloaded/chm13v2.0.fa.gz
 
@@ -32,6 +33,8 @@ sassy2_run_off_targets:
 
 # Nanopore 
 sassy2_prep_nanopore:
+    mkdir -p evals/src/sassy2/data
+    mkdir -p evals/src/sassy2/data/downloaded
     wget -O evals/src/sassy2/data/downloaded/SRR26425221_1.fastq.gz ftp://ftp.sra.ebi.ac.uk/vol1/fastq/SRR264/021/SRR26425221/SRR26425221_1.fastq.gz
     gunzip evals/src/sassy2/data/downloaded/SRR26425221_1.fastq.gz
 
