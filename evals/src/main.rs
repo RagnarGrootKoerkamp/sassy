@@ -71,6 +71,20 @@ enum Sassy2Commands {
         #[arg(long)]
         config: String,
     },
+
+    /// Run the off-target search benchmark (guides vs first chromosome)
+    OffTargets {
+        /// Path to the off-target config TOML file
+        #[arg(long)]
+        config: String,
+    },
+
+    /// Run the nanopore benchmark (many reads, aggregate stats)
+    Nanopore {
+        /// Path to the nanopore config TOML file
+        #[arg(long)]
+        config: String,
+    },
 }
 
 fn main() {
@@ -103,6 +117,12 @@ fn main() {
             Sassy2Commands::PatternScaling { config } => {
                 println!("Running sassy2 pattern scaling benchmark");
                 sassy2::pattern_scaling::run(&config);
+            }
+            Sassy2Commands::OffTargets { config } => {
+                sassy2::off_targets::run(&config);
+            }
+            Sassy2Commands::Nanopore { config } => {
+                sassy2::nanopore::run(&config);
             }
         },
     }

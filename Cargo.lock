@@ -496,9 +496,11 @@ version = "0.1.2"
 dependencies = [
  "clap",
  "edlib_rs",
+ "needletail",
  "once_cell",
  "perfcnt",
  "rand 0.9.2",
+ "rayon",
  "sassy",
  "serde",
  "tempfile",

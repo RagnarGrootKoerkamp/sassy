@@ -37,56 +37,50 @@ fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8.27, 3.27), sharey=True)
 
 
 scaling_csv = "evals/src/sassy2/output/pattern_scaling_results.csv"
+sassy_search_color = "#0A9396"  # teal
+sassy_tiling_color = "#7F5DE5"  # slightly softer purple
+edlib_color = "#E76F51"  # coral
+
 if os.path.exists(scaling_csv):
     df_scaling = pd.read_csv(scaling_csv)
+    # CSV columns: num_queries, target_len, query_len, k, search_*, tiling_*, edlib_*
     df_scaling = df_scaling[df_scaling["k"] < df_scaling["query_len"]]
 
-    # median aggregation
+    # median aggregation over runs (if any)
     df_scaling = df_scaling.groupby(
-        ["k", "query_len", "algorithm", "target_len"], as_index=False
+        ["num_queries", "target_len", "query_len", "k"], as_index=False
     ).median(numeric_only=True)
-
-    # Muted original colors
-    sassy_search_color = "#0A9396"  # teal
-    sassy_tiling_color = "#7F5DE5"  # slightly softer purple
-    edlib_color = "#E76F51"  # coral
 
     line_style_map = {0: ("-", 1.2), 3: ("--", 1.2), 4: ("-.", 1.2), 10: (":", 1.4)}
 
     k_values = sorted(df_scaling["k"].unique())
     query_lengths = sorted(df_scaling["query_len"].unique())
 
+    tool_config = [
+        ("search", "search_throughput_gbps", sassy_search_color, "D"),
+        ("tiling", "tiling_throughput_gbps", sassy_tiling_color, "s"),
+        ("edlib", "edlib_throughput_gbps", edlib_color, "o"),
+    ]
+
     for k in k_values:
         for query_len in query_lengths:
             sub_df = df_scaling[
                 (df_scaling["k"] == k) & (df_scaling["query_len"] == query_len)
-            ]
+            ].sort_values("target_len")
             if sub_df.empty:
                 continue
 
-            algo_markers = {"sassy_search": "D", "sassy_tiling": "s", "edlib": "o"}
-            for algorithm in ["sassy_search", "sassy_tiling", "edlib"]:
-                algo_data = sub_df[sub_df["algorithm"] == algorithm].sort_values(
-                    "target_len"
-                )
-                if algo_data.empty:
+            linestyle, linewidth = line_style_map.get(k, ("-", 1.2))
+            for _name, col, color, marker in tool_config:
+                if col not in sub_df.columns:
                     continue
-
-                color = {
-                    "sassy_search": sassy_search_color,
-                    "sassy_tiling": sassy_tiling_color,
-                    "edlib": edlib_color,
-                }[algorithm]
-
-                linestyle, linewidth = line_style_map.get(k, ("-", 1.2))
-
                 ax1.plot(
-                    algo_data["target_len"],
-                    algo_data["throughput_gbps"],
+                    sub_df["target_len"],
+                    sub_df[col],
                     color=color,
                     linewidth=linewidth,
                     linestyle=linestyle,
-                    marker=algo_markers[algorithm],
+                    marker=marker,
                     markersize=3,
                     markeredgewidth=0.5,
                     alpha=0.9,

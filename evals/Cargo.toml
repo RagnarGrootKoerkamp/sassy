@@ -13,6 +13,8 @@ tempfile = "*"
 rand = "*"
 sassy = { path = ".." }
 clap = { version = "4.5.37", features = ["derive"] }
+needletail = "0.6.3"
+rayon = "1.10"
 
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
 perfcnt = "0.8"
