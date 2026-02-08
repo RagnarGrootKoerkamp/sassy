@@ -338,7 +338,9 @@ pub fn post_process_alignments(
                 let aln_end = bound(aln.text_end); // Since we now use usize::MAX for left overhang, which is really -1 so 
                 // it's adjacent to 0
                 if aln_end - prev_end > 1 {
-                    pattern_tilingma_indices.push(prev_idx);
+                    if last_trend != 1 {
+                        pattern_tilingma_indices.push(prev_idx);
+                    };
                     last_trend = 2;
                     prev_cost = cost;
                     prev_idx = idx;

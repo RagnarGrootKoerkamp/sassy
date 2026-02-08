@@ -116,12 +116,7 @@ pub fn hierarchical_search<S, F, P: Profile>(
             Some(full_searcher.alpha),
             full_searcher.max_overhang,
         );
-
-        for aln in batch_buf.drain(..) {
-            if aln.cost <= k as Cost {
-                out.push(aln);
-            }
-        }
+        out.extend_from_slice(&batch_buf);
     }
 }
 
