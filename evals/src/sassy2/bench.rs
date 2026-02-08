@@ -684,7 +684,9 @@ pub fn benchmark_edlib_many_texts(
                 for query in queries {
                     let result = run_edlib(query, t, &*edlib_config);
                     if result.editDistance <= k as i32 && result.editDistance != -1 {
-                        count += 1;
+                        // Might have multiple end points with same lowest k, so get
+                        // len(end locs)
+                        count += result.endLocations.unwrap_or_default().len() as usize;
                     }
                 }
             }
@@ -710,7 +712,7 @@ pub fn benchmark_edlib_many_texts(
                             for query in queries {
                                 let result = run_edlib(query, t, &*config);
                                 if result.editDistance <= k as i32 && result.editDistance != -1 {
-                                    count += 1;
+                                    count += result.endLocations.unwrap_or_default().len() as usize;
                                 }
                             }
                         }
