@@ -80,8 +80,48 @@ where
     (median, mean, std_dev, ci_lower, ci_upper)
 }
 
+fn benchmark_with_stats_and_results<F, R>(
+    f: &mut F,
+    warmup: usize,
+    iterations: usize,
+) -> ((f64, f64, f64, f64, f64), Vec<R>)
+where
+    F: FnMut() -> R,
+{
+    for _ in 0..warmup {
+        f();
+    }
+
+    let mut times = Vec::with_capacity(iterations);
+    let mut results = Vec::with_capacity(iterations);
+    for _ in 0..iterations {
+        let start = Instant::now();
+        let result = f();
+        times.push(start.elapsed().as_nanos() as f64 / 1_000_000.0);
+        results.push(result);
+    }
+
+    times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let median = times[times.len() / 2];
+    let mean = times.iter().sum::<f64>() / times.len() as f64;
+    let variance = times.iter().map(|t| (t - mean).powi(2)).sum::<f64>() / times.len() as f64;
+    let std_dev = variance.sqrt();
+
+    let n = iterations as f64;
+    let standard_error = std_dev / n.sqrt();
+    let z_score = 1.96;
+    let margin = z_score * standard_error;
+    let ci_lower = mean - margin;
+    let ci_upper = mean + margin;
+
+    ((median, mean, std_dev, ci_lower, ci_upper), results)
+}
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-fn measure_ipc_median<F: FnMut()>(f: &mut F, iterations: usize) -> f64 {
+fn measure_ipc_median<F, R>(f: &mut F, iterations: usize) -> f64
+where
+    F: FnMut() -> R,
+{
     let mut ipc_values = Vec::with_capacity(iterations);
 
     for _ in 0..iterations {
@@ -119,9 +159,72 @@ fn measure_ipc_median<F: FnMut()>(f: &mut F, iterations: usize) -> f64 {
 
 // If it's not linux we don't measure IPC and just return 0.0
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-fn measure_ipc_median<F: FnMut()>(f: &mut F, _iterations: usize) -> f64 {
+fn measure_ipc_median<F, R>(f: &mut F, _iterations: usize) -> f64
+where
+    F: FnMut() -> R,
+{
     f();
     NO_IPC
+}
+
+fn p_chunks<T: AsRef<[u8]>>(texts: &[T], boundaries: &[usize]) {
+    let total: usize = texts.iter().map(|t| t.as_ref().len()).sum();
+    let mut out = String::new();
+    let mut total_reads = 0;
+    for (i, w) in boundaries.windows(2).enumerate() {
+        let chunk_len: usize = texts[w[0]..w[1]].iter().map(|t| t.as_ref().len()).sum();
+        let perc = 100.0 * chunk_len as f64 / total as f64;
+        let n_reads = w[1] - w[0];
+        total_reads += n_reads;
+        out.push_str(&format!(
+            "chunk {} ({:.1}% nts) {} reads  ",
+            i, perc, n_reads
+        ));
+    }
+    assert_eq!(total_reads, texts.len());
+    println!("{}", out.trim_end());
+}
+
+fn balance_by_text_len<T: AsRef<[u8]>>(texts: &[T], threads: usize) -> Vec<usize> {
+    let n = texts.len();
+    if n == 0 {
+        return vec![];
+    }
+
+    // At least 1 at most n
+    let num_chunks = threads.clamp(1, n);
+
+    // Only 1, we just return boundary for entire text slice
+    if num_chunks == 1 {
+        return vec![0, n];
+    }
+
+    let mut cum = Vec::with_capacity(n + 1);
+    cum.push(0usize);
+    for t in texts {
+        cum.push(cum.last().unwrap() + t.as_ref().len());
+    }
+    let total = *cum.last().unwrap();
+    assert_eq!(total, texts.iter().map(|t| t.as_ref().len()).sum());
+    assert!(total > 0);
+
+    let mut boundaries = Vec::with_capacity(num_chunks + 1);
+    boundaries.push(0);
+
+    for k in 1..num_chunks {
+        let target = (total * k) / num_chunks;
+        // We find the index where the cumulative length is greater than or equal to our target
+        // length
+        let idx = match cum.binary_search_by(|&c| c.cmp(&target)) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
+        boundaries.push(idx);
+    }
+
+    boundaries.push(n);
+    p_chunks(texts, &boundaries);
+    boundaries
 }
 
 fn calculate_throughput(total_bytes: usize, median_ms: f64) -> f64 {
@@ -379,42 +482,57 @@ pub fn benchmark_individual_search_many_texts(
         Searcher::<Iupac>::new_fwd()
     };
 
+    let boundaries = if threads > 1 {
+        balance_by_text_len(texts, threads)
+    } else {
+        vec![]
+    };
+
     let mut do_work = || {
         if threads <= 1 {
+            let mut count = 0usize;
             for text in texts {
                 let t = text.as_ref();
                 for query in queries {
-                    let _matches = searcher.search(query, t, k);
-                    black_box(_matches);
+                    count += searcher.search(query, t, k).len();
                 }
             }
+            count
         } else {
+            let num_chunks = boundaries.len().saturating_sub(1);
+            if num_chunks == 0 {
+                return 0usize;
+            }
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(threads)
                 .build()
                 .unwrap();
-            let chunk_size = (texts.len() + threads - 1) / threads;
             pool.install(|| {
-                texts.par_chunks(chunk_size).for_each(|chunk| {
-                    let mut worker = if USE_RC {
-                        Searcher::<Iupac>::new_rc()
-                    } else {
-                        Searcher::<Iupac>::new_fwd()
-                    };
-                    for text in chunk {
-                        let t = text.as_ref();
-                        for query in queries {
-                            let _matches = worker.search(query, t, k);
-                            black_box(_matches);
+                (0..num_chunks)
+                    .into_par_iter()
+                    .map(|j| {
+                        let chunk = &texts[boundaries[j]..boundaries[j + 1]];
+                        let mut worker = if USE_RC {
+                            Searcher::<Iupac>::new_rc()
+                        } else {
+                            Searcher::<Iupac>::new_fwd()
+                        };
+                        let mut count = 0usize;
+                        for text in chunk {
+                            let t = text.as_ref();
+                            for query in queries {
+                                count += worker.search(query, t, k).len();
+                            }
                         }
-                    }
-                });
-            });
+                        count
+                    })
+                    .sum()
+            })
         }
     };
 
-    let (median, mean, std_dev, ci_lower, ci_upper) =
-        benchmark_with_stats(&mut do_work, warmup, iterations);
+    let ((median, mean, std_dev, ci_lower, ci_upper), match_counts) =
+        benchmark_with_stats_and_results(&mut do_work, warmup, iterations);
 
     let ipc = if measure_ipc {
         Some(measure_ipc_median(&mut do_work, iterations))
@@ -422,12 +540,7 @@ pub fn benchmark_individual_search_many_texts(
         None
     };
 
-    let n_matches = texts.iter().fold(0usize, |acc, text| {
-        acc + queries
-            .iter()
-            .map(|q| searcher.search(q, text.as_ref(), k).len())
-            .sum::<usize>()
-    });
+    let n_matches = match_counts.first().copied().unwrap_or(0);
 
     finish_results(
         median,
@@ -466,37 +579,56 @@ pub fn benchmark_tiling_many_texts(
     };
 
     let encoded = Arc::new(searcher.encode_patterns(queries));
+    let boundaries = if threads > 1 {
+        balance_by_text_len(texts, threads)
+    } else {
+        vec![]
+    };
+
     let mut do_work = || {
         if threads <= 1 {
+            let mut count = 0usize;
             for text in texts {
-                let _matches = searcher.search_encoded_patterns(&*encoded, text.as_ref(), k);
-                black_box(_matches);
+                count += searcher
+                    .search_encoded_patterns(&*encoded, text.as_ref(), k)
+                    .len();
             }
+            count
         } else {
+            let num_chunks = boundaries.len().saturating_sub(1);
+            if num_chunks == 0 {
+                return 0usize;
+            }
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(threads)
                 .build()
                 .unwrap();
-            let chunk_size = (texts.len() + threads - 1) / threads;
             pool.install(|| {
-                texts.par_chunks(chunk_size).for_each(|chunk| {
-                    let encoded = Arc::clone(&encoded);
-                    let mut worker = if USE_RC {
-                        Searcher::<Iupac>::new_rc()
-                    } else {
-                        Searcher::<Iupac>::new_fwd()
-                    };
-                    for text in chunk {
-                        let _matches = worker.search_encoded_patterns(&*encoded, text.as_ref(), k);
-                        black_box(_matches);
-                    }
-                });
-            });
+                (0..num_chunks)
+                    .into_par_iter()
+                    .map(|j| {
+                        let chunk = &texts[boundaries[j]..boundaries[j + 1]];
+                        let encoded = Arc::clone(&encoded);
+                        let mut worker = if USE_RC {
+                            Searcher::<Iupac>::new_rc()
+                        } else {
+                            Searcher::<Iupac>::new_fwd()
+                        };
+                        let mut count = 0usize;
+                        for text in chunk {
+                            count += worker
+                                .search_encoded_patterns(&*encoded, text.as_ref(), k)
+                                .len();
+                        }
+                        count
+                    })
+                    .sum()
+            })
         }
     };
 
-    let (median, mean, std_dev, ci_lower, ci_upper) =
-        benchmark_with_stats(&mut do_work, warmup, iterations);
+    let ((median, mean, std_dev, ci_lower, ci_upper), match_counts) =
+        benchmark_with_stats_and_results(&mut do_work, warmup, iterations);
 
     let ipc = if measure_ipc {
         Some(measure_ipc_median(&mut do_work, iterations))
@@ -504,14 +636,7 @@ pub fn benchmark_tiling_many_texts(
         None
     };
 
-    let n_matches = texts
-        .iter()
-        .map(|t| {
-            searcher
-                .search_encoded_patterns(&*encoded, t.as_ref(), k)
-                .len()
-        })
-        .sum();
+    let n_matches = match_counts.first().copied().unwrap_or(0);
 
     finish_results(
         median,
@@ -545,38 +670,59 @@ pub fn benchmark_edlib_many_texts(
     );
 
     let edlib_config = Arc::new(get_edlib_config(k as i32, alphabet));
+    let boundaries = if threads > 1 {
+        balance_by_text_len(texts, threads)
+    } else {
+        vec![]
+    };
+
     let mut do_work = || {
         if threads <= 1 {
+            let mut count = 0usize;
             for text in texts {
                 let t = text.as_ref();
                 for query in queries {
-                    let _result = run_edlib(query, t, &*edlib_config);
-                    black_box(_result);
+                    let result = run_edlib(query, t, &*edlib_config);
+                    if result.editDistance <= k as i32 && result.editDistance != -1 {
+                        count += 1;
+                    }
                 }
             }
+            count
         } else {
+            let num_chunks = boundaries.len().saturating_sub(1);
+            if num_chunks == 0 {
+                return 0usize;
+            }
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(threads)
                 .build()
                 .unwrap();
-            let chunk_size = (texts.len() + threads - 1) / threads;
             pool.install(|| {
-                texts.par_chunks(chunk_size).for_each(|chunk| {
-                    let config = Arc::clone(&edlib_config);
-                    for text in chunk {
-                        let t = text.as_ref();
-                        for query in queries {
-                            let _result = run_edlib(query, t, &*config);
-                            black_box(_result);
+                (0..num_chunks)
+                    .into_par_iter()
+                    .map(|j| {
+                        let chunk = &texts[boundaries[j]..boundaries[j + 1]];
+                        let config = Arc::clone(&edlib_config);
+                        let mut count = 0usize;
+                        for text in chunk {
+                            let t = text.as_ref();
+                            for query in queries {
+                                let result = run_edlib(query, t, &*config);
+                                if result.editDistance <= k as i32 && result.editDistance != -1 {
+                                    count += 1;
+                                }
+                            }
                         }
-                    }
-                });
-            });
+                        count
+                    })
+                    .sum()
+            })
         }
     };
 
-    let (median, mean, std_dev, ci_lower, ci_upper) =
-        benchmark_with_stats(&mut do_work, warmup, iterations);
+    let ((median, mean, std_dev, ci_lower, ci_upper), match_counts) =
+        benchmark_with_stats_and_results(&mut do_work, warmup, iterations);
 
     let ipc = if measure_ipc {
         Some(measure_ipc_median(&mut do_work, iterations))
@@ -584,15 +730,7 @@ pub fn benchmark_edlib_many_texts(
         None
     };
 
-    let n_matches = texts.iter().fold(0usize, |acc, text| {
-        acc + queries
-            .iter()
-            .filter(|q| {
-                let result = run_edlib(q, text.as_ref(), &*edlib_config);
-                result.editDistance <= k as i32 && result.editDistance != -1
-            })
-            .count()
-    });
+    let n_matches = match_counts.first().copied().unwrap_or(0);
 
     finish_results(
         median,
