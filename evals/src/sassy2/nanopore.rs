@@ -45,9 +45,6 @@ pub fn run(config_path: &str) {
     let toml_str = fs::read_to_string(config_path).unwrap();
     let config: Config = toml::from_str(&toml_str).unwrap();
 
-    let run_edlib = config.run_edlib;
-    let edlib_alphabet = config.edlib_alphabet.as_str();
-
     println!("Running nanopore benchmark");
     println!("Config: {:?}", config_path);
     println!("Reads: {}", config.read_file);
@@ -89,80 +86,28 @@ pub fn run(config_path: &str) {
     for &k in &config.ks {
         println!("Benchmarking k={}", k);
 
-        let search_results = bench::benchmark_individual_search_many_texts(
+        let suite = bench::benchmark_tools(
             &barcodes,
             &reads,
             k,
-            total_bytes,
             config.warmup_iterations,
             config.iterations,
             config.threads,
-            "nanopore",
+            &Alphabet::Iupac,
             false,
         );
 
-        let tiling_results = bench::benchmark_tiling_many_texts(
-            &barcodes,
-            &reads,
-            k,
-            total_bytes,
-            config.warmup_iterations,
-            config.iterations,
-            config.threads,
-            "nanopore",
-            false,
-        );
-
-        let edlib_results = if run_edlib {
-            let alphabet = match edlib_alphabet {
-                "dna" => Alphabet::Dna,
-                "iupac" => Alphabet::Iupac,
-                _ => panic!("Unsupported edlib alphabet: {}", edlib_alphabet),
-            };
-            bench::benchmark_edlib_many_texts(
-                &barcodes,
-                &reads,
-                k,
-                total_bytes,
-                config.warmup_iterations,
-                config.iterations,
-                config.threads,
-                &alphabet,
-                "nanopore",
-                false,
-            )
-        } else {
-            bench::BenchmarkResults::empty()
-        };
+        println!("{}", &suite);
 
         csv.write_row(
             barcodes.len(),
             total_text_len,
             query_len,
             k,
-            &search_results,
-            &tiling_results,
-            &edlib_results,
+            &suite,
             total_bytes,
         )
         .unwrap();
-
-        println!(
-            "  Results: search={:.2}ms [{:.2}, {:.2}] ({:.3} GB/s), tiling={:.2}ms ({:.3} GB/s), edlib={:.2}ms [{:.2}, {:.2}] ({:.3} GB/s) | n_matches: search={}, tiling={}, edlib={}",
-            search_results.median,
-            search_results.ci_lower,
-            search_results.ci_upper,
-            search_results.throughput_gbps,
-            tiling_results.median,
-            tiling_results.throughput_gbps,
-            edlib_results.median,
-            edlib_results.ci_lower,
-            edlib_results.ci_upper,
-            edlib_results.throughput_gbps,
-            search_results.n_matches,
-            tiling_results.n_matches,
-            edlib_results.n_matches
-        );
     }
 
     println!(

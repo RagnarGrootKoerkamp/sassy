@@ -63,92 +63,28 @@ pub fn run(config_path: &str) {
 
                 let total_bytes = target_len * config.n_queries;
 
-                // Run benchmarks
-                let search_results = bench::benchmark_individual_search(
+                let suite = bench::benchmark_tools(
                     &queries,
-                    &text,
+                    &[text],
                     k,
-                    total_bytes,
                     config.warmup_iterations,
                     config.iterations,
-                    "Benchmarking",
-                    false,
+                    1,
+                    &Alphabet::Iupac,
+                    true,
                 );
 
-                let patterns_results = bench::benchmark_patterns(
-                    &queries,
-                    &text,
-                    k,
-                    total_bytes,
-                    config.warmup_iterations,
-                    config.iterations,
-                    "Benchmarking",
-                    false,
-                );
-
-                let tiling_results = bench::benchmark_tiling(
-                    &queries,
-                    &text,
-                    k,
-                    total_bytes,
-                    config.warmup_iterations,
-                    config.iterations,
-                    "Benchmarking",
-                    false,
-                );
-
-                let edlib_results = if config.run_edlib {
-                    let alphabet = match config.edlib_alphabet.as_str() {
-                        "dna" => Alphabet::Dna,
-                        "iupac" => Alphabet::Iupac,
-                        _ => panic!("Unsupported edlib alphabet: {}", config.edlib_alphabet),
-                    };
-
-                    bench::benchmark_edlib(
-                        &queries,
-                        &text,
-                        k,
-                        total_bytes,
-                        config.warmup_iterations,
-                        config.iterations,
-                        &alphabet,
-                        "Benchmarking",
-                        false,
-                    )
-                } else {
-                    bench::BenchmarkResults::empty()
-                };
+                println!("{}", &suite);
 
                 csv.write_row(
                     config.n_queries,
                     target_len,
                     query_len,
                     k,
-                    &search_results,
-                    &tiling_results,
-                    &edlib_results,
+                    &suite,
                     total_bytes,
                 )
                 .unwrap();
-
-                println!(
-                    "  Results: search={:.2}ms [{:.2}, {:.2}] ({:.3}GB/s), patterns={:.2}ms [{:.2}, {:.2}] ({:.3}GB/s), tiling={:.2}ms [{:.2}, {:.2}] ({:.3}GB/s) | n_matches: search={}, patterns={}, tiling={}",
-                    search_results.median,
-                    search_results.ci_lower,
-                    search_results.ci_upper,
-                    search_results.throughput_gbps,
-                    patterns_results.median,
-                    patterns_results.ci_lower,
-                    patterns_results.ci_upper,
-                    patterns_results.throughput_gbps,
-                    tiling_results.median,
-                    tiling_results.ci_lower,
-                    tiling_results.ci_upper,
-                    tiling_results.throughput_gbps,
-                    search_results.n_matches,
-                    patterns_results.n_matches,
-                    tiling_results.n_matches
-                );
             }
         }
     }

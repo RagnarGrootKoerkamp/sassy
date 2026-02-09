@@ -90,77 +90,28 @@ pub fn run(config_path: &str) {
     for &k in &config.ks {
         println!("Benchmarking k={}", k);
 
-        let search_results = bench::benchmark_individual_search(
+        let suite = bench::benchmark_tools(
             &guides,
-            &chromosome,
+            &[chromosome.clone()],
             k,
-            total_bytes,
             config.warmup_iterations,
             config.iterations,
-            "Benchmarking",
+            1,
+            &Alphabet::Iupac,
             false,
         );
 
-        let tiling_results = bench::benchmark_tiling(
-            &guides,
-            &chromosome,
-            k,
-            total_bytes,
-            config.warmup_iterations,
-            config.iterations,
-            "Benchmarking",
-            false,
-        );
-
-        let edlib_results = if run_edlib {
-            let alphabet = match edlib_alphabet {
-                "dna" => Alphabet::Dna,
-                "iupac" => Alphabet::Iupac,
-                _ => panic!("Unsupported edlib alphabet: {}", edlib_alphabet),
-            };
-            bench::benchmark_edlib(
-                &guides,
-                &chromosome,
-                k,
-                total_bytes,
-                config.warmup_iterations,
-                config.iterations,
-                &alphabet,
-                "Benchmarking",
-                false,
-            )
-        } else {
-            bench::BenchmarkResults::empty()
-        };
+        println!("{}", &suite);
 
         csv.write_row(
             guides.len(),
             chromosome.len(),
             query_len,
             k,
-            &search_results,
-            &tiling_results,
-            &edlib_results,
+            &suite,
             total_bytes,
         )
         .unwrap();
-
-        println!(
-            "  Results: search={:.2}ms [{:.2}, {:.2}] ({:.3} GB/s), tiling={:.2}ms ({:.3} GB/s), edlib={:.2}ms [{:.2}, {:.2}] ({:.3} GB/s) | n_matches: search={}, tiling={}, edlib={}",
-            search_results.median,
-            search_results.ci_lower,
-            search_results.ci_upper,
-            search_results.throughput_gbps,
-            tiling_results.median,
-            tiling_results.throughput_gbps,
-            edlib_results.median,
-            edlib_results.ci_lower,
-            edlib_results.ci_upper,
-            edlib_results.throughput_gbps,
-            search_results.n_matches,
-            tiling_results.n_matches,
-            edlib_results.n_matches
-        );
     }
 
     println!(

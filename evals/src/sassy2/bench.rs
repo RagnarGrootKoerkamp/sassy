@@ -1,7 +1,9 @@
+use edlib_rs::*;
+use sassy::EncodedPatterns;
 use sassy::Searcher;
 use sassy::profiles::Iupac;
+use std::fmt;
 use std::fs::File;
-use std::hint::black_box;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
@@ -14,8 +16,10 @@ use rayon::prelude::*;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use perfcnt::AbstractPerfCounter;
 
-const NO_IPC: f64 = 0.0;
-const USE_RC: bool = false; // Only applies to sassy1/2
+const NO_IPC: f64 = 0.0; // If IPC is not measured, we set it to 0.0
+const USE_RC: bool = false; // Only applies to sassy 1/2, just for testing not used via config
+const MIN_PATTERNS_PER_CHUNK: usize = 32; // For amd we do want to have at least 32 to pipeline two blocks
+const MIN_TEXT_BYTES_PER_CHUNK: usize = 1_000_000; // 1MB
 
 #[derive(Clone, Debug)]
 pub struct BenchmarkResults {
@@ -28,58 +32,57 @@ pub struct BenchmarkResults {
     pub ci_lower_throughput_gbps: f64,
     pub ci_upper_throughput_gbps: f64,
     pub n_matches: usize,
-    /// Instructions per cycle (median); Some(0.0) on platforms without perf counters.
     pub ipc: Option<f64>,
 }
 
-impl BenchmarkResults {
-    pub fn empty() -> Self {
-        Self {
-            median: 0.0,
-            mean: 0.0,
-            std_dev: 0.0,
-            ci_lower: 0.0,
-            ci_upper: 0.0,
-            throughput_gbps: 0.0,
-            ci_lower_throughput_gbps: 0.0,
-            ci_upper_throughput_gbps: 0.0,
-            n_matches: 0,
-            ipc: None,
+impl fmt::Display for BenchmarkResults {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{:8.2}ms  {:6.2} GB/s  {:>10} matches",
+            self.median, self.throughput_gbps, self.n_matches
+        )?;
+        if let Some(ipc) = self.ipc
+            && ipc > 0.0
+        {
+            write!(f, "  IPC: {:.2}", ipc)?;
         }
+        Ok(())
     }
 }
 
-fn benchmark_with_stats<F>(f: &mut F, warmup: usize, iterations: usize) -> (f64, f64, f64, f64, f64)
-where
-    F: FnMut(),
-{
-    for _ in 0..warmup {
-        f();
-    }
-
-    let mut times = Vec::with_capacity(iterations);
-    for _ in 0..iterations {
-        let start = Instant::now();
-        f();
-        times.push(start.elapsed().as_nanos() as f64 / 1_000_000.0);
-    }
-
-    times.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let median = times[times.len() / 2];
-    let mean = times.iter().sum::<f64>() / times.len() as f64;
-    let variance = times.iter().map(|t| (t - mean).powi(2)).sum::<f64>() / times.len() as f64;
-    let std_dev = variance.sqrt();
-
-    let n = iterations as f64;
-    let standard_error = std_dev / n.sqrt();
-    let z_score = 1.96;
-    let margin = z_score * standard_error;
-    let ci_lower = mean - margin;
-    let ci_upper = mean + margin;
-
-    (median, mean, std_dev, ci_lower, ci_upper)
+pub struct BenchmarkSuite {
+    pub search: BenchmarkResults,
+    pub tiling: BenchmarkResults,
+    pub edlib: BenchmarkResults,
 }
 
+impl fmt::Display for BenchmarkSuite {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "\n{:─<80}", "")?;
+        writeln!(f, "Benchmark Results")?;
+        writeln!(f, "{:─<80}", "")?;
+        writeln!(
+            f,
+            "{:<20} {:>10}  {:>12}  {:>12}",
+            "Tool", "Time", "Throughput", "Matches"
+        )?;
+        writeln!(f, "{:─<80}", "")?;
+        writeln!(f, "{:<20} {}", "Sassy Search", self.search)?;
+        writeln!(f, "{:<20} {}", "Sassy Tiling", self.tiling)?;
+        writeln!(f, "{:<20} {}", "Edlib", self.edlib)?;
+        writeln!(f, "{:─<80}", "")?;
+        Ok(())
+    }
+}
+
+impl fmt::Debug for BenchmarkSuite {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
+/// Runs a "work" function and gets median timings
 fn benchmark_with_stats_and_results<F, R>(
     f: &mut F,
     warmup: usize,
@@ -88,10 +91,12 @@ fn benchmark_with_stats_and_results<F, R>(
 where
     F: FnMut() -> R,
 {
+    // Do warmup if needed
     for _ in 0..warmup {
         f();
     }
 
+    // Run `iterations` times and get the median, mean, variance etc.
     let mut times = Vec::with_capacity(iterations);
     let mut results = Vec::with_capacity(iterations);
     for _ in 0..iterations {
@@ -117,6 +122,7 @@ where
     ((median, mean, std_dev, ci_lower, ci_upper), results)
 }
 
+/// Get the median IPC, as instructions / cycles
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn measure_ipc_median<F, R>(f: &mut F, iterations: usize) -> f64
 where
@@ -157,7 +163,7 @@ where
     ipc_values[ipc_values.len() / 2]
 }
 
-// If it's not linux we don't measure IPC and just return 0.0
+/// If not linux, we can't use perfcnt we just 0.0
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 fn measure_ipc_median<F, R>(f: &mut F, _iterations: usize) -> f64
 where
@@ -167,80 +173,290 @@ where
     NO_IPC
 }
 
-fn p_chunks<T: AsRef<[u8]>>(texts: &[T], boundaries: &[usize]) {
-    let total: usize = texts.iter().map(|t| t.as_ref().len()).sum();
-    let mut out = String::new();
-    let mut total_reads = 0;
-    for (i, w) in boundaries.windows(2).enumerate() {
-        let chunk_len: usize = texts[w[0]..w[1]].iter().map(|t| t.as_ref().len()).sum();
-        let perc = 100.0 * chunk_len as f64 / total as f64;
-        let n_reads = w[1] - w[0];
-        total_reads += n_reads;
-        out.push_str(&format!(
-            "chunk {} ({:.1}% nts) {} reads  ",
-            i, perc, n_reads
-        ));
-    }
-    assert_eq!(total_reads, texts.len());
-    println!("{}", out.trim_end());
-}
-
-fn balance_by_text_len<T: AsRef<[u8]>>(texts: &[T], threads: usize) -> Vec<usize> {
-    let n = texts.len();
-    if n == 0 {
-        return vec![];
-    }
-
-    // At least 1 at most n
-    let num_chunks = threads.clamp(1, n);
-
-    // Only 1, we just return boundary for entire text slice
-    if num_chunks == 1 {
-        return vec![0, n];
-    }
-
-    let mut cum = Vec::with_capacity(n + 1);
-    cum.push(0usize);
-    for t in texts {
-        cum.push(cum.last().unwrap() + t.as_ref().len());
-    }
-    let total = *cum.last().unwrap();
-    assert_eq!(total, texts.iter().map(|t| t.as_ref().len()).sum());
-    assert!(total > 0);
-
-    let mut boundaries = Vec::with_capacity(num_chunks + 1);
-    boundaries.push(0);
-
-    for k in 1..num_chunks {
-        let target = (total * k) / num_chunks;
-        // We find the index where the cumulative length is greater than or equal to our target
-        // length
-        let idx = match cum.binary_search_by(|&c| c.cmp(&target)) {
-            Ok(i) => i,
-            Err(i) => i,
-        };
-        boundaries.push(idx);
-    }
-
-    boundaries.push(n);
-    p_chunks(texts, &boundaries);
-    boundaries
-}
-
 fn calculate_throughput(total_bytes: usize, median_ms: f64) -> f64 {
     (total_bytes as f64 / (median_ms / 1000.0)) / 1_000_000_000.0
 }
 
-fn finish_results(
-    median: f64,
-    mean: f64,
-    std_dev: f64,
-    ci_lower: f64,
-    ci_upper: f64,
+/// (chunk_idx, pattern_start, pattern_end, text_start, text_end)
+type WorkChunk = (usize, usize, usize, usize, usize);
+
+/// Create work chunks based on pattern batches and text accumulation
+fn create_work_chunks<T: AsRef<[u8]>>(num_patterns: usize, texts: &[T]) -> Vec<WorkChunk> {
+    if num_patterns == 0 || texts.is_empty() {
+        return vec![];
+    }
+
+    let mut chunks = Vec::new();
+    let mut pattern_start = 0;
+    let mut chunk_idx = 0;
+
+    // Iterate over pattern batches (MIN_PATTERNS_PER_CHUNK)
+    while pattern_start < num_patterns {
+        let pattern_end = (pattern_start + MIN_PATTERNS_PER_CHUNK).min(num_patterns);
+
+        let mut text_start = 0;
+        while text_start < texts.len() {
+            let mut accumulated_bytes = 0;
+            let mut text_end = text_start;
+
+            // Accumulate texts until we hit MIN_TEXT_BYTES_PER_CHUNK or are done
+            while text_end < texts.len() && accumulated_bytes < MIN_TEXT_BYTES_PER_CHUNK {
+                accumulated_bytes += texts[text_end].as_ref().len();
+                text_end += 1;
+            }
+
+            // We always have to move forward here
+            if text_end == text_start {
+                text_end = text_start + 1;
+            }
+
+            chunks.push((chunk_idx, pattern_start, pattern_end, text_start, text_end));
+            text_start = text_end;
+        }
+
+        pattern_start = pattern_end;
+        chunk_idx += 1;
+    }
+
+    chunks
+}
+
+/// Trait for all tools to bench (prepare, search, new_worker)
+trait SearchTool: Send + Sync {
+    type PreparedData: Send + Sync;
+
+    /// Prepare/setup any data structures needed (like encoding patterns)
+    fn prepare(&self, queries: &[Vec<u8>]) -> Self::PreparedData;
+
+    /// Create a new worker instance for parallel execution
+    fn new_worker(&self) -> Self;
+
+    /// Execute search on pattern slice and text, return match count
+    /// chunk_idx indicates which pattern chunk this is (for accessing pre-encoded data)
+    fn search(
+        &mut self,
+        prepared: &Self::PreparedData,
+        chunk_idx: usize,
+        pattern_slice: &[Vec<u8>],
+        text: &[u8],
+        k: usize,
+    ) -> usize;
+}
+
+/// Sassy v1 - text tilling
+struct SassyV1;
+
+impl SearchTool for SassyV1 {
+    type PreparedData = ();
+
+    fn prepare(&self, _queries: &[Vec<u8>]) -> Self::PreparedData {}
+
+    fn new_worker(&self) -> Self {
+        SassyV1
+    }
+
+    #[inline(always)]
+    fn search(
+        &mut self,
+        _prepared: &Self::PreparedData,
+        _chunk_idx: usize,
+        pattern_slice: &[Vec<u8>],
+        text: &[u8],
+        k: usize,
+    ) -> usize {
+        let mut searcher = if USE_RC {
+            Searcher::<Iupac>::new_rc()
+        } else {
+            Searcher::<Iupac>::new_fwd()
+        };
+        let mut count = 0;
+        for pattern in pattern_slice {
+            count += searcher.search(pattern, text, k).len();
+        }
+        count
+    }
+}
+
+/// Sassy V2 - pattern tilling pre encoded patterns
+struct SassyV2;
+
+impl SearchTool for SassyV2 {
+    type PreparedData = Vec<EncodedPatterns<Iupac>>;
+
+    fn prepare(&self, queries: &[Vec<u8>]) -> Self::PreparedData {
+        // Pre-encode patterns for each pattern chunk
+        let mut encoded_chunks = Vec::new();
+        let mut pattern_start = 0;
+
+        while pattern_start < queries.len() {
+            let pattern_end = (pattern_start + MIN_PATTERNS_PER_CHUNK).min(queries.len());
+            let pattern_slice = &queries[pattern_start..pattern_end];
+
+            let mut searcher = if USE_RC {
+                Searcher::<Iupac>::new_rc()
+            } else {
+                Searcher::<Iupac>::new_fwd()
+            };
+            encoded_chunks.push(searcher.encode_patterns(pattern_slice));
+
+            pattern_start = pattern_end;
+        }
+
+        encoded_chunks
+    }
+
+    fn new_worker(&self) -> Self {
+        SassyV2
+    }
+
+    #[inline(always)]
+    fn search(
+        &mut self,
+        prepared: &Self::PreparedData,
+        chunk_idx: usize,
+        _pattern_slice: &[Vec<u8>],
+        text: &[u8],
+        k: usize,
+    ) -> usize {
+        let mut searcher = if USE_RC {
+            Searcher::<Iupac>::new_rc()
+        } else {
+            Searcher::<Iupac>::new_fwd()
+        };
+
+        // Use the pre-encoded patterns for this chunk
+        searcher
+            .search_encoded_patterns(&prepared[chunk_idx], text, k)
+            .len()
+    }
+}
+
+/// Edlib
+struct Edlib {
+    alphabet: Alphabet,
+}
+
+impl SearchTool for Edlib {
+    type PreparedData = EdlibAlignConfigRs<'static>;
+
+    fn prepare(&self, _queries: &[Vec<u8>]) -> Self::PreparedData {
+        get_edlib_config(0, &self.alphabet) // k will be set in search
+    }
+
+    fn new_worker(&self) -> Self {
+        Edlib {
+            alphabet: self.alphabet,
+        }
+    }
+
+    #[inline(always)]
+    fn search(
+        &mut self,
+        prepared: &Self::PreparedData,
+        _chunk_idx: usize,
+        pattern_slice: &[Vec<u8>],
+        text: &[u8],
+        k: usize,
+    ) -> usize {
+        let mut config = *prepared;
+        config.k = k as i32;
+
+        let mut count = 0;
+        for query in pattern_slice {
+            let result = run_edlib(query, text, &config);
+            if result.editDistance <= k as i32 && result.editDistance != -1 {
+                count += result.endLocations.unwrap_or_default().len();
+            }
+        }
+        count
+    }
+}
+
+/// Here we do all the benching given any Tool that impl SearchTool
+fn benchmark_tool<Tool, T>(
+    tool: Tool,
+    queries: &[Vec<u8>],
+    texts: &[T],
+    k: usize,
     total_bytes: usize,
-    n_matches: usize,
-    ipc: Option<f64>,
-) -> BenchmarkResults {
+    warmup: usize,
+    iterations: usize,
+    threads: usize,
+    log_label: &str,
+    measure_ipc: bool,
+) -> BenchmarkResults
+where
+    Tool: SearchTool,
+    T: AsRef<[u8]> + Send + Sync,
+{
+    println!(
+        "  {} ({} texts, {} threads)...",
+        log_label,
+        texts.len(),
+        threads.max(1)
+    );
+
+    let prepared = Arc::new(tool.prepare(queries));
+
+    let work_chunks = if threads > 1 {
+        create_work_chunks(queries.len(), texts)
+    } else {
+        vec![]
+    };
+
+    let mut do_work = || {
+        if threads <= 1 {
+            let mut worker = tool.new_worker();
+            let mut count = 0usize;
+            for text in texts {
+                count += worker.search(&*prepared, 0, queries, text.as_ref(), k);
+            }
+            count
+        } else {
+            if work_chunks.is_empty() {
+                return 0usize;
+            }
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            pool.install(|| {
+                work_chunks
+                    .par_iter()
+                    .map(|&(chunk_idx, pat_start, pat_end, text_start, text_end)| {
+                        let mut worker = tool.new_worker();
+                        let prepared = Arc::clone(&prepared);
+                        let mut count = 0usize;
+                        let pattern_slice = &queries[pat_start..pat_end];
+                        for text in &texts[text_start..text_end] {
+                            count += worker.search(
+                                &*prepared,
+                                chunk_idx,
+                                pattern_slice,
+                                text.as_ref(),
+                                k,
+                            );
+                        }
+                        count
+                    })
+                    .sum()
+            })
+        }
+    };
+
+    let ((median, mean, std_dev, ci_lower, ci_upper), match_counts) =
+        benchmark_with_stats_and_results(&mut do_work, warmup, iterations);
+
+    // not used for the expensive benches (Nanopore, off-target) anyway so we can just run this for the
+    // `cheap` benches separate
+    let ipc = if measure_ipc {
+        Some(measure_ipc_median(&mut do_work, iterations))
+    } else {
+        None
+    };
+
+    let n_matches = match_counts.first().copied().unwrap_or(0);
+
     let throughput_gbps = calculate_throughput(total_bytes, median);
     let ci_lower_throughput_gbps = calculate_throughput(total_bytes, ci_upper);
     let ci_upper_throughput_gbps = calculate_throughput(total_bytes, ci_lower);
@@ -258,492 +474,81 @@ fn finish_results(
     }
 }
 
-pub fn benchmark_individual_search(
+/// Call this do to a single bench run across sassy v1, sassy v2, and edlib
+#[allow(clippy::too_many_arguments)]
+pub fn benchmark_tools<T>(
     queries: &[Vec<u8>],
-    text: &[u8],
+    texts: &[T],
     k: usize,
-    total_bytes: usize,
-    warmup: usize,
-    iterations: usize,
-    log_label: &str,
-    measure_ipc: bool,
-) -> BenchmarkResults {
-    println!("  {} sassy search...", log_label);
-
-    let mut searcher = if USE_RC {
-        Searcher::<Iupac>::new_rc()
-    } else {
-        Searcher::<Iupac>::new_fwd()
-    };
-
-    let mut do_work = || {
-        for query in queries {
-            black_box(query);
-            let _matches = searcher.search(query, text, k);
-            black_box(_matches);
-        }
-    };
-
-    let (median, mean, std_dev, ci_lower, ci_upper) =
-        benchmark_with_stats(&mut do_work, warmup, iterations);
-
-    let ipc = if measure_ipc {
-        Some(measure_ipc_median(&mut do_work, iterations))
-    } else {
-        None
-    };
-
-    let n_matches = {
-        let mut total = 0usize;
-        for query in queries {
-            let matches = searcher.search(query, text, k);
-            total += matches.len();
-        }
-        total
-    };
-
-    finish_results(
-        median,
-        mean,
-        std_dev,
-        ci_lower,
-        ci_upper,
-        total_bytes,
-        n_matches,
-        ipc,
-    )
-}
-
-pub fn benchmark_patterns(
-    queries: &[Vec<u8>],
-    text: &[u8],
-    k: usize,
-    total_bytes: usize,
-    warmup: usize,
-    iterations: usize,
-    log_label: &str,
-    measure_ipc: bool,
-) -> BenchmarkResults {
-    println!("  {} sassy patterns...", log_label);
-
-    let mut searcher = if USE_RC {
-        Searcher::<Iupac>::new_rc()
-    } else {
-        Searcher::<Iupac>::new_fwd()
-    };
-
-    let mut do_work = || {
-        let _matches = searcher.search_patterns(queries, text, k);
-        black_box(_matches);
-    };
-
-    let (median, mean, std_dev, ci_lower, ci_upper) =
-        benchmark_with_stats(&mut do_work, warmup, iterations);
-
-    let ipc = if measure_ipc {
-        Some(measure_ipc_median(&mut do_work, iterations))
-    } else {
-        None
-    };
-
-    let n_matches = searcher.search_patterns(queries, text, k).len();
-
-    finish_results(
-        median,
-        mean,
-        std_dev,
-        ci_lower,
-        ci_upper,
-        total_bytes,
-        n_matches,
-        ipc,
-    )
-}
-
-pub fn benchmark_tiling(
-    queries: &[Vec<u8>],
-    text: &[u8],
-    k: usize,
-    total_bytes: usize,
-    warmup: usize,
-    iterations: usize,
-    log_label: &str,
-    measure_ipc: bool,
-) -> BenchmarkResults {
-    println!("  {} sassy tiling...", log_label);
-
-    let mut searcher = if USE_RC {
-        Searcher::<Iupac>::new_rc()
-    } else {
-        Searcher::<Iupac>::new_fwd()
-    };
-
-    let encoded = searcher.encode_patterns(queries);
-    let mut do_work = || {
-        let _matches = searcher.search_encoded_patterns(&encoded, text, k);
-        black_box(_matches);
-    };
-
-    let (median, mean, std_dev, ci_lower, ci_upper) =
-        benchmark_with_stats(&mut do_work, warmup, iterations);
-
-    let ipc = if measure_ipc {
-        Some(measure_ipc_median(&mut do_work, iterations))
-    } else {
-        None
-    };
-
-    let n_matches = searcher.search_encoded_patterns(&encoded, text, k).len();
-
-    finish_results(
-        median,
-        mean,
-        std_dev,
-        ci_lower,
-        ci_upper,
-        total_bytes,
-        n_matches,
-        ipc,
-    )
-}
-
-pub fn benchmark_edlib(
-    queries: &[Vec<u8>],
-    text: &[u8],
-    k: usize,
-    total_bytes: usize,
-    warmup: usize,
-    iterations: usize,
-    alphabet: &Alphabet,
-    log_label: &str,
-    measure_ipc: bool,
-) -> BenchmarkResults {
-    println!("  {} edlib...", log_label);
-
-    let edlib_config = get_edlib_config(k as i32, alphabet);
-    let mut do_work = || {
-        for query in queries {
-            black_box(query);
-            let _result = run_edlib(query, text, &edlib_config);
-            black_box(_result);
-        }
-    };
-
-    let (median, mean, std_dev, ci_lower, ci_upper) =
-        benchmark_with_stats(&mut do_work, warmup, iterations);
-
-    let ipc = if measure_ipc {
-        Some(measure_ipc_median(&mut do_work, iterations))
-    } else {
-        None
-    };
-
-    let n_matches = queries
-        .iter()
-        .filter(|q| {
-            let result = run_edlib(q, text, &edlib_config);
-            result.editDistance <= k as i32 && result.editDistance != -1
-        })
-        .count();
-
-    finish_results(
-        median,
-        mean,
-        std_dev,
-        ci_lower,
-        ci_upper,
-        total_bytes,
-        n_matches,
-        ipc,
-    )
-}
-
-pub fn benchmark_individual_search_many_texts(
-    queries: &[Vec<u8>],
-    texts: &[impl AsRef<[u8]> + Send + Sync],
-    k: usize,
-    total_bytes: usize,
-    warmup: usize,
-    iterations: usize,
-    threads: usize,
-    log_label: &str,
-    measure_ipc: bool,
-) -> BenchmarkResults {
-    println!(
-        "  {} sassy search ({} texts, {} threads)...",
-        log_label,
-        texts.len(),
-        threads.max(1)
-    );
-
-    let mut searcher = if USE_RC {
-        Searcher::<Iupac>::new_rc()
-    } else {
-        Searcher::<Iupac>::new_fwd()
-    };
-
-    let boundaries = if threads > 1 {
-        balance_by_text_len(texts, threads)
-    } else {
-        vec![]
-    };
-
-    let mut do_work = || {
-        if threads <= 1 {
-            let mut count = 0usize;
-            for text in texts {
-                let t = text.as_ref();
-                for query in queries {
-                    count += searcher.search(query, t, k).len();
-                }
-            }
-            count
-        } else {
-            let num_chunks = boundaries.len().saturating_sub(1);
-            if num_chunks == 0 {
-                return 0usize;
-            }
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(threads)
-                .build()
-                .unwrap();
-            pool.install(|| {
-                (0..num_chunks)
-                    .into_par_iter()
-                    .map(|j| {
-                        let chunk = &texts[boundaries[j]..boundaries[j + 1]];
-                        let mut worker = if USE_RC {
-                            Searcher::<Iupac>::new_rc()
-                        } else {
-                            Searcher::<Iupac>::new_fwd()
-                        };
-                        let mut count = 0usize;
-                        for text in chunk {
-                            let t = text.as_ref();
-                            for query in queries {
-                                count += worker.search(query, t, k).len();
-                            }
-                        }
-                        count
-                    })
-                    .sum()
-            })
-        }
-    };
-
-    let ((median, mean, std_dev, ci_lower, ci_upper), match_counts) =
-        benchmark_with_stats_and_results(&mut do_work, warmup, iterations);
-
-    let ipc = if measure_ipc {
-        Some(measure_ipc_median(&mut do_work, iterations))
-    } else {
-        None
-    };
-
-    let n_matches = match_counts.first().copied().unwrap_or(0);
-
-    finish_results(
-        median,
-        mean,
-        std_dev,
-        ci_lower,
-        ci_upper,
-        total_bytes,
-        n_matches,
-        ipc,
-    )
-}
-
-pub fn benchmark_tiling_many_texts(
-    queries: &[Vec<u8>],
-    texts: &[impl AsRef<[u8]> + Send + Sync],
-    k: usize,
-    total_bytes: usize,
-    warmup: usize,
-    iterations: usize,
-    threads: usize,
-    log_label: &str,
-    measure_ipc: bool,
-) -> BenchmarkResults {
-    println!(
-        "  {} sassy tiling ({} texts, {} threads)...",
-        log_label,
-        texts.len(),
-        threads.max(1)
-    );
-
-    let mut searcher = if USE_RC {
-        Searcher::<Iupac>::new_rc()
-    } else {
-        Searcher::<Iupac>::new_fwd()
-    };
-
-    let encoded = Arc::new(searcher.encode_patterns(queries));
-    let boundaries = if threads > 1 {
-        balance_by_text_len(texts, threads)
-    } else {
-        vec![]
-    };
-
-    let mut do_work = || {
-        if threads <= 1 {
-            let mut count = 0usize;
-            for text in texts {
-                count += searcher
-                    .search_encoded_patterns(&*encoded, text.as_ref(), k)
-                    .len();
-            }
-            count
-        } else {
-            let num_chunks = boundaries.len().saturating_sub(1);
-            if num_chunks == 0 {
-                return 0usize;
-            }
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(threads)
-                .build()
-                .unwrap();
-            pool.install(|| {
-                (0..num_chunks)
-                    .into_par_iter()
-                    .map(|j| {
-                        let chunk = &texts[boundaries[j]..boundaries[j + 1]];
-                        let encoded = Arc::clone(&encoded);
-                        let mut worker = if USE_RC {
-                            Searcher::<Iupac>::new_rc()
-                        } else {
-                            Searcher::<Iupac>::new_fwd()
-                        };
-                        let mut count = 0usize;
-                        for text in chunk {
-                            count += worker
-                                .search_encoded_patterns(&*encoded, text.as_ref(), k)
-                                .len();
-                        }
-                        count
-                    })
-                    .sum()
-            })
-        }
-    };
-
-    let ((median, mean, std_dev, ci_lower, ci_upper), match_counts) =
-        benchmark_with_stats_and_results(&mut do_work, warmup, iterations);
-
-    let ipc = if measure_ipc {
-        Some(measure_ipc_median(&mut do_work, iterations))
-    } else {
-        None
-    };
-
-    let n_matches = match_counts.first().copied().unwrap_or(0);
-
-    finish_results(
-        median,
-        mean,
-        std_dev,
-        ci_lower,
-        ci_upper,
-        total_bytes,
-        n_matches,
-        ipc,
-    )
-}
-
-pub fn benchmark_edlib_many_texts(
-    queries: &[Vec<u8>],
-    texts: &[impl AsRef<[u8]> + Send + Sync],
-    k: usize,
-    total_bytes: usize,
     warmup: usize,
     iterations: usize,
     threads: usize,
     alphabet: &Alphabet,
-    log_label: &str,
     measure_ipc: bool,
-) -> BenchmarkResults {
+) -> BenchmarkSuite
+where
+    T: AsRef<[u8]> + Send + Sync,
+{
+    // We consider the total throughput the text * number of patterns as if
+    // each pattern entirely scans the text (like in v1, and edlib, but not in v2 really)
+    let text_bytes: usize = texts.iter().map(|t| t.as_ref().len()).sum();
+    let total_bytes = text_bytes * queries.len();
+
     println!(
-        "  {} edlib ({} texts, {} threads)...",
-        log_label,
+        "Benchmarking with {} queries, {} texts ({} text bytes, {} total throughput bytes), k={}",
+        queries.len(),
         texts.len(),
-        threads.max(1)
+        text_bytes,
+        total_bytes,
+        k
     );
 
-    let edlib_config = Arc::new(get_edlib_config(k as i32, alphabet));
-    let boundaries = if threads > 1 {
-        balance_by_text_len(texts, threads)
-    } else {
-        vec![]
-    };
-
-    let mut do_work = || {
-        if threads <= 1 {
-            let mut count = 0usize;
-            for text in texts {
-                let t = text.as_ref();
-                for query in queries {
-                    let result = run_edlib(query, t, &*edlib_config);
-                    if result.editDistance <= k as i32 && result.editDistance != -1 {
-                        // Might have multiple end points with same lowest k, so get
-                        // len(end locs)
-                        count += result.endLocations.unwrap_or_default().len() as usize;
-                    }
-                }
-            }
-            count
-        } else {
-            let num_chunks = boundaries.len().saturating_sub(1);
-            if num_chunks == 0 {
-                return 0usize;
-            }
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(threads)
-                .build()
-                .unwrap();
-            pool.install(|| {
-                (0..num_chunks)
-                    .into_par_iter()
-                    .map(|j| {
-                        let chunk = &texts[boundaries[j]..boundaries[j + 1]];
-                        let config = Arc::clone(&edlib_config);
-                        let mut count = 0usize;
-                        for text in chunk {
-                            let t = text.as_ref();
-                            for query in queries {
-                                let result = run_edlib(query, t, &*config);
-                                if result.editDistance <= k as i32 && result.editDistance != -1 {
-                                    count += result.endLocations.unwrap_or_default().len() as usize;
-                                }
-                            }
-                        }
-                        count
-                    })
-                    .sum()
-            })
-        }
-    };
-
-    let ((median, mean, std_dev, ci_lower, ci_upper), match_counts) =
-        benchmark_with_stats_and_results(&mut do_work, warmup, iterations);
-
-    let ipc = if measure_ipc {
-        Some(measure_ipc_median(&mut do_work, iterations))
-    } else {
-        None
-    };
-
-    let n_matches = match_counts.first().copied().unwrap_or(0);
-
-    finish_results(
-        median,
-        mean,
-        std_dev,
-        ci_lower,
-        ci_upper,
+    let search = benchmark_tool(
+        SassyV1,
+        queries,
+        texts,
+        k,
         total_bytes,
-        n_matches,
-        ipc,
-    )
+        warmup,
+        iterations,
+        threads,
+        "Sassy V1",
+        measure_ipc,
+    );
+
+    let tiling = benchmark_tool(
+        SassyV2,
+        queries,
+        texts,
+        k,
+        total_bytes,
+        warmup,
+        iterations,
+        threads,
+        "Sassy V2",
+        measure_ipc,
+    );
+
+    let edlib = benchmark_tool(
+        Edlib {
+            alphabet: *alphabet,
+        },
+        queries,
+        texts,
+        k,
+        total_bytes,
+        warmup,
+        iterations,
+        threads,
+        "Edlib",
+        measure_ipc,
+    );
+
+    BenchmarkSuite {
+        search,
+        tiling,
+        edlib,
+    }
 }
 
 pub const BENCH_CSV_HEADER: &str = "search_median_ms,search_mean_ms,search_std_ms,search_ci_lower_ms,search_ci_upper_ms,search_n_matches,tiling_median_ms,tiling_mean_ms,tiling_std_ms,tiling_ci_lower_ms,tiling_ci_upper_ms,tiling_n_matches,edlib_median_ms,edlib_mean_ms,edlib_std_ms,edlib_ci_lower_ms,edlib_ci_upper_ms,edlib_n_matches,search_ipc,tiling_ipc,edlib_ipc,search_throughput_gbps,search_ci_lower_throughput_gbps,search_ci_upper_throughput_gbps,tiling_throughput_gbps,tiling_ci_lower_throughput_gbps,tiling_ci_upper_throughput_gbps,edlib_throughput_gbps,edlib_ci_lower_throughput_gbps,edlib_ci_upper_throughput_gbps,throughput_bytes";
@@ -763,17 +568,20 @@ impl BenchCsv {
         Ok(Self { file })
     }
 
+    // fixme: this is aaa lot of columns
     pub fn write_row(
         &mut self,
         num_queries: usize,
         target_len: usize,
         query_len: usize,
         k: usize,
-        search: &BenchmarkResults,
-        tiling: &BenchmarkResults,
-        edlib: &BenchmarkResults,
+        suite: &BenchmarkSuite,
         total_bytes: usize,
     ) -> std::io::Result<()> {
+        let search = &suite.search;
+        let tiling = &suite.tiling;
+        let edlib = &suite.edlib;
+
         writeln!(
             self.file,
             "{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{},{:.3},{:.3},{:.3},{:.3},{:.3},{},{:.3},{:.3},{:.3},{:.3},{:.3},{},{:.2},{:.2},{:.2},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{}",

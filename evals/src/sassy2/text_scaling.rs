@@ -51,75 +51,28 @@ pub fn run(config_path: &str) {
 
         let total_bytes = config.text_len * num_queries;
 
-        // Run benchmarks (with IPC measurement for text_scaling)
-        let search_results = bench::benchmark_individual_search(
+        let suite = bench::benchmark_tools(
             &queries,
-            &text,
+            &[text.clone()],
             config.k,
-            total_bytes,
             config.warmup_iterations,
             config.iterations,
-            "Warming up",
+            1,
+            &Alphabet::Iupac,
             true,
         );
 
-        let tiling_results = bench::benchmark_tiling(
-            &queries,
-            &text,
-            config.k,
-            total_bytes,
-            config.warmup_iterations,
-            config.iterations,
-            "Warming up",
-            true,
-        );
-
-        let edlib_results = if config.run_edlib {
-            let alphabet = match config.edlib_alphabet.as_str() {
-                "dna" => Alphabet::Dna,
-                "iupac" => Alphabet::Iupac,
-                _ => panic!("Unsupported edlib alphabet: {}", config.edlib_alphabet),
-            };
-
-            bench::benchmark_edlib(
-                &queries,
-                &text,
-                config.k,
-                total_bytes,
-                config.warmup_iterations,
-                config.iterations,
-                &alphabet,
-                "Warming up",
-                true,
-            )
-        } else {
-            bench::BenchmarkResults::empty()
-        };
+        println!("{}", &suite);
 
         csv.write_row(
             num_queries,
             config.text_len,
             config.query_len,
             config.k,
-            &search_results,
-            &tiling_results,
-            &edlib_results,
+            &suite,
             total_bytes,
         )
         .unwrap();
-
-        println!(
-            "  Results: search={:.2}ms [{:.2}, {:.2}], tiling={:.2}ms [{:.2}, {:.2}] | n_matches: search={}, tiling={}, edlib={}",
-            search_results.median,
-            search_results.ci_lower,
-            search_results.ci_upper,
-            tiling_results.median,
-            tiling_results.ci_lower,
-            tiling_results.ci_upper,
-            search_results.n_matches,
-            tiling_results.n_matches,
-            edlib_results.n_matches
-        );
     }
 
     println!(
