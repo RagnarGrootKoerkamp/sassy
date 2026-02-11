@@ -11,8 +11,6 @@ struct Config {
     iterations: usize,
     warmup_iterations: usize,
     output_file: String,
-    run_edlib: bool,
-    edlib_alphabet: String,
     barcode_file: String,
     /// Number of threads for parallel many-texts benchmarks (1 = sequential).
     #[serde(default = "default_threads")]
@@ -61,10 +59,7 @@ pub fn run(config_path: &str) {
     let reads = load_reads(&config.read_file);
 
     let total_text_len: usize = reads.iter().map(|r| r.len()).sum();
-    let total_bytes = reads
-        .iter()
-        .map(|r| r.len() * barcodes.len())
-        .sum::<usize>();
+    let total_bytes = total_text_len;
     let query_len: usize = barcodes.first().map(|b| b.len()).unwrap_or(0);
 
     println!(

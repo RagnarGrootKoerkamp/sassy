@@ -2,6 +2,7 @@ use edlib_rs::*;
 use sassy::EncodedPatterns;
 use sassy::Searcher;
 use sassy::profiles::Iupac;
+use std::cell::RefCell;
 use std::fmt;
 use std::fs::File;
 use std::io::Write;
@@ -18,8 +19,8 @@ use perfcnt::AbstractPerfCounter;
 
 const NO_IPC: f64 = 0.0; // If IPC is not measured, we set it to 0.0
 const USE_RC: bool = false; // Only applies to sassy 1/2, just for testing not used via config
-const MIN_PATTERNS_PER_CHUNK: usize = 32; // For amd we do want to have at least 32 to pipeline two blocks
-const MIN_TEXT_BYTES_PER_CHUNK: usize = 1_000_000; // 1MB
+const MIN_PATTERNS_PER_CHUNK: usize = 64; // For amd we do want to have at least 32 to pipeline two blocks when k = 3
+const MIN_TEXT_BYTES_PER_CHUNK: usize = 10_000_000; // 1MB
 
 #[derive(Clone, Debug)]
 pub struct BenchmarkResults {
@@ -177,48 +178,45 @@ fn calculate_throughput(total_bytes: usize, median_ms: f64) -> f64 {
     (total_bytes as f64 / (median_ms / 1000.0)) / 1_000_000_000.0
 }
 
-/// (chunk_idx, pattern_start, pattern_end, text_start, text_end)
-type WorkChunk = (usize, usize, usize, usize, usize);
-
-/// Create work chunks based on pattern batches and text accumulation
-fn create_work_chunks<T: AsRef<[u8]>>(num_patterns: usize, texts: &[T]) -> Vec<WorkChunk> {
-    if num_patterns == 0 || texts.is_empty() {
-        return vec![];
-    }
-
+fn create_pattern_chunks(num_patterns: usize) -> Vec<(usize, usize, usize)> {
     let mut chunks = Vec::new();
     let mut pattern_start = 0;
     let mut chunk_idx = 0;
 
-    // Iterate over pattern batches (MIN_PATTERNS_PER_CHUNK)
     while pattern_start < num_patterns {
         let pattern_end = (pattern_start + MIN_PATTERNS_PER_CHUNK).min(num_patterns);
-
-        let mut text_start = 0;
-        while text_start < texts.len() {
-            let mut accumulated_bytes = 0;
-            let mut text_end = text_start;
-
-            // Accumulate texts until we hit MIN_TEXT_BYTES_PER_CHUNK or are done
-            while text_end < texts.len() && accumulated_bytes < MIN_TEXT_BYTES_PER_CHUNK {
-                accumulated_bytes += texts[text_end].as_ref().len();
-                text_end += 1;
-            }
-
-            // We always have to move forward here
-            if text_end == text_start {
-                text_end = text_start + 1;
-            }
-
-            chunks.push((chunk_idx, pattern_start, pattern_end, text_start, text_end));
-            text_start = text_end;
-        }
-
+        chunks.push((chunk_idx, pattern_start, pattern_end));
         pattern_start = pattern_end;
         chunk_idx += 1;
     }
 
     chunks
+}
+
+fn create_text_groups<T: AsRef<[u8]>>(texts: &[T]) -> Vec<(usize, usize)> {
+    let mut groups = Vec::new();
+    let mut text_start = 0;
+
+    while text_start < texts.len() {
+        let mut accumulated_bytes = 0;
+        let mut text_end = text_start;
+
+        // Accumulate texts until we hit MIN_TEXT_BYTES_PER_CHUNK or are done
+        while text_end < texts.len() && accumulated_bytes < MIN_TEXT_BYTES_PER_CHUNK {
+            accumulated_bytes += texts[text_end].as_ref().len();
+            text_end += 1;
+        }
+
+        // We always have to move forward here
+        if text_end == text_start {
+            text_end = text_start + 1;
+        }
+
+        groups.push((text_start, text_end));
+        text_start = text_end;
+    }
+
+    groups
 }
 
 /// Trait for all tools to bench (prepare, search, new_worker)
@@ -244,7 +242,9 @@ trait SearchTool: Send + Sync {
 }
 
 /// Sassy v1 - text tilling
-struct SassyV1;
+struct SassyV1 {
+    searcher: Searcher<Iupac>,
+}
 
 impl SearchTool for SassyV1 {
     type PreparedData = ();
@@ -252,7 +252,13 @@ impl SearchTool for SassyV1 {
     fn prepare(&self, _queries: &[Vec<u8>]) -> Self::PreparedData {}
 
     fn new_worker(&self) -> Self {
-        SassyV1
+        SassyV1 {
+            searcher: if USE_RC {
+                Searcher::<Iupac>::new_rc()
+            } else {
+                Searcher::<Iupac>::new_fwd()
+            },
+        }
     }
 
     #[inline(always)]
@@ -264,21 +270,18 @@ impl SearchTool for SassyV1 {
         text: &[u8],
         k: usize,
     ) -> usize {
-        let mut searcher = if USE_RC {
-            Searcher::<Iupac>::new_rc()
-        } else {
-            Searcher::<Iupac>::new_fwd()
-        };
         let mut count = 0;
         for pattern in pattern_slice {
-            count += searcher.search(pattern, text, k).len();
+            count += self.searcher.search(pattern, text, k).len();
         }
         count
     }
 }
 
 /// Sassy V2 - pattern tilling pre encoded patterns
-struct SassyV2;
+struct SassyV2 {
+    searcher: Searcher<Iupac>,
+}
 
 impl SearchTool for SassyV2 {
     type PreparedData = Vec<EncodedPatterns<Iupac>>;
@@ -306,7 +309,13 @@ impl SearchTool for SassyV2 {
     }
 
     fn new_worker(&self) -> Self {
-        SassyV2
+        SassyV2 {
+            searcher: if USE_RC {
+                Searcher::<Iupac>::new_rc()
+            } else {
+                Searcher::<Iupac>::new_fwd()
+            },
+        }
     }
 
     #[inline(always)]
@@ -318,14 +327,7 @@ impl SearchTool for SassyV2 {
         text: &[u8],
         k: usize,
     ) -> usize {
-        let mut searcher = if USE_RC {
-            Searcher::<Iupac>::new_rc()
-        } else {
-            Searcher::<Iupac>::new_fwd()
-        };
-
-        // Use the pre-encoded patterns for this chunk
-        searcher
+        self.searcher
             .search_encoded_patterns(&prepared[chunk_idx], text, k)
             .len()
     }
@@ -386,7 +388,7 @@ fn benchmark_tool<Tool, T>(
     measure_ipc: bool,
 ) -> BenchmarkResults
 where
-    Tool: SearchTool,
+    Tool: SearchTool + 'static,
     T: AsRef<[u8]> + Send + Sync,
 {
     println!(
@@ -398,49 +400,79 @@ where
 
     let prepared = Arc::new(tool.prepare(queries));
 
-    let work_chunks = if threads > 1 {
-        create_work_chunks(queries.len(), texts)
+    // We do this once prior to benching so it does not affect the algos themselves
+    let pattern_chunks = create_pattern_chunks(queries.len());
+    let text_groups = create_text_groups(texts);
+
+    // Re-used threadpool
+    let pool = if threads > 1 {
+        Some(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("Failed to create thread pool"),
+        )
     } else {
-        vec![]
+        None
     };
 
     let mut do_work = || {
-        if threads <= 1 {
+        if let Some(ref pool) = pool {
+            pool.install(|| {
+                thread_local! {
+                    static WORKER: RefCell<Option<Box<dyn std::any::Any>>> = RefCell::new(None);
+                }
+
+                let work_items: Vec<_> = pattern_chunks
+                    .iter()
+                    .flat_map(|&(chunk_idx, pat_start, pat_end)| {
+                        text_groups.iter().map(move |&(text_start, text_end)| {
+                            (chunk_idx, pat_start, pat_end, text_start, text_end)
+                        })
+                    })
+                    .collect();
+
+                work_items
+                    .par_iter()
+                    .map(|&(chunk_idx, pat_start, pat_end, text_start, text_end)| {
+                        WORKER.with(|worker_cell| {
+                            let mut worker_ref = worker_cell.borrow_mut();
+
+                            // Initialize worker on first use in this thread
+                            if worker_ref.is_none() {
+                                *worker_ref =
+                                    Some(Box::new(tool.new_worker()) as Box<dyn std::any::Any>);
+                            }
+                            // fixme: we so much for this?
+                            let worker = worker_ref
+                                .as_mut()
+                                .unwrap()
+                                .downcast_mut::<Tool>()
+                                .expect("Worker type mismatch");
+
+                            let mut count = 0usize;
+                            let pattern_slice = &queries[pat_start..pat_end];
+                            for text in &texts[text_start..text_end] {
+                                count += worker.search(
+                                    &*prepared,
+                                    chunk_idx,
+                                    pattern_slice,
+                                    text.as_ref(),
+                                    k,
+                                );
+                            }
+                            count
+                        })
+                    })
+                    .sum()
+            })
+        } else {
             let mut worker = tool.new_worker();
             let mut count = 0usize;
             for text in texts {
                 count += worker.search(&*prepared, 0, queries, text.as_ref(), k);
             }
             count
-        } else {
-            if work_chunks.is_empty() {
-                return 0usize;
-            }
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(threads)
-                .build()
-                .unwrap();
-            pool.install(|| {
-                work_chunks
-                    .par_iter()
-                    .map(|&(chunk_idx, pat_start, pat_end, text_start, text_end)| {
-                        let mut worker = tool.new_worker();
-                        let prepared = Arc::clone(&prepared);
-                        let mut count = 0usize;
-                        let pattern_slice = &queries[pat_start..pat_end];
-                        for text in &texts[text_start..text_end] {
-                            count += worker.search(
-                                &*prepared,
-                                chunk_idx,
-                                pattern_slice,
-                                text.as_ref(),
-                                k,
-                            );
-                        }
-                        count
-                    })
-                    .sum()
-            })
         }
     };
 
@@ -504,7 +536,13 @@ where
     );
 
     let search = benchmark_tool(
-        SassyV1,
+        SassyV1 {
+            searcher: if USE_RC {
+                Searcher::<Iupac>::new_rc()
+            } else {
+                Searcher::<Iupac>::new_fwd()
+            },
+        },
         queries,
         texts,
         k,
@@ -517,7 +555,13 @@ where
     );
 
     let tiling = benchmark_tool(
-        SassyV2,
+        SassyV2 {
+            searcher: if USE_RC {
+                Searcher::<Iupac>::new_rc()
+            } else {
+                Searcher::<Iupac>::new_fwd()
+            },
+        },
         queries,
         texts,
         k,

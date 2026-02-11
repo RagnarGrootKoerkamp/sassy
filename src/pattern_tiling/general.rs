@@ -4,7 +4,6 @@ use crate::pattern_tiling::tqueries::TQueries;
 use crate::pattern_tiling::trace::{TracePostProcess, trace_batch_ranges};
 use crate::profiles::Profile;
 use crate::search::Match;
-use pa_types::Cost;
 
 // If AVX-512 is available, we want to use the 512-bit backends instead of the default 256-bit ones.
 // This allows processing twice as many patterns in parallel.

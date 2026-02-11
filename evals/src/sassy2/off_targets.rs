@@ -12,8 +12,6 @@ struct Config {
     warmup_iterations: usize,
     output_file: String,
     ks: Vec<usize>,
-    run_edlib: Option<bool>,
-    edlib_alphabet: Option<String>,
 }
 
 fn load_guide_sequences(path: &str) -> Vec<Vec<u8>> {
@@ -47,9 +45,6 @@ pub fn run(config_path: &str) {
     let toml_str = fs::read_to_string(config_path).unwrap();
     let config: Config = toml::from_str(&toml_str).unwrap();
 
-    let run_edlib = config.run_edlib.unwrap_or(false);
-    let edlib_alphabet = config.edlib_alphabet.as_deref().unwrap_or("iupac");
-
     println!("Running off-target search benchmark");
     println!("Config: {:?}", config_path);
     println!("Guides: {}", config.guide_file);
@@ -78,7 +73,7 @@ pub fn run(config_path: &str) {
         panic!("Empty chromosome from {}", config.genome_file);
     }
 
-    let total_bytes = chromosome.len() * guides.len();
+    let total_bytes = chromosome.len();
     let same_length = guides_same_length(&guides);
     if !same_length {
         println!("  Note: guides have mixed lengths; tiling benchmark skipped (zeros written).");
