@@ -2,7 +2,7 @@
 target_lens = [50, 100, 250, 500, 1000, 10000]
 query_lens = [23]
 ks = [0, 3, 4]
-iterations = 1000
+min_benchtime = 10.0  # min seconds per tool
 warmup_iterations = 5
 n_queries = 128
 output_file = "evals/src/sassy2/output/pattern_scaling_results.csv"

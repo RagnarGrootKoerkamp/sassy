@@ -11,7 +11,7 @@ struct Config {
     text_len: usize,
     k: usize,
     num_queries_list: Vec<usize>,
-    iterations: usize,
+    min_benchtime: f64,
     warmup_iterations: usize,
     output_file: String,
     run_edlib: bool,
@@ -26,7 +26,7 @@ pub fn run(config_path: &str) {
     println!("Config: {:?}", config_path);
     println!("Output: {}", config.output_file);
     println!("Warmup iterations: {}", config.warmup_iterations);
-    println!("Measurement iterations: {}", config.iterations);
+    println!("Min bench time: {} s", config.min_benchtime);
     println!();
 
     // Generate text
@@ -56,7 +56,7 @@ pub fn run(config_path: &str) {
             &[text.clone()],
             config.k,
             config.warmup_iterations,
-            config.iterations,
+            config.min_benchtime,
             1,
             &Alphabet::Iupac,
             true,

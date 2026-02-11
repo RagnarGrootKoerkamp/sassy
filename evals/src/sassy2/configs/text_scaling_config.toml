@@ -2,7 +2,7 @@
 query_len = 23
 text_len = 100000
 k = 3
-iterations = 1000
+min_benchtime = 10.0  # min seconds per tool
 output_file = "evals/src/sassy2/output/text_scaling_results.csv"
 num_queries_list = [1, 2, 4, 8, 16, 32, 48,64, 96, 128]
 run_edlib = true

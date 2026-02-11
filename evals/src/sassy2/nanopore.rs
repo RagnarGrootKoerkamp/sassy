@@ -8,7 +8,7 @@ use std::fs;
 struct Config {
     read_file: String,
     ks: Vec<usize>,
-    iterations: usize,
+    min_benchtime: f64,
     warmup_iterations: usize,
     output_file: String,
     barcode_file: String,
@@ -50,8 +50,8 @@ pub fn run(config_path: &str) {
     println!("Output: {}", config.output_file);
     println!("K values: {:?}", config.ks);
     println!(
-        "Warmup: {}, iterations: {}, threads: {}",
-        config.warmup_iterations, config.iterations, config.threads
+        "Warmup: {}, min_benchtime: {} s, threads: {}",
+        config.warmup_iterations, config.min_benchtime, config.threads
     );
     println!();
 
@@ -86,7 +86,7 @@ pub fn run(config_path: &str) {
             &reads,
             k,
             config.warmup_iterations,
-            config.iterations,
+            config.min_benchtime,
             config.threads,
             &Alphabet::Iupac,
             false,

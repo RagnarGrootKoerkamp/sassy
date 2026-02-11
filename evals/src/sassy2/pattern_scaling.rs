@@ -10,7 +10,7 @@ struct Config {
     target_lens: Vec<usize>,
     query_lens: Vec<usize>,
     ks: Vec<usize>,
-    iterations: usize,
+    min_benchtime: f64,
     warmup_iterations: usize,
     n_queries: usize,
     output_file: String,
@@ -30,7 +30,7 @@ pub fn run(config_path: &str) {
     println!("K values: {:?}", config.ks);
     println!("Queries per benchmark: {}", config.n_queries);
     println!("Warmup iterations: {}", config.warmup_iterations);
-    println!("Measurement iterations: {}", config.iterations);
+    println!("Min bench time: {} s", config.min_benchtime);
     println!();
 
     let mut csv = bench::BenchCsv::new(&config.output_file).unwrap();
@@ -68,7 +68,7 @@ pub fn run(config_path: &str) {
                     &[text],
                     k,
                     config.warmup_iterations,
-                    config.iterations,
+                    config.min_benchtime,
                     1,
                     &Alphabet::Iupac,
                     true,

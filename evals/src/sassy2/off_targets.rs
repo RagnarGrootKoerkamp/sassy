@@ -8,7 +8,7 @@ use std::fs;
 struct Config {
     guide_file: String,
     genome_file: String,
-    iterations: usize,
+    min_benchtime: f64,
     warmup_iterations: usize,
     output_file: String,
     ks: Vec<usize>,
@@ -51,8 +51,8 @@ pub fn run(config_path: &str) {
     println!("Genome: first chromosome from {}", config.genome_file);
     println!("K values: {:?}", config.ks);
     println!(
-        "Warmup: {}, iterations: {}",
-        config.warmup_iterations, config.iterations
+        "Warmup: {}, min_benchtime: {} s",
+        config.warmup_iterations, config.min_benchtime
     );
     println!("Output: {}", config.output_file);
     println!();
@@ -90,7 +90,7 @@ pub fn run(config_path: &str) {
             &[chromosome.clone()],
             k,
             config.warmup_iterations,
-            config.iterations,
+            config.min_benchtime,
             1,
             &Alphabet::Iupac,
             false,

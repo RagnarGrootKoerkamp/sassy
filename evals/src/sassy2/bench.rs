@@ -83,11 +83,12 @@ impl fmt::Debug for BenchmarkSuite {
     }
 }
 
-/// Runs a "work" function and gets median timings
+/// Runs a "work" function and gets median timings.
+/// Runs warmup iterations, then repeats the work until total time exceeds `min_benchtime_secs`.
 fn benchmark_with_stats_and_results<F, R>(
     f: &mut F,
     warmup: usize,
-    iterations: usize,
+    min_benchtime_secs: f64,
 ) -> ((f64, f64, f64, f64, f64), Vec<R>)
 where
     F: FnMut() -> R,
@@ -97,23 +98,27 @@ where
         f();
     }
 
-    // Run `iterations` times and get the median, mean, variance etc.
-    let mut times = Vec::with_capacity(iterations);
-    let mut results = Vec::with_capacity(iterations);
-    for _ in 0..iterations {
+    let min_benchtime_nanos = (min_benchtime_secs * 1_000_000_000.0) as u64;
+    let mut times: Vec<f64> = Vec::new();
+    let mut results: Vec<R> = Vec::new();
+    let mut total_elapsed_nanos: u64 = 0;
+
+    while total_elapsed_nanos < min_benchtime_nanos {
         let start = Instant::now();
         let result = f();
-        times.push(start.elapsed().as_nanos() as f64 / 1_000_000.0);
+        let elapsed_nanos = start.elapsed().as_nanos() as u64;
+        total_elapsed_nanos += elapsed_nanos;
+        times.push(elapsed_nanos as f64 / 1_000_000.0);
         results.push(result);
     }
 
+    let n = times.len() as f64;
     times.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let median = times[times.len() / 2];
-    let mean = times.iter().sum::<f64>() / times.len() as f64;
-    let variance = times.iter().map(|t| (t - mean).powi(2)).sum::<f64>() / times.len() as f64;
+    let mean = times.iter().sum::<f64>() / n;
+    let variance = times.iter().map(|t| (t - mean).powi(2)).sum::<f64>() / n;
     let std_dev = variance.sqrt();
 
-    let n = iterations as f64;
     let standard_error = std_dev / n.sqrt();
     let z_score = 1.96;
     let margin = z_score * standard_error;
@@ -123,15 +128,17 @@ where
     ((median, mean, std_dev, ci_lower, ci_upper), results)
 }
 
-/// Get the median IPC, as instructions / cycles
+/// Get the median IPC, as instructions / cycles. Runs until total time exceeds `min_benchtime_secs`.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-fn measure_ipc_median<F, R>(f: &mut F, iterations: usize) -> f64
+fn measure_ipc_median<F, R>(f: &mut F, min_benchtime_secs: f64) -> f64
 where
     F: FnMut() -> R,
 {
-    let mut ipc_values = Vec::with_capacity(iterations);
+    let min_benchtime_nanos = (min_benchtime_secs * 1_000_000_000.0) as u64;
+    let mut ipc_values = Vec::new();
+    let mut total_elapsed_nanos: u64 = 0;
 
-    for _ in 0..iterations {
+    while total_elapsed_nanos < min_benchtime_nanos {
         let mut instr = perfcnt::linux::PerfCounterBuilderLinux::from_hardware_event(
             perfcnt::linux::HardwareEventType::Instructions,
         )
@@ -146,7 +153,9 @@ where
 
         instr.start().unwrap();
         cycles.start().unwrap();
+        let start = Instant::now();
         f();
+        total_elapsed_nanos += start.elapsed().as_nanos() as u64;
         instr.stop().unwrap();
         cycles.stop().unwrap();
 
@@ -166,7 +175,7 @@ where
 
 /// If not linux, we can't use perfcnt we just 0.0
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-fn measure_ipc_median<F, R>(f: &mut F, _iterations: usize) -> f64
+fn measure_ipc_median<F, R>(f: &mut F, _min_benchtime_secs: f64) -> f64
 where
     F: FnMut() -> R,
 {
@@ -382,7 +391,7 @@ fn benchmark_tool<Tool, T>(
     k: usize,
     total_bytes: usize,
     warmup: usize,
-    iterations: usize,
+    min_benchtime_secs: f64,
     threads: usize,
     log_label: &str,
     measure_ipc: bool,
@@ -469,20 +478,26 @@ where
         } else {
             let mut worker = tool.new_worker();
             let mut count = 0usize;
-            for text in texts {
-                count += worker.search(&*prepared, 0, queries, text.as_ref(), k);
+            for &(chunk_idx, pat_start, pat_end) in &pattern_chunks {
+                let pattern_slice = &queries[pat_start..pat_end];
+                for &(text_start, text_end) in &text_groups {
+                    for text in &texts[text_start..text_end] {
+                        count +=
+                            worker.search(&*prepared, chunk_idx, pattern_slice, text.as_ref(), k);
+                    }
+                }
             }
             count
         }
     };
 
     let ((median, mean, std_dev, ci_lower, ci_upper), match_counts) =
-        benchmark_with_stats_and_results(&mut do_work, warmup, iterations);
+        benchmark_with_stats_and_results(&mut do_work, warmup, min_benchtime_secs);
 
     // not used for the expensive benches (Nanopore, off-target) anyway so we can just run this for the
     // `cheap` benches separate
     let ipc = if measure_ipc {
-        Some(measure_ipc_median(&mut do_work, iterations))
+        Some(measure_ipc_median(&mut do_work, min_benchtime_secs))
     } else {
         None
     };
@@ -513,7 +528,7 @@ pub fn benchmark_tools<T>(
     texts: &[T],
     k: usize,
     warmup: usize,
-    iterations: usize,
+    min_benchtime_secs: f64,
     threads: usize,
     alphabet: &Alphabet,
     measure_ipc: bool,
@@ -548,7 +563,7 @@ where
         k,
         total_bytes,
         warmup,
-        iterations,
+        min_benchtime_secs,
         threads,
         "Sassy V1",
         measure_ipc,
@@ -567,7 +582,7 @@ where
         k,
         total_bytes,
         warmup,
-        iterations,
+        min_benchtime_secs,
         threads,
         "Sassy V2",
         measure_ipc,
@@ -582,7 +597,7 @@ where
         k,
         total_bytes,
         warmup,
-        iterations,
+        min_benchtime_secs,
         threads,
         "Edlib",
         measure_ipc,
