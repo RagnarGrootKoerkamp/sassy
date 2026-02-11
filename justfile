@@ -17,7 +17,7 @@ unperm:
 	sudo sysctl -w kernel.kptr_restrict=1
 
 perf: 
-    sudo sudo cpupower frequency-set -u 4.79GHz -g performance
+    sudo sudo cpupower frequency-set -u 3.7GHz -g performance
 
 
 

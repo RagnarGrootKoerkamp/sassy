@@ -12,6 +12,7 @@ struct Config {
     warmup_iterations: usize,
     output_file: String,
     ks: Vec<usize>,
+    threads: usize,
 }
 
 fn load_guide_sequences(path: &str) -> Vec<Vec<u8>> {
@@ -23,14 +24,13 @@ fn load_guide_sequences(path: &str) -> Vec<Vec<u8>> {
     sequences
 }
 
-fn load_first_chromosome(path: &str) -> Option<Vec<u8>> {
+fn load_chromosomes(path: &str) -> Vec<Vec<u8>> {
     let mut reader = parse_fastx_file(path).unwrap();
+    let mut chromosomes = Vec::new();
     while let Some(record) = reader.next() {
-        if let Ok(rec) = record {
-            return Some(rec.seq().to_ascii_uppercase());
-        }
+        chromosomes.push(record.unwrap().seq().to_ascii_uppercase());
     }
-    None
+    chromosomes
 }
 
 fn guides_same_length(guides: &[Vec<u8>]) -> bool {
@@ -48,7 +48,7 @@ pub fn run(config_path: &str) {
     println!("Running off-target search benchmark");
     println!("Config: {:?}", config_path);
     println!("Guides: {}", config.guide_file);
-    println!("Genome: first chromosome from {}", config.genome_file);
+    println!("Genome: {}", config.genome_file);
     println!("K values: {:?}", config.ks);
     println!(
         "Warmup: {}, min_benchtime: {} s",
@@ -58,22 +58,24 @@ pub fn run(config_path: &str) {
     println!();
 
     let guides = load_guide_sequences(&config.guide_file);
-    let chromosome = load_first_chromosome(&config.genome_file).expect("could not load genome");
+    let chromosomes = load_chromosomes(&config.genome_file);
+
+    let total_text_len: usize = chromosomes.iter().map(|c| c.len()).sum();
+    let total_bytes = total_text_len;
 
     println!(
-        "Loaded {} guides, chromosome length {}",
+        "Loaded {} guides, {} chromosomes (total {} bp)",
         guides.len(),
-        chromosome.len()
+        chromosomes.len(),
+        total_text_len
     );
 
     if guides.is_empty() {
         panic!("No guide sequences loaded from {}", config.guide_file);
     }
-    if chromosome.is_empty() {
-        panic!("Empty chromosome from {}", config.genome_file);
+    if chromosomes.is_empty() {
+        panic!("No chromosomes loaded from {}", config.genome_file);
     }
-
-    let total_bytes = chromosome.len();
     let same_length = guides_same_length(&guides);
     if !same_length {
         println!("  Note: guides have mixed lengths; tiling benchmark skipped (zeros written).");
@@ -87,11 +89,11 @@ pub fn run(config_path: &str) {
 
         let suite = bench::benchmark_tools(
             &guides,
-            &[chromosome.clone()],
+            &chromosomes,
             k,
             config.warmup_iterations,
             config.min_benchtime,
-            1,
+            config.threads,
             &Alphabet::Iupac,
             false,
         );
@@ -100,7 +102,7 @@ pub fn run(config_path: &str) {
 
         csv.write_row(
             guides.len(),
-            chromosome.len(),
+            total_text_len,
             query_len,
             k,
             &suite,
