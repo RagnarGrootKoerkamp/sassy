@@ -1,7 +1,8 @@
 use crate::pattern_tiling::backend::SimdBackend;
+use crate::pattern_tiling::minima::TracePostProcess;
 use crate::pattern_tiling::search::{HitRange, Myers};
 use crate::pattern_tiling::tqueries::TQueries;
-use crate::pattern_tiling::trace::{TracePostProcess, trace_batch_ranges};
+use crate::pattern_tiling::trace::trace_batch_ranges;
 use crate::profiles::Profile;
 use crate::search::Match;
 

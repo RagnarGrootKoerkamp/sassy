@@ -466,7 +466,8 @@ mod tests {
     use crate::Searcher as SassySearcher;
     use crate::pattern_tiling::backend::SimdBackend;
     use crate::pattern_tiling::general::Searcher;
-    use crate::pattern_tiling::trace::{TracePostProcess, trace_batch_ranges};
+    use crate::pattern_tiling::minima::TracePostProcess;
+    use crate::pattern_tiling::trace::trace_batch_ranges;
     use crate::profiles::Iupac;
     use crate::profiles::Profile;
     use crate::search::Match;
@@ -704,9 +705,9 @@ mod tests {
                 k as u32,
                 if use_hierarchical { Some(true) } else { None },
                 if filter_local_pattern_tilingma {
-                    crate::pattern_tiling::trace::TracePostProcess::LocalMinima
+                    crate::pattern_tiling::minima::TracePostProcess::LocalMinima
                 } else {
-                    crate::pattern_tiling::trace::TracePostProcess::All
+                    crate::pattern_tiling::minima::TracePostProcess::All
                 },
             );
 
@@ -955,7 +956,7 @@ mod tests {
             t,
             k as u32,
             Some(true),
-            crate::pattern_tiling::trace::TracePostProcess::LocalMinima,
+            crate::pattern_tiling::minima::TracePostProcess::LocalMinima,
         );
         for m in pattern_tiling_matches.iter() {
             println!(
@@ -986,7 +987,7 @@ mod tests {
             &text,
             k,
             Some(true),
-            crate::pattern_tiling::trace::TracePostProcess::All,
+            crate::pattern_tiling::minima::TracePostProcess::All,
         );
 
         // Just verify we got some results (or none, both are valid)
@@ -1009,7 +1010,7 @@ mod tests {
             &text,
             k,
             Some(true),
-            crate::pattern_tiling::trace::TracePostProcess::All,
+            crate::pattern_tiling::minima::TracePostProcess::All,
         );
 
         println!(
@@ -1067,7 +1068,7 @@ mod tests {
             &t,
             k as u32,
             Some(false),
-            crate::pattern_tiling::trace::TracePostProcess::All,
+            crate::pattern_tiling::minima::TracePostProcess::All,
         );
 
         // Sort the pattern_tiling matches by start, end, edits
@@ -1108,7 +1109,7 @@ mod tests {
             &t,
             k as u32,
             Some(true),
-            crate::pattern_tiling::trace::TracePostProcess::All,
+            crate::pattern_tiling::minima::TracePostProcess::All,
         );
         for m in matches {
             println!(
@@ -1149,7 +1150,7 @@ mod tests {
             &t,
             k as u32,
             Some(true),
-            crate::pattern_tiling::trace::TracePostProcess::All,
+            crate::pattern_tiling::minima::TracePostProcess::All,
         );
         let mut sorted_matches = matches.to_vec();
         sorted_matches
