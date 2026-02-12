@@ -43,15 +43,7 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
 ) {
     assert!(ranges.len() <= B::LANES, "Batch size must be <= LANES");
 
-    // fixme: get rid of alloc here
-    let normal_ranges: Vec<HitRange> = ranges
-        .iter()
-        .map(|r| HitRange {
-            start: r.start.max(0),
-            ..*r
-        })
-        .collect();
-    if normal_ranges.is_empty() {
+    if ranges.is_empty() {
         return;
     }
 
@@ -61,12 +53,12 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
     let mut approx_slices = vec![(0isize, 0isize); B::LANES];
     let mut range_bounds = vec![(0isize, 0isize); B::LANES];
     let mut per_range_alignments: Vec<Vec<Match>> = vec![Vec::new(); B::LANES];
-    let batch_size = normal_ranges.len();
-    for (i, r) in normal_ranges.iter().enumerate() {
+    let batch_size = ranges.len();
+    for (i, r) in ranges.iter().enumerate() {
         pattern_indices[i] = r.pattern_idx;
-        let start = r.start.saturating_sub(left_buffer as isize).max(0);
+        let start = r.start.max(0).saturating_sub(left_buffer as isize).max(0);
         approx_slices[i] = (start, r.end);
-        range_bounds[i] = (r.start, r.end);
+        range_bounds[i] = (r.start.max(0), r.end);
         per_range_alignments[i].clear();
     }
 
@@ -275,8 +267,8 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
         }
     }
 
-    for (lane, r) in ranges.iter().enumerate() {
-        post_process_alignments(post, text.len(), r, &mut per_range_alignments[lane], output);
+    for lane in 0..batch_size {
+        post_process_alignments(post, text.len(), &mut per_range_alignments[lane], output);
     }
 }
 
@@ -289,14 +281,13 @@ fn clamp_range_to_text_bounds(start: usize, end: usize, upper_bound: usize) -> (
     if start > upper_bound && end > upper_bound {
         (upper_bound + 1, upper_bound + 1)
     } else {
-        (start.max(0), end.min(upper_bound) + 1) // +1 to report inclusive ends like sassy
+        (start.max(0), end.min(upper_bound) + 1) // +1 to report exclusive ends like sassy
     }
 }
 
 pub fn post_process_alignments(
     post: TracePostProcess,
     text_len: usize,
-    _range: &HitRange,
     alignments: &mut Vec<Match>,
     output: &mut Vec<Match>,
 ) {
@@ -398,11 +389,7 @@ fn get_cost_at<B: SimdBackend, P: Profile>(
     pattern_pos_idx: isize,
 ) -> isize {
     if step_idx < 0 {
-        let mask = if pattern_pos_idx >= 63 {
-            !0u64
-        } else {
-            (1u64 << (pattern_pos_idx + 1)) - 1
-        };
+        let mask = (1u64.wrapping_shl(pattern_pos_idx as u32 + 1)).wrapping_sub(1);
         return (searcher.alpha_pattern & mask).count_ones() as isize;
     }
 
