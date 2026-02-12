@@ -51,7 +51,9 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
     let batch_size = ranges.len();
     for (i, r) in ranges.iter().enumerate() {
         pattern_indices[i] = r.pattern_idx;
-        let start = r.start.max(0).saturating_sub(left_buffer as isize).max(0);
+
+        let start = r.start.saturating_sub(left_buffer as isize).max(0);
+
         approx_slices[i] = (start, r.end);
         range_bounds[i] = (r.start.max(0), r.end);
         per_range_alignments[i].clear();
@@ -122,6 +124,7 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
             max_len = len;
         }
     }
+
     if searcher.alpha_pattern != !0 {
         max_len += get_overhang_steps(
             t_queries.pattern_length,
@@ -227,26 +230,17 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
         let (r_start, r_end) = range_bounds[lane];
         let approx_start = approx_slices[lane].0;
         for pos in r_start..=r_end {
-            // First check if the cost at this endpoint is within threshold
             let step_idx = pos - approx_start;
 
-            // This gets the cost based on the calculated matrix
-            let mut cost_at_endpoint = get_cost_at::<B, P>(
+            // cost_at_endpoint now includes overhang correction automatically
+            let cost_at_endpoint = get_cost_at::<B, P>(
                 searcher,
                 lane,
                 step_idx,
                 t_queries.pattern_length as isize - 1,
+                approx_start,
+                text.len(),
             );
-
-            // But, the matrix cost is not directly the cost with overhang in case of suffixes
-            // (it is for prefixes as deltas are manipulated)
-            let end_pos = pos as usize;
-            let max_valid_text_pos = text.len() - 1;
-            if end_pos > max_valid_text_pos && searcher.alpha != 1.0 {
-                let overshoot = end_pos - max_valid_text_pos;
-                let correction = (overshoot as f32 * searcher.alpha).floor() as isize;
-                cost_at_endpoint += correction;
-            }
 
             if cost_at_endpoint <= k as isize {
                 let aln = traceback_single(
@@ -262,7 +256,7 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
         }
     }
 
-    for lane in 0..batch_size {
+    for (lane, r) in ranges.iter().enumerate() {
         process_minima(post, text.len(), &mut per_range_alignments[lane], output);
     }
 }
@@ -276,7 +270,7 @@ pub fn clamp_range_to_text_bounds(start: usize, end: usize, upper_bound: usize) 
     if start > upper_bound && end > upper_bound {
         (upper_bound + 1, upper_bound + 1)
     } else {
-        (start.max(0), end.min(upper_bound) + 1) // +1 to report exclusive ends like sassy
+        (start.max(0), end.min(upper_bound) + 1) // +1 to report inclusive ends like sassy
     }
 }
 
@@ -291,26 +285,45 @@ fn get_cost_at<B: SimdBackend, P: Profile>(
     lane_idx: usize,
     step_idx: isize,
     pattern_pos_idx: isize,
+    approx_start: isize,
+    text_len: usize,
 ) -> isize {
-    if step_idx < 0 {
-        let mask = (1u64.wrapping_shl(pattern_pos_idx as u32 + 1)).wrapping_sub(1);
-        return (searcher.alpha_pattern & mask).count_ones() as isize;
-    }
-
-    let step_data = &searcher.history[lane_idx].steps[step_idx as usize];
-    let vp_bits = extract_simd_lane::<B>(step_data.vp, lane_idx);
-    let vn_bits = extract_simd_lane::<B>(step_data.vn, lane_idx);
-
-    let mask = if pattern_pos_idx >= 63 {
-        !0u64
+    let mut cost = if step_idx < 0 {
+        // Handle Prefix Overhang
+        let mask = if pattern_pos_idx >= 63 {
+            !0u64
+        } else {
+            (1u64 << (pattern_pos_idx + 1)) - 1
+        };
+        (searcher.alpha_pattern & mask).count_ones() as isize
     } else {
-        (1u64 << (pattern_pos_idx + 1)) - 1
+        // Handle Matrix Cost
+        let step_data = &searcher.history[lane_idx].steps[step_idx as usize];
+        let vp_bits = extract_simd_lane::<B>(step_data.vp, lane_idx);
+        let vn_bits = extract_simd_lane::<B>(step_data.vn, lane_idx);
+
+        let mask = if pattern_pos_idx >= 63 {
+            !0u64
+        } else {
+            (1u64 << (pattern_pos_idx + 1)) - 1
+        };
+
+        let pos = (vp_bits & mask).count_ones() as isize;
+        let neg = (vn_bits & mask).count_ones() as isize;
+        pos - neg
     };
 
-    let pos = (vp_bits & mask).count_ones() as isize;
-    let neg = (vn_bits & mask).count_ones() as isize;
+    // Apply Suffix Overhang Correction
+    let abs_pos = approx_start + step_idx;
+    let max_valid_text_pos = text_len.saturating_sub(1) as isize;
 
-    pos - neg
+    if abs_pos > max_valid_text_pos && searcher.alpha != 1.0 {
+        let overshoot = (abs_pos - max_valid_text_pos) as usize;
+        let correction = (overshoot as f32 * searcher.alpha).floor() as isize;
+        cost += correction;
+    }
+
+    cost
 }
 
 fn traceback_single<B: SimdBackend, P: Profile>(
@@ -331,8 +344,6 @@ fn traceback_single<B: SimdBackend, P: Profile>(
     let mut pattern_pos = pattern_len - 1;
     let mut cigar: Cigar = Cigar::default();
 
-    let mut cost_correction = 0;
-
     let max_valid_text_pos = text_len - 1;
     let pattern_end = if end_pos >= max_valid_text_pos && searcher.alpha != 1.0 {
         let overshoot = end_pos - max_valid_text_pos;
@@ -343,12 +354,14 @@ fn traceback_single<B: SimdBackend, P: Profile>(
 
     let mut pattern_start = pattern_len as usize; // Will be updated as we go back
 
-    while curr_step >= 0 && pattern_pos >= 0 {
-        let curr_cost = get_cost_at(searcher, lane_idx, curr_step, pattern_pos);
+    // Helper closure to keep the calls concise
+    let get_cost = |s: isize, p: isize| get_cost_at(searcher, lane_idx, s, p, slice.0, text_len);
 
-        let diag_cost = get_cost_at(searcher, lane_idx, curr_step - 1, pattern_pos - 1);
-        let up_cost = get_cost_at(searcher, lane_idx, curr_step, pattern_pos - 1);
-        let left_cost = get_cost_at(searcher, lane_idx, curr_step - 1, pattern_pos);
+    while curr_step >= 0 && pattern_pos >= 0 {
+        let curr_cost = get_cost(curr_step, pattern_pos);
+        let diag_cost = get_cost(curr_step - 1, pattern_pos - 1);
+        let up_cost = get_cost(curr_step, pattern_pos - 1);
+        let left_cost = get_cost(curr_step - 1, pattern_pos);
 
         let step = &steps[curr_step as usize];
         let eq_bits = extract_simd_lane::<B>(step.eq, lane_idx);
@@ -358,7 +371,6 @@ fn traceback_single<B: SimdBackend, P: Profile>(
         if slice.0 + curr_step > (text_len as isize - 1) {
             pattern_pos -= 1;
             curr_step -= 1;
-            cost_correction += 1;
             pattern_start = (pattern_pos + 1).max(0) as usize;
         } else if curr_cost == diag_cost + match_cost && is_match {
             cigar.push(CigarOp::Match);
@@ -394,11 +406,14 @@ fn traceback_single<B: SimdBackend, P: Profile>(
     let slice_start_offset = (curr_step + 1).max(0);
     let text_start = (slice.0 + slice_start_offset).max(0);
 
-    let mut final_raw_cost = get_cost_at(searcher, lane_idx, max_step, pattern_len - 1);
-
-    if cost_correction > 0 {
-        final_raw_cost += (cost_correction as f32 * searcher.alpha).floor() as isize;
-    }
+    let final_cost = get_cost_at(
+        searcher,
+        lane_idx,
+        max_step,
+        pattern_len - 1,
+        slice.0,
+        text_len,
+    );
 
     cigar.reverse();
 
@@ -409,7 +424,7 @@ fn traceback_single<B: SimdBackend, P: Profile>(
         text_end: slice.1 as usize,
         pattern_start,
         pattern_end,
-        cost: final_raw_cost as Cost,
+        cost: final_cost as Cost,
         strand: if original_pattern_idx >= t_queries.n_original_queries {
             Strand::Rc
         } else {

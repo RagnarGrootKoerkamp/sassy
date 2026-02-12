@@ -305,6 +305,7 @@ impl<B: SimdBackend, P: Profile> Myers<B, P> {
     #[inline(always)]
     fn handle_full_prefix_matches(&mut self, t_queries: &TQueries<B, P>, k: u32) {
         let mask = if t_queries.pattern_length >= 64 {
+            // Should not exceed 64 anyway
             !0u64
         } else {
             (1u64 << t_queries.pattern_length) - 1
