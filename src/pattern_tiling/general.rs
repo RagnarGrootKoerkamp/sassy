@@ -2,6 +2,7 @@ use crate::pattern_tiling::backend::SimdBackend;
 use crate::pattern_tiling::minima::TracePostProcess;
 use crate::pattern_tiling::search::{HitRange, Myers};
 use crate::pattern_tiling::tqueries::TQueries;
+use crate::pattern_tiling::trace::TraceBuffer;
 use crate::pattern_tiling::trace::trace_batch_ranges;
 use crate::profiles::Profile;
 use crate::search::Match;
@@ -67,7 +68,7 @@ macro_rules! run_hierarchical {
             $k,
             $post,
             &mut $self.alignments_buf,
-            &mut $self.batch_buf,
+            &mut $self.trace_buffer,
         )
     }};
 }
@@ -82,7 +83,7 @@ pub fn hierarchical_search<S, F, P: Profile>(
     k: u32,
     post: TracePostProcess,
     out: &mut Vec<Match>,
-    batch_buf: &mut Vec<Match>,
+    trace_buffer: &mut TraceBuffer,
 ) where
     S: SimdBackend,
     F: SimdBackend,
@@ -98,13 +99,11 @@ pub fn hierarchical_search<S, F, P: Profile>(
     );
 
     out.clear();
-    batch_buf.clear();
-
     for chunk_start in (0..suffix_ranges.len()).step_by(F::LANES) {
         let chunk_end: usize = (chunk_start + F::LANES).min(suffix_ranges.len());
         let batch_slice = &suffix_ranges[chunk_start..chunk_end];
 
-        batch_buf.clear();
+        trace_buffer.clear_alns();
         trace_batch_ranges(
             full_searcher,
             full_tqueries,
@@ -112,11 +111,11 @@ pub fn hierarchical_search<S, F, P: Profile>(
             batch_slice,
             k,
             post,
-            batch_buf,
             Some(full_searcher.alpha),
             full_searcher.max_overhang,
+            trace_buffer,
         );
-        out.extend_from_slice(&batch_buf);
+        out.extend_from_slice(&trace_buffer.filtered_alignments);
     }
 }
 
@@ -129,7 +128,9 @@ fn trace_ranges_backend<S: SimdBackend, P: Profile>(
     k: u32,
     post: TracePostProcess,
     out: &mut Vec<Match>,
+    trace_buffer: &mut TraceBuffer,
 ) {
+    out.clear();
     for chunk in ranges.chunks(S::LANES) {
         trace_batch_ranges(
             searcher,
@@ -138,10 +139,11 @@ fn trace_ranges_backend<S: SimdBackend, P: Profile>(
             chunk,
             k,
             post,
-            out,
             Some(searcher.alpha),
             searcher.max_overhang,
+            trace_buffer,
         );
+        out.extend_from_slice(&trace_buffer.filtered_alignments);
     }
 }
 
@@ -226,7 +228,7 @@ pub struct Searcher<P: Profile> {
     suffix_searcher_u16: Myers<U16Backend, P>,
     suffix_searcher_u32: Myers<U32Backend, P>,
     alignments_buf: Vec<Match>,
-    batch_buf: Vec<Match>,
+    trace_buffer: TraceBuffer,
 }
 
 impl<P: Profile> Clone for Searcher<P> {
@@ -240,7 +242,7 @@ impl<P: Profile> Clone for Searcher<P> {
             suffix_searcher_u16: Myers::new(Some(self.suffix_searcher_u16.alpha)),
             suffix_searcher_u32: Myers::new(Some(self.suffix_searcher_u32.alpha)),
             alignments_buf: Vec::new(),
-            batch_buf: Vec::new(),
+            trace_buffer: TraceBuffer::new(64),
         }
     }
 }
@@ -256,7 +258,7 @@ impl<P: Profile> Searcher<P> {
             suffix_searcher_u16: Myers::new(alpha),
             suffix_searcher_u32: Myers::new(alpha),
             alignments_buf: Vec::new(),
-            batch_buf: Vec::new(),
+            trace_buffer: TraceBuffer::new(64),
         }
     }
 
@@ -384,8 +386,7 @@ impl<P: Profile> Searcher<P> {
                 // Find matching ranges
                 let ranges: Vec<HitRange> =
                     searcher.search_ranges(tq, text, k, true, true).to_vec();
-                self.alignments_buf.clear();
-                // Trace each of the ranges
+                // Trace each of the ranges, accumulating into alignments_buf
                 trace_ranges_backend(
                     searcher,
                     tq,
@@ -394,6 +395,7 @@ impl<P: Profile> Searcher<P> {
                     k,
                     post,
                     &mut self.alignments_buf,
+                    &mut self.trace_buffer,
                 );
                 self.alignments_buf.as_slice()
             })

@@ -24,6 +24,54 @@ pub struct SimdHistoryStep<S: Copy> {
     pub eq: S,
 }
 
+pub struct TraceBuffer {
+    pub pattern_indices: Vec<usize>,
+    pub approx_slices: Vec<(isize, isize)>,
+    pub range_bounds: Vec<(isize, isize)>,
+    pub per_range_alignments: Vec<Vec<Match>>,
+    pub filtered_alignments: Vec<Match>,
+    pub filled_till: usize,
+}
+
+impl TraceBuffer {
+    pub fn new(lanes: usize) -> Self {
+        Self {
+            pattern_indices: vec![0; lanes],
+            approx_slices: vec![(0isize, 0isize); lanes],
+            range_bounds: vec![(0isize, 0isize); lanes],
+            per_range_alignments: vec![Vec::new(); lanes],
+            filtered_alignments: Vec::with_capacity(10),
+            filled_till: 0,
+        }
+    }
+
+    pub fn clear_alns(&mut self) {
+        for aln in self.per_range_alignments.iter_mut() {
+            aln.clear();
+        }
+        self.filled_till = 0;
+    }
+
+    pub fn populate(&mut self, ranges: &[HitRange], left_buffer: usize) {
+        if self.pattern_indices.len() < ranges.len() {
+            self.pattern_indices.resize(ranges.len(), 0);
+            self.approx_slices.resize(ranges.len(), (0isize, 0isize));
+            self.range_bounds.resize(ranges.len(), (0isize, 0isize));
+            self.per_range_alignments.resize(ranges.len(), Vec::new());
+        }
+        for (i, r) in ranges.iter().enumerate() {
+            self.pattern_indices[i] = r.pattern_idx;
+            // Text slice where the match for sure is present (prevent out of bounds)
+            self.approx_slices[i] = (r.start.saturating_sub(left_buffer as isize).max(0), r.end);
+            // The original range bounds (limited to 0 in case prefix matches, i.e. -1 only really if entire pattern is before text)
+            self.range_bounds[i] = (r.start.max(0), r.end);
+            // The alignments we find per range
+            self.per_range_alignments[i].clear();
+        }
+        self.filled_till = ranges.len();
+    }
+}
+
 /// Trace alignments for hit ranges using a single SIMD forward pass per range.
 pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
     searcher: &mut Myers<B, P>,
@@ -32,9 +80,9 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
     ranges: &[HitRange],
     k: u32,
     post: TracePostProcess,
-    output: &mut Vec<Match>,
     alpha: Option<f32>,
     max_overhang: Option<usize>,
+    buffer: &mut TraceBuffer,
 ) {
     assert!(ranges.len() <= B::LANES, "Batch size must be <= LANES");
 
@@ -42,22 +90,11 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
         return;
     }
 
+    buffer.filtered_alignments.clear();
+    // How far (at most) we have to move to the left to capture the full alignment
     let left_buffer = t_queries.pattern_length + k as usize;
-
-    let mut pattern_indices = vec![0; B::LANES];
-    let mut approx_slices = vec![(0isize, 0isize); B::LANES];
-    let mut range_bounds = vec![(0isize, 0isize); B::LANES];
-    let mut per_range_alignments: Vec<Vec<Match>> = vec![Vec::new(); B::LANES];
-    let batch_size = ranges.len();
-    for (i, r) in ranges.iter().enumerate() {
-        pattern_indices[i] = r.pattern_idx;
-
-        let start = r.start.saturating_sub(left_buffer as isize).max(0);
-
-        approx_slices[i] = (start, r.end);
-        range_bounds[i] = (r.start.max(0), r.end);
-        per_range_alignments[i].clear();
-    }
+    buffer.populate(ranges, left_buffer);
+    let batch_size = buffer.filled_till;
 
     // Handle prefix overhang ranges (-1) directly
     for (i, r) in ranges.iter().enumerate() {
@@ -73,7 +110,7 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
                 }
             }
 
-            per_range_alignments[i].push(Match {
+            buffer.per_range_alignments[i].push(Match {
                 pattern_idx: r.pattern_idx % t_queries.n_original_queries,
                 text_idx: 0,
                 text_start: usize::MAX, // previously -1, but does not match sassy struct, so using usize::MAX (+ additional fix in trace then)
@@ -92,10 +129,10 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
     }
 
     let num_blocks = 1;
-    searcher.ensure_capacity(num_blocks, batch_size);
+    searcher.ensure_capacity(num_blocks, buffer.filled_till);
 
     let expected_steps = t_queries.pattern_length + k as usize;
-    for i in 0..batch_size {
+    for i in 0..buffer.filled_till {
         searcher.history[i].steps.clear();
         searcher.history[i].steps.reserve(expected_steps);
     }
@@ -118,7 +155,7 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
 
     // Calculate max_len based on range ends
     let mut max_len = 0;
-    for slice in approx_slices.iter().take(batch_size) {
+    for slice in buffer.approx_slices.iter().take(batch_size) {
         let len = (slice.1 - slice.0 + 1) as usize;
         if len > max_len {
             max_len = len;
@@ -144,8 +181,8 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
             let keep_slice = keep_mask_arr.as_mut();
 
             for lane in 0..batch_size {
-                let q_idx = pattern_indices[lane];
-                let start = approx_slices[lane].0;
+                let q_idx = buffer.pattern_indices[lane];
+                let start = buffer.approx_slices[lane].0;
                 let abs_pos = (i as isize) + start;
                 if abs_pos >= 0 && (abs_pos as usize) < text.len() {
                     let cur_char = text[abs_pos as usize];
@@ -227,8 +264,8 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
     }
 
     for lane in 0..batch_size {
-        let (r_start, r_end) = range_bounds[lane];
-        let approx_start = approx_slices[lane].0;
+        let (r_start, r_end) = buffer.range_bounds[lane];
+        let approx_start = buffer.approx_slices[lane].0;
         for pos in r_start..=r_end {
             let step_idx = pos - approx_start;
 
@@ -246,18 +283,23 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
                 let aln = traceback_single(
                     searcher,
                     lane,
-                    pattern_indices[lane],
+                    buffer.pattern_indices[lane],
                     t_queries,
                     (approx_start, pos),
                     text.len(),
                 );
-                per_range_alignments[lane].push(aln);
+                buffer.per_range_alignments[lane].push(aln);
             }
         }
     }
 
-    for (lane, r) in ranges.iter().enumerate() {
-        process_minima(post, text.len(), &mut per_range_alignments[lane], output);
+    for lane in 0..batch_size {
+        process_minima(
+            post,
+            text.len(),
+            &mut buffer.per_range_alignments[lane],
+            &mut buffer.filtered_alignments,
+        );
     }
 }
 

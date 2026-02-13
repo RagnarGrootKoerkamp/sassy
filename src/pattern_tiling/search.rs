@@ -468,9 +468,8 @@ mod tests {
     use crate::pattern_tiling::backend::SimdBackend;
     use crate::pattern_tiling::general::Searcher;
     use crate::pattern_tiling::minima::TracePostProcess;
-    use crate::pattern_tiling::trace::trace_batch_ranges;
+    use crate::pattern_tiling::trace::{TraceBuffer, trace_batch_ranges};
     use crate::profiles::Iupac;
-    use crate::profiles::Profile;
     use crate::search::Match;
     use std::collections::{HashMap, HashSet};
 
@@ -489,15 +488,23 @@ mod tests {
         let ranges: Vec<HitRange> = searcher
             .search_ranges(t_queries, text, k, true, true)
             .to_vec();
-        let mut out = Vec::new();
 
         for r in ranges.iter() {
             println!("Range: {} {} {}", r.start, r.end, r.pattern_idx);
         }
+        let mut buffer = TraceBuffer::new(64);
         trace_batch_ranges(
-            searcher, t_queries, text, &ranges, k, post, &mut out, None, None,
+            searcher,
+            t_queries,
+            text,
+            &ranges,
+            k,
+            post,
+            None,
+            None,
+            &mut buffer,
         );
-        out
+        buffer.filtered_alignments
     }
 
     #[test]
