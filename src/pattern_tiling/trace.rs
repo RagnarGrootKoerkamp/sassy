@@ -45,13 +45,16 @@ impl TraceBuffer {
         }
     }
 
+    #[inline(always)]
     pub fn clear_alns(&mut self) {
         for aln in self.per_range_alignments.iter_mut() {
             aln.clear();
         }
+        self.filtered_alignments.clear();
         self.filled_till = 0;
     }
 
+    #[inline(always)]
     pub fn populate(&mut self, ranges: &[HitRange], left_buffer: usize) {
         if self.pattern_indices.len() < ranges.len() {
             self.pattern_indices.resize(ranges.len(), 0);
@@ -69,6 +72,88 @@ impl TraceBuffer {
             self.per_range_alignments[i].clear();
         }
         self.filled_till = ranges.len();
+    }
+}
+
+#[inline(always)]
+fn handle_prefix_overhangs<B: SimdBackend, P: Profile>(
+    ranges: &[HitRange],
+    t_queries: &TQueries<B, P>,
+    searcher: &Myers<B, P>,
+    buffer: &mut TraceBuffer,
+) {
+    // Process only ranges with prefix overhang (start == -1)
+    ranges
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.start == -1)
+        .for_each(|(i, r)| {
+            let length_mask = (!0u64) >> (64usize.saturating_sub(t_queries.pattern_length));
+            let masked_alpha = searcher.alpha_pattern & length_mask;
+            let cost = masked_alpha.count_ones();
+
+            let mut cigar = Cigar::default();
+            if searcher.alpha == 1.0 {
+                for _ in 0..t_queries.pattern_length {
+                    cigar.push(CigarOp::Del);
+                }
+            }
+
+            let strand = if r.pattern_idx >= t_queries.n_original_queries {
+                crate::search::Strand::Rc
+            } else {
+                crate::search::Strand::Fwd
+            };
+
+            buffer.per_range_alignments[i].push(Match {
+                pattern_idx: r.pattern_idx % t_queries.n_original_queries,
+                text_idx: 0,
+                text_start: usize::MAX,
+                text_end: usize::MAX,
+                pattern_start: t_queries.pattern_length,
+                pattern_end: t_queries.pattern_length,
+                cost: cost as Cost,
+                strand,
+                cigar,
+            });
+        });
+}
+
+#[inline(always)]
+fn handle_suffix_overhangs<B: SimdBackend, P: Profile>(
+    searcher: &mut Myers<B, P>,
+    last_bit_shift: u32,
+    last_bit_mask: B::Simd,
+    batch_size: usize,
+    overhang_steps: usize,
+) {
+    let all_ones = B::splat_all_ones();
+    let blocks_ptr = searcher.blocks.as_mut_ptr();
+
+    for _i in 0..overhang_steps {
+        unsafe {
+            let block = &mut *blocks_ptr;
+            let (vp_out, vn_out, _cost_out) = Myers::<B, P>::myers_step(
+                block.vp,
+                block.vn,
+                block.cost,
+                all_ones, // eq = 1111..
+                all_ones,
+                last_bit_shift,
+                last_bit_mask,
+            );
+            let eq_arr = B::to_array(all_ones);
+            for lane in 0..batch_size {
+                let eq_scalar = eq_arr.as_ref()[lane];
+                searcher.history[lane].steps.push(SimdHistoryStep {
+                    vp: vp_out,
+                    vn: vn_out,
+                    eq: B::splat_scalar(eq_scalar),
+                });
+            }
+            block.vp = vp_out;
+            block.vn = vn_out;
+        }
     }
 }
 
@@ -90,60 +175,37 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
         return;
     }
 
-    buffer.filtered_alignments.clear();
     // How far (at most) we have to move to the left to capture the full alignment
     let left_buffer = t_queries.pattern_length + k as usize;
+    buffer.clear_alns();
     buffer.populate(ranges, left_buffer);
     let batch_size = buffer.filled_till;
 
-    // Handle prefix overhang ranges (-1) directly
-    for (i, r) in ranges.iter().enumerate() {
-        if r.start == -1 {
-            let length_mask = (!0u64) >> (64usize.saturating_sub(t_queries.pattern_length));
-            let masked_alpha = searcher.alpha_pattern & length_mask;
-            let cost = masked_alpha.count_ones();
-
-            let mut cigar = Cigar::default();
-            if searcher.alpha == 1.0 {
-                for _ in 0..t_queries.pattern_length {
-                    cigar.push(CigarOp::Del);
-                }
-            }
-
-            buffer.per_range_alignments[i].push(Match {
-                pattern_idx: r.pattern_idx % t_queries.n_original_queries,
-                text_idx: 0,
-                text_start: usize::MAX, // previously -1, but does not match sassy struct, so using usize::MAX (+ additional fix in trace then)
-                text_end: usize::MAX,
-                pattern_start: t_queries.pattern_length,
-                pattern_end: t_queries.pattern_length,
-                cost: cost as Cost,
-                strand: if r.pattern_idx >= t_queries.n_original_queries {
-                    crate::search::Strand::Rc
-                } else {
-                    crate::search::Strand::Fwd
-                },
-                cigar,
-            });
-        }
+    // Handle prefix overhangs (basically just r_start == -1 only which is full prefix overhang)
+    // this is prevented in search with the get_max_overhang as entire overhang is
+    // quite meaningless anyway, but kept here for now
+    if searcher.alpha_pattern != !0 {
+        handle_prefix_overhangs(ranges, t_queries, searcher, buffer);
     }
 
-    let num_blocks = 1;
-    searcher.ensure_capacity(num_blocks, buffer.filled_till);
+    // We only have a single block with B::LANES items
+    searcher.ensure_capacity(1, buffer.filled_till);
 
-    let expected_steps = t_queries.pattern_length + k as usize;
-    for i in 0..buffer.filled_till {
-        searcher.history[i].steps.clear();
-        searcher.history[i].steps.reserve(expected_steps);
-    }
-
+    // Prep allocs for single block search
     let length_mask = (!0u64) >> (64usize.saturating_sub(t_queries.pattern_length));
     searcher.search_prep(
-        num_blocks,
+        1,
         t_queries.n_queries,
         t_queries.pattern_length,
         searcher.alpha_pattern & length_mask,
     );
+
+    // Prep history for single block search
+    // fixme: lets move from searcher to traceBuffer
+    for i in 0..buffer.filled_till {
+        searcher.history[i].steps.clear();
+        searcher.history[i].steps.reserve(left_buffer);
+    }
 
     let last_bit_shift = (t_queries.pattern_length - 1) as u32;
     let last_bit_mask = B::splat_one() << last_bit_shift;
@@ -162,14 +224,12 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
         }
     }
 
-    if searcher.alpha_pattern != !0 {
-        max_len += get_overhang_steps(
-            t_queries.pattern_length,
-            k as usize,
-            alpha.unwrap_or(1.0),
-            max_overhang,
-        );
-    }
+    let overhang_steps = get_overhang_steps(
+        t_queries.pattern_length,
+        k as usize,
+        alpha.unwrap_or(1.0),
+        max_overhang,
+    );
 
     for i in 0..max_len {
         unsafe {
@@ -233,34 +293,14 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
         }
     }
 
-    if searcher.alpha_pattern != !0 {
-        let eq = all_ones;
-        let blocks_ptr = searcher.blocks.as_mut_ptr();
-        for _i in 0..t_queries.pattern_length {
-            unsafe {
-                let block = &mut *blocks_ptr;
-                let (vp_out, vn_out, _cost_out) = Myers::<B, P>::myers_step(
-                    block.vp,
-                    block.vn,
-                    block.cost,
-                    eq,
-                    all_ones,
-                    last_bit_shift,
-                    last_bit_mask,
-                );
-                let eq_arr = B::to_array(eq);
-                for lane in 0..batch_size {
-                    let eq_scalar = eq_arr.as_ref()[lane];
-                    searcher.history[lane].steps.push(SimdHistoryStep {
-                        vp: vp_out,
-                        vn: vn_out,
-                        eq: B::splat_scalar(eq_scalar),
-                    });
-                }
-                block.vp = vp_out;
-                block.vn = vn_out;
-            }
-        }
+    if alpha.is_some() {
+        handle_suffix_overhangs(
+            searcher,
+            last_bit_shift,
+            last_bit_mask,
+            batch_size,
+            overhang_steps,
+        );
     }
 
     for lane in 0..batch_size {
@@ -269,7 +309,7 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
         for pos in r_start..=r_end {
             let step_idx = pos - approx_start;
 
-            // cost_at_endpoint now includes overhang correction automatically
+            // cost_at_endpoint (matrix + overhang adjustment)
             let cost_at_endpoint = get_cost_at::<B, P>(
                 searcher,
                 lane,

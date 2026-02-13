@@ -430,11 +430,14 @@ impl<B: SimdBackend, P: Profile> Myers<B, P> {
         // Handle suffix overhang
         self.handle_suffix_overhang(t_queries, text, k, is_end_block);
 
-        //fixme: fix final pos based on alpha
         let final_pos = if self.alpha_pattern != !0 && is_end_block {
-            (text_len + t_queries.pattern_length).saturating_sub(1) as isize
-        } else if text_len == 0 {
-            -1
+            let overhang_steps = get_overhang_steps(
+                t_queries.pattern_length,
+                k as usize,
+                self.alpha,
+                self.max_overhang,
+            );
+            (text_len + overhang_steps).saturating_sub(1) as isize
         } else {
             (text_len - 1) as isize
         };

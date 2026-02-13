@@ -103,7 +103,6 @@ pub fn hierarchical_search<S, F, P: Profile>(
         let chunk_end: usize = (chunk_start + F::LANES).min(suffix_ranges.len());
         let batch_slice = &suffix_ranges[chunk_start..chunk_end];
 
-        trace_buffer.clear_alns();
         trace_batch_ranges(
             full_searcher,
             full_tqueries,
