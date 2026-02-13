@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-__all__: list[str]
+__all__ = ["features", "Match", "Searcher"]
 
 def features() -> None:
     """Print CPU features and throughput information."""
