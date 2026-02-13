@@ -187,7 +187,7 @@ pub fn crispr(args: &CrisprArgs) {
 
     // Shared iterator that pairs each query with every FASTA record in a batched fashion
     let paths = vec![args.path.clone()];
-    let task_iter = InputIterator::new(&paths, &queries, None, true);
+    let task_iter = InputIterator::new(&paths, &queries, None, None, true);
 
     let start = Instant::now();
     std::thread::scope(|scope| {
@@ -210,7 +210,7 @@ pub fn crispr(args: &CrisprArgs) {
                 };
 
                 while let Some((_batch_id, batch)) = task_iter.next_batch() {
-                    for text in batch.2 {
+                    for text in &*batch.2 {
                         for pattern in batch.1 {
                             let guide_sequence = &pattern.seq;
                             let guide_string = String::from_utf8_lossy(guide_sequence);

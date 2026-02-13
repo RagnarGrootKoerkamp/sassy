@@ -17,7 +17,7 @@ use sassy::{
 
 use crate::{
     crispr::check_n_frac,
-    input_iterator::{InputIterator, PatternRecord, TextRecord},
+    input_iterator::{InputIterator, PatternRecord, TextBatch, TextRecord},
 };
 
 // TODO: Support ASCII alphabet.
@@ -57,6 +57,10 @@ pub struct BaseArgs {
         conflicts_with = "pattern_file"
     )]
     pattern_fasta: Option<PathBuf>,
+
+    /// Number of patterns to process inside each batch. Default 64.
+    #[arg(long, requires = "pattern_file")]
+    pattern_batch_size: Option<usize>,
 
     /// Report matches up to (and including) this distance threshold.
     #[arg(short)]
@@ -219,11 +223,18 @@ impl Args {
             && !args.base.no_rc;
 
         let num_threads = args.base.threads.unwrap_or_else(num_cpus::get);
-        let task_iterator = &InputIterator::new(&args.base.paths, &patterns, Some(1024 * 1024), rc);
+        let task_iterator = &InputIterator::new(
+            &args.base.paths,
+            &patterns,
+            None,
+            args.base.pattern_batch_size,
+            rc,
+        );
 
         let output = Mutex::new((
             0,
-            VecDeque::<Option<Vec<(&Path, TextRecord, Vec<(&PatternRecord, Match)>)>>>::new(),
+            VecDeque::<Option<Vec<(&Path, (TextBatch, usize), Vec<(&PatternRecord, Match)>)>>>::new(
+            ),
         ));
         let global_histogram = Mutex::new(vec![0usize; k + 1]);
 
@@ -289,13 +300,16 @@ impl Args {
                         }
                     };
 
-                    let mut results: Vec<(&Path, TextRecord, Vec<(&PatternRecord, Match)>)> =
-                        vec![];
+                    let mut results: Vec<(
+                        &Path,
+                        (TextBatch, usize),
+                        Vec<(&PatternRecord, Match)>,
+                    )> = vec![];
                     let mut local_histogram = vec![0usize; k + 1];
 
                     while let Some((batch_id, batch)) = task_iterator.next_batch() {
                         let path = batch.0;
-                        for text in batch.2 {
+                        for (i, text) in batch.2.iter().enumerate() {
                             let mut batch_matches = vec![];
                             for pattern in batch.1 {
                                 let record_matches = match &mut searcher {
@@ -314,10 +328,15 @@ impl Args {
                                         .map(|m| (pattern, m)),
                                 );
                             }
+
+                            if batch_matches.is_empty() {
+                                continue;
+                            }
+
                             for (_pat, m) in &batch_matches {
                                 local_histogram[m.cost as usize] += 1;
                             }
-                            results.push((path, text, batch_matches));
+                            results.push((path, (batch.2.clone(), i), batch_matches));
                         }
 
                         let (next_batch_id, output_buf) = &mut *output.lock().unwrap();
@@ -342,7 +361,7 @@ impl Args {
                             for (path, text, matches) in front_results {
                                 args.output(
                                     path,
-                                    text,
+                                    &text.0[text.1],
                                     matches,
                                     &mut filter_writer,
                                     &mut match_writer,
@@ -383,7 +402,7 @@ impl Args {
     fn output(
         &self,
         path: &Path,
-        text: TextRecord,
+        text: &TextRecord,
         mut matches: Vec<(&PatternRecord, Match)>,
         filter_writer: &mut Option<std::sync::MutexGuard<'_, Box<dyn Write + Send>>>,
         match_writer: &mut Option<std::sync::MutexGuard<'_, Box<dyn Write + Send>>>,
