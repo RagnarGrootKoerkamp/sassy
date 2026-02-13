@@ -56,6 +56,10 @@ class Match:
         """CIGAR string describing the alignment."""
         ...
 
+    def __repr__(self) -> str:
+        """Return a string representation of the match."""
+        ...
+
 class Searcher:
     """A reusable searcher object for fast sequence search."""
 
