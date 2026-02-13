@@ -85,9 +85,8 @@ uv run \
 To run type checking on the typed example with [`uv`](https://docs.astral.sh/uv/):
 ```console
 uv run \
-    --with maturin \
     --with mypy \
-    sh -c 'maturin develop && mypy python/sassy/example_typed.py'
+    sh -c 'mypy python/sassy/example_typed.py'
 ```
 
 **Note on auto-generation.** The `.pyi` stubs are currently maintained by hand.
