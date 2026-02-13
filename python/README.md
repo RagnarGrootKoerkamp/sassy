@@ -69,6 +69,17 @@ texts and searches each pattern in each text, possibly in multiple threads.
 
 See [sassy/example.py](sassy/example.py) for a larger example.
 
+## Type Hints
+
+This package ships [PEP 561](https://peps.python.org/pep-0561/) type stubs (`sassy/py.typed` + `sassy/sassy.pyi`) so that type checkers and IDEs can provide autocomplete and type checking out of the box.
+
+See [sassy/example_typed.py](sassy/example_typed.py) for a typed example that exercises all public APIs.
+
+**Note on auto-generation.** The `.pyi` stubs are currently maintained by hand.
+PyO3's [type stub introspection](https://pyo3.rs/main/type-stub.html) is a work-in-progress and does not yet support the function-based `#[pymodule]` declaration used here.
+Maturin does not generate stubs itself — it only packages them.
+Until PyO3 introspection matures, the manual stubs are the most reliable approach and should be kept in sync with `src/python.rs` when the API changes.
+
 ## Troubleshooting
 
 
