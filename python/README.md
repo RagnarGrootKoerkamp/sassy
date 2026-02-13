@@ -75,6 +75,21 @@ This package ships [PEP 561](https://peps.python.org/pep-0561/) type stubs (`sas
 
 See [sassy/example_typed.py](sassy/example_typed.py) for a typed example that exercises all public APIs.
 
+To run the typed example with [`uv`](https://docs.astral.sh/uv/):
+```console
+uv run \
+    --with maturin \
+    sh -c 'maturin develop && python python/sassy/example_typed.py'
+```
+
+To run type checking on the typed example with [`uv`](https://docs.astral.sh/uv/):
+```console
+uv run \
+    --with maturin \
+    --with mypy \
+    sh -c 'maturin develop && mypy python/sassy/example_typed.py'
+```
+
 **Note on auto-generation.** The `.pyi` stubs are currently maintained by hand.
 PyO3's [type stub introspection](https://pyo3.rs/main/type-stub.html) is a work-in-progress and does not yet support the function-based `#[pymodule]` declaration used here.
 Maturin does not generate stubs itself — it only packages them.
