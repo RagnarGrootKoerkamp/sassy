@@ -137,23 +137,19 @@ impl<'a> InputIterator<'a> {
                         }
                         Some(Err(e)) => panic!("Error reading FASTA record: {e}"),
                         None => {
-                            // Reached end of reader, initialize for next file.
-                            state.file_idx += 1;
-                            let end_of_files = state.file_idx >= self.paths.len();
-                            if !end_of_files {
-                                state.reader = parse_file(&self.paths[state.file_idx]);
-                            }
-
                             // Return last batch for the current file.
                             if !text_batch.is_empty() {
                                 break 'outer;
                             }
+                            // Reached end of reader, now we advance to next file (or quit when no files left)
+                            state.file_idx += 1;
+                            let end_of_files = state.file_idx >= self.paths.len();
                             if end_of_files {
                                 log::debug!("No more files to read, returning None");
                                 return None;
                             }
-
                             // Start reading next file.
+                            state.reader = parse_file(&self.paths[state.file_idx]);
                             continue;
                         }
                     }
