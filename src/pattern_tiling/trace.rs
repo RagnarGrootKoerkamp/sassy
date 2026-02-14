@@ -30,7 +30,7 @@ pub struct TraceBuffer {
     pub range_bounds: Vec<(isize, isize)>,
     pub per_range_alignments: Vec<Vec<Match>>,
     pub filtered_alignments: Vec<Match>,
-    pub temp_positions: Vec<isize>,
+    pub temp_pos_cost: Vec<(isize, isize)>,
     pub filled_till: usize,
     pub pos_cost_buffer: Vec<(isize, isize)>,
     pub minima_indices_buffer: Vec<usize>,
@@ -44,7 +44,7 @@ impl TraceBuffer {
             range_bounds: vec![(0isize, 0isize); lanes],
             per_range_alignments: vec![Vec::new(); lanes],
             filtered_alignments: Vec::with_capacity(10),
-            temp_positions: Vec::new(),
+            temp_pos_cost: Vec::new(),
             filled_till: 0,
             pos_cost_buffer: Vec::new(),
             minima_indices_buffer: Vec::new(),
@@ -57,7 +57,7 @@ impl TraceBuffer {
             aln.clear();
         }
         self.filtered_alignments.clear();
-        self.temp_positions.clear();
+        self.temp_pos_cost.clear();
         self.filled_till = 0;
     }
 
@@ -122,7 +122,7 @@ fn handle_suffix_overhangs<B: SimdBackend, P: Profile>(
 
 #[inline(always)]
 fn traceback_positions<B: SimdBackend, P: Profile>(
-    positions: &[isize],
+    positions_and_costs: &[(isize, isize)],
     searcher: &Myers<B, P>,
     lane: usize,
     pattern_idx: usize,
@@ -131,7 +131,7 @@ fn traceback_positions<B: SimdBackend, P: Profile>(
     text_len: usize,
     out: &mut Vec<Match>,
 ) {
-    for &pos in positions {
+    for &(pos, _cost) in positions_and_costs {
         let aln = traceback_single(
             searcher,
             lane,
@@ -180,16 +180,11 @@ fn trace_passing_alignments<B: SimdBackend, P: Profile>(
             }
         }
 
-        buffer.temp_positions.clear();
-
         match post {
             TracePostProcess::All => {
                 // Trace all passing positions
-                buffer
-                    .temp_positions
-                    .extend(buffer.pos_cost_buffer.iter().map(|&(pos, _)| pos));
                 traceback_positions::<B, P>(
-                    &buffer.temp_positions,
+                    &buffer.pos_cost_buffer,
                     searcher,
                     lane,
                     pattern_idx,
@@ -201,14 +196,16 @@ fn trace_passing_alignments<B: SimdBackend, P: Profile>(
             }
             TracePostProcess::LocalMinima => {
                 local_minima_indices(&buffer.pos_cost_buffer, &mut buffer.minima_indices_buffer);
-                buffer.temp_positions.extend(
+                // Build subset of pos_cost pairs for local minima only
+                buffer.temp_pos_cost.clear();
+                buffer.temp_pos_cost.extend(
                     buffer
                         .minima_indices_buffer
                         .iter()
-                        .map(|&idx| buffer.pos_cost_buffer[idx].0),
+                        .map(|&idx| buffer.pos_cost_buffer[idx]),
                 );
                 traceback_positions::<B, P>(
-                    &buffer.temp_positions,
+                    &buffer.temp_pos_cost,
                     searcher,
                     lane,
                     pattern_idx,
