@@ -58,3 +58,7 @@ sassy2_fig1:
     python3  evals/src/sassy2/scripts/generate_fig1.py
     just unperm
 
+# Flamegraph: run lib unit test (workaround when package has lib + bin with same name)
+flamegraph test_name:
+    cargo test --no-run --lib
+    flamegraph -- $(cargo test --release --no-run --lib 2>&1 | sed -n '/Executable/s/.*(\(.*\))/\1/p') {{test_name}}

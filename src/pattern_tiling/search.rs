@@ -5,18 +5,18 @@ use crate::profiles::Profile;
 use crate::search::get_overhang_steps;
 use std::marker::PhantomData;
 
-#[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::_mm_prefetch;
+// #[cfg(target_arch = "x86_64")]
+// use std::arch::x86_64::_mm_prefetch;
 
-#[cfg(target_arch = "x86_64")]
-#[inline(always)]
-unsafe fn prefetch_read<T>(ptr: *const T) {
-    unsafe { _mm_prefetch(ptr as *const i8, std::arch::x86_64::_MM_HINT_T0) };
-}
+// #[cfg(target_arch = "x86_64")]
+// #[inline(always)]
+// unsafe fn prefetch_read<T>(ptr: *const T) {
+//     unsafe { _mm_prefetch(ptr as *const i8, std::arch::x86_64::_MM_HINT_T0) };
+// }
 
-#[cfg(not(target_arch = "x86_64"))]
-#[inline(always)]
-unsafe fn prefetch_read<T>(_ptr: *const T) {}
+// #[cfg(not(target_arch = "x86_64"))]
+// #[inline(always)]
+// unsafe fn prefetch_read<T>(_ptr: *const T) {}
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct BlockState<S: Copy> {
@@ -370,12 +370,12 @@ impl<B: SimdBackend, P: Profile> Myers<B, P> {
             let encoded = P::encode_char(c) as usize;
             let peq_base = unsafe { peqs_ptr.add(encoded * num_blocks) };
 
-            // Prefetch next peq
-            if idx + 1 < text_len {
-                let next_c = unsafe { *text_ptr.add(idx + 1) };
-                let next_encoded = P::encode_char(next_c) as usize;
-                unsafe { prefetch_read(peqs_ptr.add(next_encoded * num_blocks)) };
-            }
+            // // Prefetch next peq
+            // if idx + 1 < text_len {
+            //     let next_c = unsafe { *text_ptr.add(idx + 1) };
+            //     let next_encoded = P::encode_char(next_c) as usize;
+            //     unsafe { prefetch_read(peqs_ptr.add(next_encoded * num_blocks)) };
+            // }
 
             for block_i in 0..num_blocks {
                 unsafe {
@@ -864,6 +864,21 @@ mod tests {
         k: usize,
     ) -> Vec<Match> {
         searcher.search_all(pattern, &text, k)
+    }
+
+    #[test]
+    #[ignore = "Just profiling"]
+    fn v2_random_big_search() {
+        let mut total_matches = 0;
+        for _ in 0..1 {
+            let pattern = random_dna_seq(random_range(10..24));
+            let text = random_dna_seq(1_000_000);
+            let mut searcher = Searcher::<Iupac>::new(Some(0.5));
+            let encoded = searcher.encode(&[pattern], false);
+            let matches = searcher.search(&encoded, &text, 3);
+            total_matches += matches.len();
+        }
+        println!("total matches: {total_matches}");
     }
 
     #[test]
