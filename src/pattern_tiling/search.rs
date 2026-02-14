@@ -339,7 +339,6 @@ impl<B: SimdBackend, P: Profile> Myers<B, P> {
         let alpha_pattern = self.alpha_pattern & length_mask;
 
         self.ensure_capacity(num_blocks, t_queries.n_queries);
-
         self.search_prep(
             num_blocks,
             t_queries.n_queries,
@@ -356,33 +355,19 @@ impl<B: SimdBackend, P: Profile> Myers<B, P> {
         let peqs_ptr: *const <B as SimdBackend>::Simd = t_queries.peqs.as_ptr();
         let blocks_ptr = self.blocks.as_mut_ptr();
         let n_queries = t_queries.n_queries;
-        let start_ptr = self.active_ranges.as_mut_ptr();
-
-        let text_ptr = text.as_ptr();
-        let text_len = text.len();
 
         if self.alpha_pattern != !0 && is_start_block {
             self.handle_full_prefix_matches(t_queries, k);
         }
 
-        for idx in 0..text_len {
-            let c = unsafe { *text_ptr.add(idx) };
+        for idx in 0..text.len() {
+            let c = unsafe { *text.as_ptr().add(idx) };
             let encoded = P::encode_char(c) as usize;
             let peq_base = unsafe { peqs_ptr.add(encoded * num_blocks) };
-
-            // // Prefetch next peq
-            // if idx + 1 < text_len {
-            //     let next_c = unsafe { *text_ptr.add(idx + 1) };
-            //     let next_encoded = P::encode_char(next_c) as usize;
-            //     unsafe { prefetch_read(peqs_ptr.add(next_encoded * num_blocks)) };
-            // }
 
             for block_i in 0..num_blocks {
                 unsafe {
                     let block = &mut *blocks_ptr.add(block_i);
-
-                    let prev_mask = block.active_mask;
-
                     let eq = *peq_base.add(block_i);
 
                     let (vp_out, vn_out, cost_out) = Self::myers_step(
@@ -394,40 +379,31 @@ impl<B: SimdBackend, P: Profile> Myers<B, P> {
                         last_bit_shift,
                         last_bit_mask,
                     );
+
                     block.vp = vp_out;
                     block.vn = vn_out;
                     block.cost = cost_out;
 
-                    // Compute hits, <=k cost
+                    // Compute which lanes have cost <= k
                     let gt_mask = B::simd_gt(cost_out, k_simd);
-                    let hit_bits = if gt_mask != all_ones {
+                    let new_mask = if gt_mask != all_ones {
                         B::lanes_with_zero(gt_mask)
                     } else {
                         0
                     };
 
-                    let change = hit_bits ^ prev_mask;
-
-                    let current_pos = idx as isize;
-                    let base_pattern_idx = block_i * B::LANES;
-
-                    block.active_mask = hit_bits;
-
-                    self.handle_range_mask_change(
-                        block,
-                        change,
-                        prev_mask,
-                        hit_bits,
-                        base_pattern_idx,
-                        current_pos,
+                    self.update_ranges(
+                        block_i,
+                        block.active_mask,
+                        new_mask,
+                        idx as isize,
                         n_queries,
-                        start_ptr,
                     );
+                    block.active_mask = new_mask;
                 }
             }
         }
 
-        // Handle suffix overhang
         self.handle_suffix_overhang(t_queries, text, k, is_end_block);
 
         let final_pos = if self.alpha_pattern != !0 && is_end_block {
@@ -437,14 +413,59 @@ impl<B: SimdBackend, P: Profile> Myers<B, P> {
                 self.alpha,
                 self.max_overhang,
             );
-            (text_len + overhang_steps).saturating_sub(1) as isize
+            (text.len() + overhang_steps).saturating_sub(1) as isize
         } else {
-            (text_len - 1) as isize
+            (text.len() - 1) as isize
         };
 
         self.finalize_ranges(t_queries.n_queries, num_blocks, final_pos);
-
         &self.hit_ranges
+    }
+
+    #[inline(always)]
+    fn update_ranges(
+        &mut self,
+        block_i: usize,
+        old_mask: u64,
+        new_mask: u64,
+        pos: isize,
+        n_queries: usize,
+    ) {
+        let changed = old_mask ^ new_mask;
+        if changed == 0 {
+            return;
+        }
+
+        let base_idx = block_i * B::LANES;
+        let ended = changed & old_mask;
+        let started = changed & new_mask;
+
+        // Finalize ended ranges
+        let mut mask = ended;
+        while mask != 0 {
+            let lane = mask.trailing_zeros() as usize;
+            let qidx = base_idx + lane;
+            if qidx < n_queries {
+                let start = self.active_ranges[qidx];
+                self.hit_ranges.push(HitRange {
+                    pattern_idx: qidx,
+                    start,
+                    end: pos - 1,
+                });
+            }
+            mask &= mask - 1;
+        }
+
+        // Start new ranges
+        mask = started;
+        while mask != 0 {
+            let lane = mask.trailing_zeros() as usize;
+            let qidx = base_idx + lane;
+            if qidx < n_queries {
+                self.active_ranges[qidx] = pos;
+            }
+            mask &= mask - 1;
+        }
     }
 
     // Similar to sassy
@@ -867,7 +888,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Just profiling"]
+    // #[ignore = "Just profiling"]
     fn v2_random_big_search() {
         let mut total_matches = 0;
         for _ in 0..1 {
