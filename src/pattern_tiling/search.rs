@@ -363,12 +363,12 @@ impl<B: SimdBackend, P: Profile> Myers<B, P> {
         for idx in 0..text.len() {
             let c = unsafe { *text.as_ptr().add(idx) };
             let encoded = P::encode_char(c) as usize;
-            let peq_base = unsafe { peqs_ptr.add(encoded * num_blocks) };
+            let peq_offset = encoded * num_blocks; // Just store offset, not pointer
 
             for block_i in 0..num_blocks {
                 unsafe {
                     let block = &mut *blocks_ptr.add(block_i);
-                    let eq = *peq_base.add(block_i);
+                    let eq = *peqs_ptr.add(peq_offset + block_i);
 
                     let (vp_out, vn_out, cost_out) = Self::myers_step(
                         block.vp,

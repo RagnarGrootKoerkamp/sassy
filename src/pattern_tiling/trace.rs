@@ -220,6 +220,7 @@ fn trace_passing_alignments<B: SimdBackend, P: Profile>(
 }
 
 /// Trace alignments for hit ranges using a single SIMD forward pass per range.
+#[inline(always)]
 pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
     searcher: &mut Myers<B, P>,
     t_queries: &TQueries<B, P>,
