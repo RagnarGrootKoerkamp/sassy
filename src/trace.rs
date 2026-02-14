@@ -39,7 +39,7 @@ impl CostMatrix {
         for idx in (j..j + i / 64 * (self.q + 1)).step_by(self.q + 1) {
             s += self.deltas[idx].value();
         }
-        if i % 64 != 0 {
+        if !i.is_multiple_of(64) {
             s += self.deltas[j + i / 64 * (self.q + 1)].value_of_prefix(i as I % 64);
         }
         s

@@ -64,9 +64,9 @@ pub struct InputIterator<'a> {
 
 fn parse_file(path: &PathBuf) -> Box<dyn FastxReader> {
     if path == Path::new("") || path == Path::new("-") {
-        return parse_fastx_stdin().unwrap();
+        parse_fastx_stdin().unwrap()
     } else {
-        return parse_fastx_file(path).unwrap();
+        parse_fastx_file(path).unwrap()
     }
 }
 
@@ -194,14 +194,14 @@ impl<'a> InputIterator<'a> {
             state.text_batch.len(),
             end - start,
         );
-        return Some((
+        Some((
             batch_id,
             (
                 &self.paths[state.file_idx],
                 &self.patterns[start..end],
                 state.text_batch.clone(),
             ),
-        ));
+        ))
     }
 }
 

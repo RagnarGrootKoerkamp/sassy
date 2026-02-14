@@ -412,25 +412,22 @@ impl Args {
         if self.filter.is_some() {
             let writer = &mut **filter_writer.as_mut().unwrap();
             if !self.base.invert && !matches.is_empty() {
-                self.print_matching_record(&text, writer);
+                self.print_matching_record(text, writer);
             }
             if self.base.invert && matches.is_empty() {
-                self.print_matching_record(&text, writer);
+                self.print_matching_record(text, writer);
             }
         }
 
         match (self.grep, self.search.is_some()) {
             // 2. If grep, interleave with search output if needed.
-            (true, _) => self.print_matches_for_record(
-                path,
-                &text,
-                &mut matches,
-                match_writer.as_deref_mut(),
-            ),
+            (true, _) => {
+                self.print_matches_for_record(path, text, &matches, match_writer.as_deref_mut())
+            }
             // 3. Just write the search output.
             (false, true) => {
                 for (pattern, m) in &matches {
-                    self.print_match_tsv(pattern, &text, m, match_writer.as_deref_mut().unwrap());
+                    self.print_match_tsv(pattern, text, m, match_writer.as_deref_mut().unwrap());
                 }
             }
             (false, false) => {}

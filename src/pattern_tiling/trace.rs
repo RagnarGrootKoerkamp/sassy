@@ -220,6 +220,7 @@ fn trace_passing_alignments<B: SimdBackend, P: Profile>(
 }
 
 /// Trace alignments for hit ranges using a single SIMD forward pass per range.
+#[inline(always)]
 pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
     searcher: &mut Myers<B, P>,
     t_queries: &TQueries<B, P>,
@@ -368,6 +369,7 @@ fn extract_simd_lane<B: SimdBackend>(simd_val: B::Simd, lane: usize) -> u64 {
     B::scalar_to_u64(arr.as_ref()[lane])
 }
 
+#[inline(always)]
 fn get_cost_at<B: SimdBackend, P: Profile>(
     searcher: &Myers<B, P>,
     lane_idx: usize,
@@ -385,7 +387,7 @@ fn get_cost_at<B: SimdBackend, P: Profile>(
         };
         (searcher.alpha_pattern & mask).count_ones() as isize
     } else {
-        // Handle Matrix Cost
+        // Handle matrix cost
         let step_data = &searcher.history[lane_idx].steps[step_idx as usize];
         let vp_bits = extract_simd_lane::<B>(step_data.vp, lane_idx);
         let vn_bits = extract_simd_lane::<B>(step_data.vn, lane_idx);
@@ -401,7 +403,7 @@ fn get_cost_at<B: SimdBackend, P: Profile>(
         pos - neg
     };
 
-    // Apply Suffix Overhang Correction
+    // Apply suffix overhang correction
     let abs_pos = approx_start + step_idx;
     let max_valid_text_pos = text_len.saturating_sub(1) as isize;
 
@@ -414,6 +416,7 @@ fn get_cost_at<B: SimdBackend, P: Profile>(
     cost
 }
 
+#[inline(always)]
 fn traceback_single<B: SimdBackend, P: Profile>(
     searcher: &Myers<B, P>,
     lane_idx: usize,

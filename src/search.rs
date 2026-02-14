@@ -402,7 +402,7 @@ impl<P: Profile> Searcher<P> {
     }
 
     pub fn encode_patterns(&mut self, patterns: &[Vec<u8>]) -> EncodedPatterns<P> {
-        self.pattern_tiling_searcher.encode(&patterns, self.rc)
+        self.pattern_tiling_searcher.encode(patterns, self.rc)
     }
 
     /// Returns a match for each *rightmost local pattern_tilingmum* end position with score <=k.
@@ -553,12 +553,12 @@ impl<P: Profile> Searcher<P> {
                     let text_batches: Vec<&[&I]> = texts.chunks(LANES).collect();
 
                     map_collect_cartesian_product(
-                        &patterns,
+                        patterns,
                         &text_batches,
                         self,
                         |searcher, pattern, text_batch, pi, tbi| {
                             let mut matches =
-                                searcher.search_texts(pattern.as_ref(), *text_batch, k);
+                                searcher.search_texts(pattern.as_ref(), text_batch, k);
                             matches.iter_mut().for_each(move |m| {
                                 m.pattern_idx = pi;
                                 m.text_idx += tbi * LANES;
@@ -955,6 +955,7 @@ impl<P: Profile> Searcher<P> {
     }
 
     #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
     fn search_internal<'t, F>(
         &mut self,
         pattern: MultiPattern<'t>,
@@ -1166,6 +1167,7 @@ impl<P: Profile> Searcher<P> {
     }
 
     #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
     fn find_minima_with_overhang(
         &mut self,
         v: V,
@@ -1275,7 +1277,7 @@ impl<P: Profile> Searcher<P> {
         if self.only_best_match {
             // only return 1 best match per (pattern, text) pair
             let mut best = [(Cost::MAX, Reverse(0), 0, [].as_slice(), [].as_slice()); LANES];
-            for lane in 0..LANES {
+            for (lane, best_lane) in best.iter_mut().enumerate().take(LANES) {
                 for &(end_pos, cost) in &self.lanes[lane].matches {
                     let offset = end_pos.saturating_sub(fill_len);
                     let Some(t) = text.get_lane(lane) else {
@@ -1284,7 +1286,7 @@ impl<P: Profile> Searcher<P> {
                     let slice = &t[offset..end_pos.min(t.len())];
 
                     // rightmost match with minimal cost
-                    best[lane] = best[lane].min((
+                    *best_lane = (*best_lane).min((
                         cost,
                         Reverse(end_pos),
                         offset,
@@ -1325,13 +1327,13 @@ impl<P: Profile> Searcher<P> {
                 }
             } else {
                 // return a minimum per lane
-                for lane in 0..LANES {
-                    if best[lane].0 != Cost::MAX {
+                for (lane, best_lane) in best.iter_mut().enumerate().take(LANES) {
+                    if best_lane.0 != Cost::MAX {
                         add_match(
                             if multi_pattern { lane } else { 0 },
                             if multi_text { lane } else { 0 },
                             text.get_lane(lane).unwrap(),
-                            best[lane],
+                            *best_lane,
                         );
                     }
                 }
@@ -1442,6 +1444,7 @@ impl<'a> MatchBatch<'a> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn add(
         &mut self,
         pattern_idx: usize,
@@ -1494,7 +1497,7 @@ impl<'a> MatchBatch<'a> {
                 .all(|p| *p == self.patterns[0]);
             if equal_patterns {
                 simd_fill::<P>(
-                    &self.patterns[0],
+                    self.patterns[0],
                     &self.text_slices[..self.count],
                     fill_len,
                     cost_matrices,
@@ -1513,7 +1516,7 @@ impl<'a> MatchBatch<'a> {
             }
         } else {
             fill::<P>(
-                &self.patterns[0],
+                self.patterns[0],
                 self.text_slices[0],
                 fill_len,
                 &mut cost_matrices[0],
@@ -1522,13 +1525,13 @@ impl<'a> MatchBatch<'a> {
             );
         }
 
-        for i in 0..self.count {
+        for (i, cost_matrix) in cost_matrices[..self.count].iter().enumerate() {
             let mut m = get_trace::<P>(
-                &self.patterns[i],
+                self.patterns[i],
                 self.offsets[i],
                 self.ends[i],
                 self.text_slices[i],
-                &cost_matrices[i],
+                cost_matrix,
                 alpha,
                 max_overhang,
             );
@@ -2193,8 +2196,7 @@ mod tests {
         let mut searcher = Searcher::<Dna>::new_rc();
         let matches = searcher.search(&pattern, &text, 1);
         let path: Vec<Pos> = matches[0].to_path();
-        for i in 0..4 {
-            let Pos(q_pos, r_pos) = path[i];
+        for &Pos(q_pos, r_pos) in path.iter().take(4) {
             assert_eq!(
                 pattern[q_pos as usize] as char,
                 Dna::reverse_complement(&text[r_pos as usize..r_pos as usize + 1])[0] as char
@@ -2772,7 +2774,7 @@ mod tests {
         let t_ref = t.as_slice();
         let mut searcher = Searcher::<Iupac>::new_rc();
         let matches = searcher.search(q, &t_ref, 0);
-        assert_eq!(matches.is_empty(), false);
+        assert!(!matches.is_empty());
     }
 
     #[test]
@@ -2888,11 +2890,11 @@ mod tests {
         let _matches = searcher.search(q, text, 1);
         let _matches = searcher.search(q, &text, 1);
         let _matches = searcher.search(q, &&text, 1);
-        let _matches = searcher.search(&*q, text, 1);
+        let _matches = searcher.search(q, text, 1);
         let q = q.as_slice();
         let _matches = searcher.search(q, text, 1);
-        let _matches = searcher.search(&q, text, 1);
-        let _matches = searcher.search(&&q, text, 1);
+        let _matches = searcher.search(q, text, 1);
+        let _matches = searcher.search(q, text, 1);
         let text = text.as_slice();
         let _matches = searcher.search(q, text, 1);
         let _matches = searcher.search(q, &text, 1);
@@ -3051,7 +3053,7 @@ mod tests {
         let p = b"ATG".to_vec();
         let t = b"NTG".to_vec();
         let mut searcher = Searcher::<Iupac>::new_fwd();
-        let encoded = searcher.encode_patterns(&[p.clone()]);
+        let encoded = searcher.encode_patterns(std::slice::from_ref(&p));
         let matches = searcher.search_encoded_patterns(&encoded, &t, 0);
         assert_eq!(matches.len(), 1);
 
