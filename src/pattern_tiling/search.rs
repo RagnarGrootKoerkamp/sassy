@@ -503,8 +503,8 @@ mod tests {
             &ranges,
             k,
             post,
-            None,
-            None,
+            Some(searcher.alpha),
+            searcher.max_overhang,
             &mut buffer,
         );
         buffer.filtered_alignments
