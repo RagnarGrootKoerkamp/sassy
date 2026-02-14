@@ -1,5 +1,5 @@
 use crate::pattern_tiling::backend::SimdBackend;
-use crate::pattern_tiling::minima::{TracePostProcess, process_minima};
+use crate::pattern_tiling::minima::{TracePostProcess, local_minima_indices};
 use crate::pattern_tiling::search::{HitRange, Myers};
 use crate::pattern_tiling::tqueries::TQueries;
 use crate::profiles::Profile;
@@ -30,7 +30,10 @@ pub struct TraceBuffer {
     pub range_bounds: Vec<(isize, isize)>,
     pub per_range_alignments: Vec<Vec<Match>>,
     pub filtered_alignments: Vec<Match>,
+    pub temp_positions: Vec<isize>,
     pub filled_till: usize,
+    pub pos_cost_buffer: Vec<(isize, isize)>,
+    pub minima_indices_buffer: Vec<usize>,
 }
 
 impl TraceBuffer {
@@ -41,7 +44,10 @@ impl TraceBuffer {
             range_bounds: vec![(0isize, 0isize); lanes],
             per_range_alignments: vec![Vec::new(); lanes],
             filtered_alignments: Vec::with_capacity(10),
+            temp_positions: Vec::new(),
             filled_till: 0,
+            pos_cost_buffer: Vec::new(),
+            minima_indices_buffer: Vec::new(),
         }
     }
 
@@ -51,6 +57,7 @@ impl TraceBuffer {
             aln.clear();
         }
         self.filtered_alignments.clear();
+        self.temp_positions.clear();
         self.filled_till = 0;
     }
 
@@ -66,57 +73,13 @@ impl TraceBuffer {
             self.pattern_indices[i] = r.pattern_idx;
             // Text slice where the match for sure is present (prevent out of bounds)
             self.approx_slices[i] = (r.start.saturating_sub(left_buffer as isize).max(0), r.end);
-            // The original range bounds (limited to 0 in case prefix matches, i.e. -1 only really if entire pattern is before text)
-            self.range_bounds[i] = (r.start.max(0), r.end);
+            // The original range bounds (can be -1 for r.start in case of prefix overhang)
+            self.range_bounds[i] = (r.start, r.end);
             // The alignments we find per range
             self.per_range_alignments[i].clear();
         }
         self.filled_till = ranges.len();
     }
-}
-
-#[inline(always)]
-fn handle_prefix_overhangs<B: SimdBackend, P: Profile>(
-    ranges: &[HitRange],
-    t_queries: &TQueries<B, P>,
-    searcher: &Myers<B, P>,
-    buffer: &mut TraceBuffer,
-) {
-    // Process only ranges with prefix overhang (start == -1)
-    ranges
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| r.start == -1)
-        .for_each(|(i, r)| {
-            let length_mask = (!0u64) >> (64usize.saturating_sub(t_queries.pattern_length));
-            let masked_alpha = searcher.alpha_pattern & length_mask;
-            let cost = masked_alpha.count_ones();
-
-            let mut cigar = Cigar::default();
-            if searcher.alpha == 1.0 {
-                for _ in 0..t_queries.pattern_length {
-                    cigar.push(CigarOp::Del);
-                }
-            }
-
-            let strand = if r.pattern_idx >= t_queries.n_original_queries {
-                crate::search::Strand::Rc
-            } else {
-                crate::search::Strand::Fwd
-            };
-
-            buffer.per_range_alignments[i].push(Match {
-                pattern_idx: r.pattern_idx % t_queries.n_original_queries,
-                text_idx: 0,
-                text_start: usize::MAX,
-                text_end: usize::MAX,
-                pattern_start: t_queries.pattern_length,
-                pattern_end: t_queries.pattern_length,
-                cost: cost as Cost,
-                strand,
-                cigar,
-            });
-        });
 }
 
 #[inline(always)]
@@ -157,6 +120,108 @@ fn handle_suffix_overhangs<B: SimdBackend, P: Profile>(
     }
 }
 
+#[inline(always)]
+fn traceback_positions<B: SimdBackend, P: Profile>(
+    positions: &[isize],
+    searcher: &Myers<B, P>,
+    lane: usize,
+    pattern_idx: usize,
+    t_queries: &TQueries<B, P>,
+    approx_start: isize,
+    text_len: usize,
+    out: &mut Vec<Match>,
+) {
+    for &pos in positions {
+        let aln = traceback_single(
+            searcher,
+            lane,
+            pattern_idx,
+            t_queries,
+            (approx_start, pos),
+            text_len,
+        );
+        out.push(aln);
+    }
+}
+
+#[inline(always)]
+fn trace_passing_alignments<B: SimdBackend, P: Profile>(
+    batch_size: usize,
+    buffer: &mut TraceBuffer,
+    searcher: &Myers<B, P>,
+    t_queries: &TQueries<B, P>,
+    text: &[u8],
+    k: u32,
+    post: TracePostProcess,
+) {
+    let text_len = text.len();
+
+    for lane in 0..batch_size {
+        // r_start can be -1 in case of full prefix overhang (before text)
+        let (r_start, r_end) = buffer.range_bounds[lane];
+        let approx_start = buffer.approx_slices[lane].0;
+        let pattern_idx = buffer.pattern_indices[lane];
+        let pattern_length = t_queries.pattern_length as isize;
+
+        // Collect all passing positions (shared for both branches)
+        buffer.pos_cost_buffer.clear();
+        for pos in r_start..=r_end {
+            let step_idx = pos - approx_start;
+            let cost = get_cost_at::<B, P>(
+                searcher,
+                lane,
+                step_idx,
+                pattern_length - 1,
+                approx_start,
+                text_len,
+            );
+            if cost <= k as isize {
+                buffer.pos_cost_buffer.push((pos, cost));
+            }
+        }
+
+        buffer.temp_positions.clear();
+
+        match post {
+            TracePostProcess::All => {
+                // Trace all passing positions
+                buffer
+                    .temp_positions
+                    .extend(buffer.pos_cost_buffer.iter().map(|&(pos, _)| pos));
+                traceback_positions::<B, P>(
+                    &buffer.temp_positions,
+                    searcher,
+                    lane,
+                    pattern_idx,
+                    t_queries,
+                    approx_start,
+                    text_len,
+                    &mut buffer.filtered_alignments,
+                );
+            }
+            TracePostProcess::LocalMinima => {
+                local_minima_indices(&buffer.pos_cost_buffer, &mut buffer.minima_indices_buffer);
+                buffer.temp_positions.extend(
+                    buffer
+                        .minima_indices_buffer
+                        .iter()
+                        .map(|&idx| buffer.pos_cost_buffer[idx].0),
+                );
+                traceback_positions::<B, P>(
+                    &buffer.temp_positions,
+                    searcher,
+                    lane,
+                    pattern_idx,
+                    t_queries,
+                    approx_start,
+                    text_len,
+                    &mut buffer.filtered_alignments,
+                );
+            }
+        }
+    }
+}
+
 /// Trace alignments for hit ranges using a single SIMD forward pass per range.
 pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
     searcher: &mut Myers<B, P>,
@@ -180,13 +245,6 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
     buffer.clear_alns();
     buffer.populate(ranges, left_buffer);
     let batch_size = buffer.filled_till;
-
-    // Handle prefix overhangs (basically just r_start == -1 only which is full prefix overhang)
-    // this is prevented in search with the get_max_overhang as entire overhang is
-    // quite meaningless anyway, but kept here for now
-    if searcher.alpha_pattern != !0 {
-        handle_prefix_overhangs(ranges, t_queries, searcher, buffer);
-    }
 
     // We only have a single block with B::LANES items
     searcher.ensure_capacity(1, buffer.filled_till);
@@ -294,6 +352,7 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
     }
 
     if alpha.is_some() {
+        // If we have alpha, we should artifically extend beyond the text
         handle_suffix_overhangs(
             searcher,
             last_bit_shift,
@@ -303,57 +362,7 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
         );
     }
 
-    for lane in 0..batch_size {
-        let (r_start, r_end) = buffer.range_bounds[lane];
-        let approx_start = buffer.approx_slices[lane].0;
-        for pos in r_start..=r_end {
-            let step_idx = pos - approx_start;
-
-            // cost_at_endpoint (matrix + overhang adjustment)
-            let cost_at_endpoint = get_cost_at::<B, P>(
-                searcher,
-                lane,
-                step_idx,
-                t_queries.pattern_length as isize - 1,
-                approx_start,
-                text.len(),
-            );
-
-            if cost_at_endpoint <= k as isize {
-                let aln = traceback_single(
-                    searcher,
-                    lane,
-                    buffer.pattern_indices[lane],
-                    t_queries,
-                    (approx_start, pos),
-                    text.len(),
-                );
-                buffer.per_range_alignments[lane].push(aln);
-            }
-        }
-    }
-
-    for lane in 0..batch_size {
-        process_minima(
-            post,
-            text.len(),
-            &mut buffer.per_range_alignments[lane],
-            &mut buffer.filtered_alignments,
-        );
-    }
-}
-
-#[inline(always)]
-pub fn clamp_range_to_text_bounds(start: usize, end: usize, upper_bound: usize) -> (usize, usize) {
-    // If both outside the text we bound to 0,0 in line with sassy reporting
-    if start == usize::MAX && end == usize::MAX {
-        return (0, 0);
-    }
-    if start > upper_bound && end > upper_bound {
-        (upper_bound + 1, upper_bound + 1)
-    } else {
-        (start.max(0), end.min(upper_bound) + 1) // +1 to report inclusive ends like sassy
-    }
+    trace_passing_alignments(batch_size, buffer, searcher, t_queries, text, k, post);
 }
 
 #[inline(always)]
@@ -421,15 +430,15 @@ fn traceback_single<B: SimdBackend, P: Profile>(
     let pattern_len = t_queries.pattern_length as isize;
 
     let max_step = slice.1 - slice.0;
-    let end_pos = slice.1 as usize;
+    let end_pos = slice.1;
     let mut curr_step = max_step;
     let mut pattern_pos = pattern_len - 1;
     let mut cigar: Cigar = Cigar::default();
 
-    let max_valid_text_pos = text_len - 1;
+    let max_valid_text_pos = (text_len - 1) as isize;
     let pattern_end = if end_pos >= max_valid_text_pos && searcher.alpha != 1.0 {
         let overshoot = end_pos - max_valid_text_pos;
-        pattern_len as usize - overshoot
+        (pattern_len as usize).saturating_sub(overshoot as usize)
     } else {
         pattern_len as usize
     };
@@ -486,7 +495,23 @@ fn traceback_single<B: SimdBackend, P: Profile>(
     }
 
     let slice_start_offset = (curr_step + 1).max(0);
-    let text_start = (slice.0 + slice_start_offset).max(0);
+
+    let (text_start, text_end) = if end_pos == -1 {
+        // Before text
+        (0, 0)
+    } else {
+        let start = (slice.0 + slice_start_offset) as usize;
+        let end = end_pos as usize;
+        let last_valid_idx = text_len.saturating_sub(1);
+
+        if start > last_valid_idx && end > last_valid_idx {
+            // After text
+            (text_len, text_len)
+        } else {
+            // Within bounds - +1 report as exclusive like v1, so +1)
+            (start, end.min(last_valid_idx) + 1)
+        }
+    };
 
     let final_cost = get_cost_at(
         searcher,
@@ -502,8 +527,8 @@ fn traceback_single<B: SimdBackend, P: Profile>(
     Match {
         pattern_idx: original_pattern_idx % t_queries.n_original_queries,
         text_idx: 0,
-        text_start: text_start as usize,
-        text_end: slice.1 as usize,
+        text_start,
+        text_end,
         pattern_start,
         pattern_end,
         cost: final_cost as Cost,
