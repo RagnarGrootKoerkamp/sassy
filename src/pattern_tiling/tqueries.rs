@@ -48,6 +48,10 @@ fn build_flat_peqs<B: SimdBackend>(
 #[allow(clippy::needless_range_loop)]
 impl<B: SimdBackend, P: Profile> TQueries<B, P> {
     pub fn new(queries: &[Vec<u8>], include_rc: bool) -> Self {
+        if P::N_CHARS > IUPAC_MASKS {
+            panic!("Please raise issue on GitHub if you are using this for ASCII profile");
+        }
+
         assert!(!queries.is_empty(), "No queries provided");
         let pattern_length = queries[0].len();
         assert!(
