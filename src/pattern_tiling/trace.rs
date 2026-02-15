@@ -90,9 +90,8 @@ fn handle_suffix_overhangs<B: SimdBackend, P: Profile>(
     batch_size: usize,
     overhang_steps: usize,
 ) {
-    let all_ones = B::splat_all_ones();
     let blocks_ptr = searcher.blocks.as_mut_ptr();
-
+    let all_ones = searcher.all_ones;
     for _i in 0..overhang_steps {
         unsafe {
             let block = &mut *blocks_ptr;
@@ -106,12 +105,13 @@ fn handle_suffix_overhangs<B: SimdBackend, P: Profile>(
                 last_bit_mask,
             );
             let eq_arr = B::to_array(all_ones);
+            let eq_slice = eq_arr.as_ref();
+
             for lane in 0..batch_size {
-                let eq_scalar = eq_arr.as_ref()[lane];
                 searcher.history[lane].steps.push(SimdHistoryStep {
                     vp: vp_out,
                     vn: vn_out,
-                    eq: B::splat_scalar(eq_scalar),
+                    eq: B::splat_scalar(eq_slice[lane]),
                 });
             }
             block.vp = vp_out;
@@ -155,13 +155,15 @@ fn trace_passing_alignments<B: SimdBackend, P: Profile>(
     post: TracePostProcess,
 ) {
     let text_len = text.len();
+    let pattern_length = t_queries.pattern_length as isize;
+    let k_isize = k as isize;
 
     for lane in 0..batch_size {
         // r_start can be -1 in case of full prefix overhang (before text)
         let (r_start, r_end) = buffer.range_bounds[lane];
         let approx_start = buffer.approx_slices[lane].0;
         let pattern_idx = buffer.pattern_indices[lane];
-        let pattern_length = t_queries.pattern_length as isize;
+        let last_pattern_pos = pattern_length - 1;
 
         // Collect all passing positions (shared for both branches)
         buffer.pos_cost_buffer.clear();
@@ -171,11 +173,11 @@ fn trace_passing_alignments<B: SimdBackend, P: Profile>(
                 searcher,
                 lane,
                 step_idx,
-                pattern_length - 1,
+                last_pattern_pos,
                 approx_start,
                 text_len,
             );
-            if cost <= k as isize {
+            if cost <= k_isize {
                 buffer.pos_cost_buffer.push((pos, cost));
             }
         }
@@ -270,6 +272,8 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
     let one_mask = <B as SimdBackend>::mask_word_to_scalar(!0u64);
 
     let blocks_ptr = searcher.blocks.as_mut_ptr();
+    let text_ptr = text.as_ptr();
+    let text_len = text.len();
 
     // Calculate max_len based on range ends
     let mut max_len = 0;
@@ -287,11 +291,12 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
         max_overhang,
     );
 
+    let mut eq_arr = B::LaneArray::default();
+    let mut keep_mask_arr = B::LaneArray::default();
+
     for i in 0..max_len {
         unsafe {
             let block = &mut *blocks_ptr;
-            let mut eq_arr = B::LaneArray::default();
-            let mut keep_mask_arr = B::LaneArray::default();
 
             let eq_slice = eq_arr.as_mut();
             let keep_slice = keep_mask_arr.as_mut();
@@ -300,8 +305,8 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
                 let q_idx = buffer.pattern_indices[lane];
                 let start = buffer.approx_slices[lane].0;
                 let abs_pos = (i as isize) + start;
-                if abs_pos >= 0 && (abs_pos as usize) < text.len() {
-                    let cur_char = text[abs_pos as usize];
+                if abs_pos >= 0 && (abs_pos as usize) < text_len {
+                    let cur_char = *text_ptr.add(abs_pos as usize);
                     let enc = P::encode_char(cur_char) as usize;
                     eq_slice[lane] = B::mask_word_to_scalar(t_queries.peq_masks[enc][q_idx]);
                     keep_slice[lane] = one_mask;
@@ -329,16 +334,16 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
             let vn_masked = (vn_new & keep_mask) | (block.vn & freeze_mask);
             let cost_masked = (cost_new & keep_mask) | (block.cost & freeze_mask);
             let freeze_arr = B::to_array(freeze_mask);
-
+            let freeze_slice = freeze_arr.as_ref();
             let eq_arr = B::to_array(eq);
+            let eq_slice = eq_arr.as_ref();
             for lane in 0..batch_size {
-                let is_frozen = B::scalar_to_u64(freeze_arr.as_ref()[lane]) != 0;
+                let is_frozen = B::scalar_to_u64(freeze_slice[lane]) != 0;
                 if !is_frozen {
-                    let eq_scalar = eq_arr.as_ref()[lane];
                     searcher.history[lane].steps.push(SimdHistoryStep {
                         vp: vp_masked,
                         vn: vn_masked,
-                        eq: B::splat_scalar(eq_scalar),
+                        eq: B::splat_scalar(eq_slice[lane]),
                     });
                 }
             }
@@ -436,7 +441,8 @@ fn traceback_single<B: SimdBackend, P: Profile>(
     let mut cigar: Cigar = Cigar::default();
 
     let max_valid_text_pos = (text_len - 1) as isize;
-    let pattern_end = if end_pos >= max_valid_text_pos && searcher.alpha != 1.0 {
+    let alpha_not_one = searcher.alpha != 1.0;
+    let pattern_end = if end_pos >= max_valid_text_pos && alpha_not_one {
         let overshoot = end_pos - max_valid_text_pos;
         (pattern_len as usize).saturating_sub(overshoot as usize)
     } else {
@@ -447,41 +453,53 @@ fn traceback_single<B: SimdBackend, P: Profile>(
 
     // Helper closure to keep the calls concise
     let get_cost = |s: isize, p: isize| get_cost_at(searcher, lane_idx, s, p, slice.0, text_len);
+    let text_len_isize = text_len as isize;
 
     while curr_step >= 0 && pattern_pos >= 0 {
         let curr_cost = get_cost(curr_step, pattern_pos);
-        let diag_cost = get_cost(curr_step - 1, pattern_pos - 1);
-        let up_cost = get_cost(curr_step, pattern_pos - 1);
-        let left_cost = get_cost(curr_step - 1, pattern_pos);
 
-        let step = &steps[curr_step as usize];
-        let eq_bits = extract_simd_lane::<B>(step.eq, lane_idx);
-        let is_match = (eq_bits & (1u64 << pattern_pos)) != 0;
-        let match_cost = if is_match { 0 } else { 1 };
+        let beyond_text = slice.0 + curr_step > (text_len_isize - 1);
 
-        if slice.0 + curr_step > (text_len as isize - 1) {
+        if beyond_text {
             pattern_pos -= 1;
             curr_step -= 1;
-            pattern_start = (pattern_pos + 1).max(0) as usize;
-        } else if curr_cost == diag_cost + match_cost && is_match {
-            cigar.push(CigarOp::Match);
-            curr_step -= 1;
-            pattern_pos -= 1;
-            pattern_start = (pattern_pos + 1).max(0) as usize;
-        } else if curr_cost == left_cost + 1 {
-            cigar.push(CigarOp::Ins);
-            curr_step -= 1;
-        } else if curr_cost == diag_cost + match_cost && !is_match {
-            cigar.push(CigarOp::Sub);
-            curr_step -= 1;
-            pattern_pos -= 1;
-            pattern_start = (pattern_pos + 1).max(0) as usize;
-        } else if curr_cost == up_cost + 1 {
-            cigar.push(CigarOp::Del);
-            pattern_pos -= 1;
             pattern_start = (pattern_pos + 1).max(0) as usize;
         } else {
-            panic!("Invalid traceback step reached :(");
+            let diag_cost = get_cost(curr_step - 1, pattern_pos - 1);
+            let step = &steps[curr_step as usize];
+            let eq_bits = extract_simd_lane::<B>(step.eq, lane_idx);
+            let is_match = (eq_bits & (1u64 << pattern_pos)) != 0;
+            let match_cost = if is_match { 0 } else { 1 };
+
+            if curr_cost == diag_cost + match_cost && is_match {
+                cigar.push(CigarOp::Match);
+                curr_step -= 1;
+                pattern_pos -= 1;
+                pattern_start = (pattern_pos + 1).max(0) as usize;
+            } else {
+                // Only compute other costs if diagonal didn't match
+                let left_cost = get_cost(curr_step - 1, pattern_pos);
+
+                if curr_cost == left_cost + 1 {
+                    cigar.push(CigarOp::Ins);
+                    curr_step -= 1;
+                } else if curr_cost == diag_cost + match_cost && !is_match {
+                    cigar.push(CigarOp::Sub);
+                    curr_step -= 1;
+                    pattern_pos -= 1;
+                    pattern_start = (pattern_pos + 1).max(0) as usize;
+                } else {
+                    // Must be deletion
+                    let up_cost = get_cost(curr_step, pattern_pos - 1);
+                    if curr_cost == up_cost + 1 {
+                        cigar.push(CigarOp::Del);
+                        pattern_pos -= 1;
+                        pattern_start = (pattern_pos + 1).max(0) as usize;
+                    } else {
+                        panic!("Invalid traceback step reached :(");
+                    }
+                }
+            }
         }
     }
 

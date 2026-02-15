@@ -5,19 +5,6 @@ use crate::profiles::Profile;
 use crate::search::get_overhang_steps;
 use std::marker::PhantomData;
 
-// #[cfg(target_arch = "x86_64")]
-// use std::arch::x86_64::_mm_prefetch;
-
-// #[cfg(target_arch = "x86_64")]
-// #[inline(always)]
-// unsafe fn prefetch_read<T>(ptr: *const T) {
-//     unsafe { _mm_prefetch(ptr as *const i8, std::arch::x86_64::_MM_HINT_T0) };
-// }
-
-// #[cfg(not(target_arch = "x86_64"))]
-// #[inline(always)]
-// unsafe fn prefetch_read<T>(_ptr: *const T) {}
-
 #[derive(Clone, Copy, Default)]
 pub(crate) struct BlockState<S: Copy> {
     pub(crate) vp: S,
@@ -40,9 +27,11 @@ pub struct Myers<B: SimdBackend, P: Profile> {
     pub(crate) alpha: f32,
     pub(crate) history: Vec<PatternHistory<B::Simd>>,
     pub(crate) hit_ranges: Vec<HitRange>,
-    // Per-pattern open-range start position; isize::MIN means no active range
     pub(crate) max_overhang: Option<usize>,
     pub(crate) active_ranges: Vec<isize>,
+    pub(crate) all_ones: B::Simd,
+    pub(crate) last_bit_shift: u32,
+    pub(crate) last_bit_mask: B::Simd,
     _marker: PhantomData<P>,
 }
 
@@ -64,6 +53,9 @@ impl<B: SimdBackend, P: Profile> Myers<B, P> {
             hit_ranges: Vec::new(),
             active_ranges: Vec::new(),
             max_overhang: None,
+            all_ones: B::splat_all_ones(),
+            last_bit_shift: 0,
+            last_bit_mask: B::splat_zero(),
             _marker: PhantomData,
         }
     }
@@ -108,6 +100,10 @@ impl<B: SimdBackend, P: Profile> Myers<B, P> {
         let initial_cost = B::splat_scalar(B::scalar_from_i64(masked_alpha.count_ones() as i64));
         let alpha_simd = B::splat_scalar(B::mask_word_to_scalar(alpha_pattern));
         let zero = B::splat_zero();
+
+        self.all_ones = B::splat_all_ones();
+        self.last_bit_shift = (pattern_length - 1) as u32;
+        self.last_bit_mask = B::splat_one() << self.last_bit_shift;
 
         for block in self.blocks.iter_mut().take(num_blocks) {
             block.vp = alpha_simd;
@@ -247,9 +243,10 @@ impl<B: SimdBackend, P: Profile> Myers<B, P> {
 
         let blocks_ptr = self.blocks.as_mut_ptr();
         let mut current_text_pos = text.len();
-        let all_ones = B::splat_all_ones();
-        let last_bit_shift = (t_queries.pattern_length - 1) as u32;
-        let last_bit_mask = B::splat_one() << last_bit_shift;
+
+        let all_ones = self.all_ones;
+        let last_bit_shift = self.last_bit_shift;
+        let last_bit_mask = self.last_bit_mask;
         let start_ptr = self.active_ranges.as_mut_ptr();
 
         let n_queries = t_queries.n_queries;
@@ -348,9 +345,9 @@ impl<B: SimdBackend, P: Profile> Myers<B, P> {
         self.hit_ranges.reserve(t_queries.n_queries);
 
         let k_simd = B::splat_scalar(B::scalar_from_i64(k as i64));
-        let last_bit_shift = (t_queries.pattern_length - 1) as u32;
-        let last_bit_mask = B::splat_one() << last_bit_shift;
-        let all_ones = B::splat_all_ones();
+        let last_bit_shift = self.last_bit_shift;
+        let last_bit_mask = self.last_bit_mask;
+        let all_ones = self.all_ones;
 
         // We use pre-computed pointer table from TQueries so we don't have to multiply
         // with number of blocks in the hot loop
@@ -390,19 +387,17 @@ impl<B: SimdBackend, P: Profile> Myers<B, P> {
                     block.cost = cost_out;
 
                     let gt_mask = B::simd_gt(cost_out, k_simd);
-                    let new_mask = if gt_mask != all_ones {
-                        B::lanes_with_zero(gt_mask)
-                    } else {
-                        0
-                    };
-
-                    self.update_ranges(
-                        block_i,
-                        block.active_mask,
-                        new_mask,
-                        idx as isize,
-                        n_queries,
-                    );
+                    let new_mask = B::lanes_with_zero(gt_mask);
+                    let changed = block.active_mask ^ new_mask;
+                    if changed != 0 {
+                        self.update_ranges(
+                            block_i,
+                            block.active_mask,
+                            changed,
+                            idx as isize,
+                            n_queries,
+                        );
+                    }
                     block.active_mask = new_mask;
 
                     block_ptr = block_ptr.add(1);
@@ -434,48 +429,35 @@ impl<B: SimdBackend, P: Profile> Myers<B, P> {
         &mut self,
         block_i: usize,
         old_mask: u64,
-        new_mask: u64,
+        changed: u64,
         pos: isize,
         n_queries: usize,
     ) {
-        let changed = old_mask ^ new_mask;
-        if changed == 0 {
-            return;
-        }
-
         let base_idx = block_i * B::LANES;
-        let ended = changed & old_mask;
-        let started = changed & new_mask;
 
-        // Finalize ended ranges
-        let mut mask = ended;
+        let mut mask = changed;
         while mask != 0 {
             let lane = mask.trailing_zeros() as usize;
             let qidx = base_idx + lane;
             if qidx < n_queries {
-                let start = self.active_ranges[qidx];
-                self.hit_ranges.push(HitRange {
-                    pattern_idx: qidx,
-                    start,
-                    end: pos - 1,
-                });
-            }
-            mask &= mask - 1;
-        }
-
-        // Start new ranges
-        mask = started;
-        while mask != 0 {
-            let lane = mask.trailing_zeros() as usize;
-            let qidx = base_idx + lane;
-            if qidx < n_queries {
-                self.active_ranges[qidx] = pos;
+                let is_ending = (old_mask >> lane) & 1;
+                if is_ending != 0 {
+                    // Range is ending
+                    let start = self.active_ranges[qidx];
+                    self.hit_ranges.push(HitRange {
+                        pattern_idx: qidx,
+                        start,
+                        end: pos - 1,
+                    });
+                } else {
+                    // Range is starting
+                    self.active_ranges[qidx] = pos;
+                }
             }
             mask &= mask - 1;
         }
     }
 
-    // Similar to sassy
     #[inline(always)]
     fn generate_alpha_mask(alpha: f32, length: usize, max_overhang: Option<usize>) -> u64 {
         let mut mask = 0u64;
