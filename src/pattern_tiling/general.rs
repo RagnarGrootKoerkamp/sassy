@@ -262,6 +262,8 @@ impl<P: Profile> Searcher<P> {
     }
 
     pub fn encode(&self, queries: &[Vec<u8>], include_rc: bool) -> EncodedPatterns<P> {
+        //Fixme: neat to encode all possible suffixes so every k is supported when
+        // search is called, it is wasteful when user never searches different k's
         if queries.is_empty() {
             panic!("No queries provided");
         }

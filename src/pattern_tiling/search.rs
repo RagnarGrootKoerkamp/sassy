@@ -352,8 +352,11 @@ impl<B: SimdBackend, P: Profile> Myers<B, P> {
         let last_bit_mask = B::splat_one() << last_bit_shift;
         let all_ones = B::splat_all_ones();
 
-        let peqs_ptr: *const <B as SimdBackend>::Simd = t_queries.peqs.as_ptr();
-        let blocks_ptr = self.blocks.as_mut_ptr();
+        // We use pre-computed pointer table from TQueries so we don't have to multiply
+        // with number of blocks in the hot loop
+        let peqs_base = t_queries.peqs.as_ptr();
+        let peq_offsets = &t_queries.peq_offsets;
+        let blocks_base = self.blocks.as_mut_ptr();
         let n_queries = t_queries.n_queries;
 
         if self.alpha_pattern != !0 && is_start_block {
@@ -363,12 +366,14 @@ impl<B: SimdBackend, P: Profile> Myers<B, P> {
         for idx in 0..text.len() {
             let c = unsafe { *text.as_ptr().add(idx) };
             let encoded = P::encode_char(c) as usize;
-            let peq_offset = encoded * num_blocks; // Just store offset, not pointer
 
-            for block_i in 0..num_blocks {
-                unsafe {
-                    let block = &mut *blocks_ptr.add(block_i);
-                    let eq = *peqs_ptr.add(peq_offset + block_i);
+            unsafe {
+                let mut peq_ptr = peqs_base.add(peq_offsets[encoded]);
+                let mut block_ptr = blocks_base;
+
+                for block_i in 0..num_blocks {
+                    let block = &mut *block_ptr;
+                    let eq = *peq_ptr;
 
                     let (vp_out, vn_out, cost_out) = Self::myers_step(
                         block.vp,
@@ -384,7 +389,6 @@ impl<B: SimdBackend, P: Profile> Myers<B, P> {
                     block.vn = vn_out;
                     block.cost = cost_out;
 
-                    // Compute which lanes have cost <= k
                     let gt_mask = B::simd_gt(cost_out, k_simd);
                     let new_mask = if gt_mask != all_ones {
                         B::lanes_with_zero(gt_mask)
@@ -400,6 +404,9 @@ impl<B: SimdBackend, P: Profile> Myers<B, P> {
                         n_queries,
                     );
                     block.active_mask = new_mask;
+
+                    block_ptr = block_ptr.add(1);
+                    peq_ptr = peq_ptr.add(1);
                 }
             }
         }
@@ -893,10 +900,11 @@ mod tests {
         let mut total_matches = 0;
         for _ in 0..1 {
             let pattern = random_dna_seq(random_range(10..24));
-            let text = random_dna_seq(1_000_000);
+            let pattern = random_dna_seq(20);
+            let text = random_dna_seq(10_000_000);
             let mut searcher = Searcher::<Iupac>::new(Some(0.5));
             let encoded = searcher.encode(&[pattern], false);
-            let matches = searcher.search(&encoded, &text, 3);
+            let matches = searcher.search(&encoded, &text, 5);
             total_matches += matches.len();
         }
         println!("total matches: {total_matches}");

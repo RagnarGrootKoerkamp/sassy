@@ -14,6 +14,9 @@ pub struct TQueries<B: SimdBackend, P: Profile> {
     pub n_simd_blocks: usize,
     pub peq_masks: [Vec<u64>; IUPAC_MASKS],
     pub peqs: Vec<B::Simd>,
+    /// Pre-computed offsets into peqs for each character
+    /// peq_offsets[encoded_char] is the starting index for that character's peq blocks
+    pub peq_offsets: [usize; IUPAC_MASKS],
     // Not sure if we should keep it here, but might be handy with
     // get_pattern_seq(i) to make sure it aligns with the indices of `scan` result bools
     pub queries: Vec<Vec<u8>>,
@@ -112,6 +115,11 @@ impl<B: SimdBackend, P: Profile> TQueries<B, P> {
 
         let peqs = build_flat_peqs::<B>(&peq_masks, n_queries, n_simd_blocks);
 
+        let mut peq_offsets = [0usize; IUPAC_MASKS];
+        for i in 0..IUPAC_MASKS {
+            peq_offsets[i] = i * n_simd_blocks;
+        }
+
         Self {
             pattern_length,
             n_queries,
@@ -119,6 +127,7 @@ impl<B: SimdBackend, P: Profile> TQueries<B, P> {
             n_simd_blocks,
             peq_masks,
             peqs,
+            peq_offsets,
             queries: all_queries,
             _marker: PhantomData,
         }
