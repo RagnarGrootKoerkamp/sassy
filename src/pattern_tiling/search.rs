@@ -882,11 +882,11 @@ mod tests {
         let mut total_matches = 0;
         for _ in 0..1 {
             let pattern = random_dna_seq(random_range(10..24));
-            let pattern = random_dna_seq(20);
+            let k = (pattern.len() as f32 / 3.0).ceil() as u32;
             let text = random_dna_seq(10_000_000);
             let mut searcher = Searcher::<Iupac>::new(Some(0.5));
             let encoded = searcher.encode(&[pattern], false);
-            let matches = searcher.search(&encoded, &text, 5);
+            let matches = searcher.search(&encoded, &text, k);
             total_matches += matches.len();
         }
         println!("total matches: {total_matches}");

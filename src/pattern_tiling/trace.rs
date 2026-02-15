@@ -467,6 +467,8 @@ fn traceback_single<B: SimdBackend, P: Profile>(
         } else {
             let diag_cost = get_cost(curr_step - 1, pattern_pos - 1);
             let step = &steps[curr_step as usize];
+            // Fixme: this is a bit of a waste to first store eq bitmasks, then extract the bit
+            // perhaps we can just like in v1 check if profile:match(p,t)
             let eq_bits = extract_simd_lane::<B>(step.eq, lane_idx);
             let is_match = (eq_bits & (1u64 << pattern_pos)) != 0;
             let match_cost = if is_match { 0 } else { 1 };
