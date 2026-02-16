@@ -19,8 +19,8 @@ use perfcnt::AbstractPerfCounter;
 
 const NO_IPC: f64 = 0.0; // If IPC is not measured, we set it to 0.0
 const USE_RC: bool = false; // Only applies to sassy 1/2, just for testing not used via config
-const MIN_PATTERNS_PER_CHUNK: usize = 64; // For amd we do want to have at least 32 to pipeline two blocks when k = 3
-const MIN_TEXT_BYTES_PER_CHUNK: usize = 10_000_000; // 1MB
+const MIN_PATTERNS_PER_CHUNK: usize = 32; // For amd we do want to have at least 32 to pipeline two blocks when k = 3
+const MIN_TEXT_BYTES_PER_CHUNK: usize = 1_000_000; // 1MB
 
 #[derive(Clone, Debug)]
 pub struct BenchmarkResults {
@@ -412,6 +412,8 @@ where
     // We do this once prior to benching so it does not affect the algos themselves
     let pattern_chunks = create_pattern_chunks(queries.len());
     let text_groups = create_text_groups(texts);
+    println!("Text groups: {:?}", text_groups.len());
+    println!("Pattern chunks: {:?}", pattern_chunks.len());
 
     // Re-used threadpool
     let pool = if threads > 1 {
