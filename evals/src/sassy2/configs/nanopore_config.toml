@@ -1,7 +1,7 @@
 read_file = "evals/src/sassy2/data/downloaded/SRR26425221_1.fastq"
 barcode_file = "evals/src/sassy2/data/static/barcodes.fasta"
 ks = [3, 4]
-min_benchtime = 10.0  # min seconds per tool
+min_benchtime = 1  # min seconds per tool
 warmup_iterations = 0
 output_file = "evals/src/sassy2/output/nanopore_results.csv"
 run_edlib = true

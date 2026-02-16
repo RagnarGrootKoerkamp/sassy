@@ -2,7 +2,7 @@
 guide_file = "evals/src/sassy2/data/static/guides.fasta"
 genome_file = "evals/src/sassy2/data/downloaded/chm13v2.0.fa"
 ks = [3]
-min_benchtime = 10.0  # min seconds per tool
+min_benchtime = 1  # min seconds per tool
 warmup_iterations = 0
 output_file = "evals/src/sassy2/output/off_target_results.csv"
 threads = 16
