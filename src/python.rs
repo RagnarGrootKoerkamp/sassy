@@ -9,6 +9,7 @@ use pyo3::types::{PyBytes, PyString};
 fn sassy(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(features, m)?)?;
     m.add_class::<Searcher>()?;
+    m.add_class::<Match>()?;
     Ok(())
 }
 
