@@ -19,7 +19,7 @@ pub fn pretty_print_match(pattern: &[u8], text: &[u8], cigar: &Cigar) -> (usize,
     let mut len = 0;
     // might work flipping args here that swaps ins/del in pa-types
     // but that's odd
-    let char_pairs = cigar.to_char_pairs(pattern, text);
+    let char_pairs = cigar.to_char_pairs(text, pattern);
     let prefix_del = match cigar.ops[0] {
         CigarElem {
             op: CigarOp::Ins,
