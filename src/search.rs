@@ -52,8 +52,8 @@ pub struct Match {
     /// The CIGAR should always be read in the direction of the input pattern.
     /// `=`: match
     /// `X`: mismatch
-    /// `I`: consume pattern/query but not text/ref
-    /// `D`: consume text/ref but not pattern/query
+    /// `I`: extra in pattern/query, not in text/ref
+    /// `D`: extra in text/ref, not in pattern/query
     #[derivative(PartialOrd = "ignore")]
     #[derivative(Ord = "ignore")]
     pub cigar: Cigar,

@@ -44,18 +44,18 @@ pub fn pretty_print_match(pattern: &[u8], text: &[u8], cigar: &Cigar) -> (usize,
                 // matches are not bold
                 write!(out, "{}", (c as char).to_string().green()).unwrap()
             }
-            CigarOpChars::Sub(_old, new) => {
-                write!(out, "{}", (new as char).to_string().yellow().bold()).unwrap()
+            CigarOpChars::Sub(text, _pat) => {
+                write!(out, "{}", (text as char).to_string().yellow().bold()).unwrap()
             }
             CigarOpChars::Del(c) => {
-                write!(out, "{}", (c as char).to_string().red().bold()).unwrap()
+                write!(out, "{}", (c as char).to_string().cyan().bold()).unwrap()
             }
             CigarOpChars::Ins(c) => {
                 // leading and trailing deletions are not bold
                 if is_overhang {
-                    write!(out, "{}", (c as char).to_string().cyan()).unwrap()
+                    write!(out, "{}", (c as char).to_string().red()).unwrap()
                 } else {
-                    write!(out, "{}", (c as char).to_string().cyan().bold()).unwrap()
+                    write!(out, "{}", (c as char).to_string().red().bold()).unwrap()
                 }
             }
         }
