@@ -1,6 +1,6 @@
 [package]
 name = "sassy"
-version = "0.1.10"
+version = "0.2.0"
 edition = "2024"
 authors = ["Rick Beeloo", "Ragnar Groot Koerkamp"]
 description = "Approximate string matching using SIMD"
