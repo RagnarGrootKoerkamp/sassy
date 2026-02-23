@@ -421,6 +421,25 @@ fn get_cost_at<B: SimdBackend, P: Profile>(
     cost
 }
 
+/*
+Op  BAM  Consumes query  Consumes reference
+--  ---  --------------  ------------------
+M   0    yes             yes
+I   1    yes             no
+D   2    no              yes
+N   3    no              yes
+S   4    yes             no
+H   5    no              no
+P   6    no              no
+=   7    yes             yes
+X   8    yes             yes
+
+NOTE: query = pattern, reference = text.
+In this context mostly means:
+    i+1 , j+1  -> Match/Sub
+    i+1 , j    -> Ins
+    i   , j+1  -> Del
+*/
 #[inline(always)]
 fn traceback_single<B: SimdBackend, P: Profile>(
     searcher: &Myers<B, P>,
@@ -482,8 +501,9 @@ fn traceback_single<B: SimdBackend, P: Profile>(
                 // Only compute other costs if diagonal didn't match
                 let left_cost = get_cost(curr_step - 1, pattern_pos);
 
+                // Consumes step = text/ref (not pattern) = Del
                 if curr_cost == left_cost + 1 {
-                    cigar.push(CigarOp::Ins);
+                    cigar.push(CigarOp::Del);
                     curr_step -= 1;
                 } else if curr_cost == diag_cost + match_cost && !is_match {
                     cigar.push(CigarOp::Sub);
@@ -491,10 +511,10 @@ fn traceback_single<B: SimdBackend, P: Profile>(
                     pattern_pos -= 1;
                     pattern_start = (pattern_pos + 1).max(0) as usize;
                 } else {
-                    // Must be deletion
+                    // Consumes pattern = query/pattern (not step) = Ins
                     let up_cost = get_cost(curr_step, pattern_pos - 1);
                     if curr_cost == up_cost + 1 {
-                        cigar.push(CigarOp::Del);
+                        cigar.push(CigarOp::Ins);
                         pattern_pos -= 1;
                         pattern_start = (pattern_pos + 1).max(0) as usize;
                     } else {
@@ -508,8 +528,10 @@ fn traceback_single<B: SimdBackend, P: Profile>(
     // Handle prefix overhang, but we only add it as operations if overhang was disabled
     if pattern_pos >= 0 && searcher.alpha == 1.0 {
         let overhang_len = (pattern_pos + 1) as usize;
+        // Overhang technically consumes the reference (even though it doesn't exist)
+        // should use softclipping but for now Ins
         for _ in 0..overhang_len {
-            cigar.push(CigarOp::Del);
+            cigar.push(CigarOp::Ins);
         }
         pattern_start = 0;
     }

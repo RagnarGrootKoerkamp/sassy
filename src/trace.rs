@@ -238,6 +238,25 @@ pub fn simd_fill_multipattern<P: Profile>(
     }
 }
 
+/*
+Op  BAM  Consumes query  Consumes reference
+--  ---  --------------  ------------------
+M   0    yes             yes
+I   1    yes             no
+D   2    no              yes
+N   3    no              yes
+S   4    yes             no
+H   5    no              no
+P   6    no              no
+=   7    yes             yes
+X   8    yes             yes
+
+NOTE: query = pattern, reference = text.
+In this context mostly means:
+    i+1 , j+1  -> Match/Sub
+    i+1 , j    -> Ins
+    i   , j+1  -> Del
+*/
 pub fn get_trace<P: Profile>(
     pattern: &[u8],
     text_offset: usize,
@@ -312,9 +331,9 @@ pub fn get_trace<P: Profile>(
         // We make some kind of mutation.
         g -= 1;
 
-        // Insert text char.
+        // Consumes i = text/ref (not j) = Del
         if i > 0 && cost(j, i - 1) == g {
-            cigar.push(pa_types::CigarOp::Ins);
+            cigar.push(pa_types::CigarOp::Del);
             i -= 1;
             continue;
         }
@@ -325,9 +344,9 @@ pub fn get_trace<P: Profile>(
             i -= 1;
             continue;
         }
-        // Delete query char.
+        // Consumes j = query/pattern (not i) = Ins
         if cost(j - 1, i) == g {
-            cigar.push(pa_types::CigarOp::Del);
+            cigar.push(pa_types::CigarOp::Ins);
             j -= 1;
             continue;
         }

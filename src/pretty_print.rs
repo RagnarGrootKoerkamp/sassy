@@ -17,17 +17,19 @@ pub fn pretty_print_match(pattern: &[u8], text: &[u8], cigar: &Cigar) -> (usize,
 
     let mut out = String::new();
     let mut len = 0;
+    // might work flipping args here that swaps ins/del in pa-types
+    // but that's odd
     let char_pairs = cigar.to_char_pairs(pattern, text);
     let prefix_del = match cigar.ops[0] {
         CigarElem {
-            op: CigarOp::Del,
+            op: CigarOp::Ins,
             cnt,
         } => cnt as usize,
         _ => 0,
     };
     let suffix_del = match cigar.ops.last().unwrap() {
         CigarElem {
-            op: CigarOp::Del,
+            op: CigarOp::Ins,
             cnt,
         } => *cnt as usize,
         _ => 0,
@@ -45,15 +47,15 @@ pub fn pretty_print_match(pattern: &[u8], text: &[u8], cigar: &Cigar) -> (usize,
             CigarOpChars::Sub(_old, new) => {
                 write!(out, "{}", (new as char).to_string().yellow().bold()).unwrap()
             }
-            CigarOpChars::Ins(c) => {
-                write!(out, "{}", (c as char).to_string().cyan().bold()).unwrap()
-            }
             CigarOpChars::Del(c) => {
+                write!(out, "{}", (c as char).to_string().red().bold()).unwrap()
+            }
+            CigarOpChars::Ins(c) => {
                 // leading and trailing deletions are not bold
                 if is_overhang {
-                    write!(out, "{}", (c as char).to_string().red()).unwrap()
+                    write!(out, "{}", (c as char).to_string().cyan()).unwrap()
                 } else {
-                    write!(out, "{}", (c as char).to_string().red().bold()).unwrap()
+                    write!(out, "{}", (c as char).to_string().cyan().bold()).unwrap()
                 }
             }
         }
@@ -117,11 +119,11 @@ impl Match {
             if m.pattern_start > 0 {
                 m.cigar
                     .ops
-                    .insert(0, CigarElem::new(CigarOp::Del, m.pattern_start as i32));
+                    .insert(0, CigarElem::new(CigarOp::Ins, m.pattern_start as i32));
             }
             if m.pattern_end < pattern.len() {
                 m.cigar.ops.push(CigarElem::new(
-                    CigarOp::Del,
+                    CigarOp::Ins,
                     (pattern.len() - m.pattern_end) as i32,
                 ));
             }

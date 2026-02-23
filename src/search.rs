@@ -26,8 +26,7 @@ use crate::pattern_tiling::general::Searcher as PatterntilingSearcher;
 /// `text_start` and `text_end` are indices into the _forward_ text, as given by the user.
 /// Thus, the pattern will match `rc(&text[text_start..text_end])`.
 /// In this case, the CIGAR tells the differences between `pattern` and `rc(&text[text_start..text_end])`.
-/// In the CIGAR, `I` represents a character in the text that is not in the pattern,
-/// and `D` represents a character in the pattern that is not in the text.
+/// Follows SAM format: https://samtools.github.io/hts-specs/SAMv1.pdf (page 8)
 #[derive(derivative::Derivative, Clone, PartialEq, Eq)]
 #[derivative(PartialOrd, Ord)]
 #[cfg_attr(feature = "python", pyo3::pyclass)]
@@ -53,8 +52,8 @@ pub struct Match {
     /// The CIGAR should always be read in the direction of the input pattern.
     /// `=`: match
     /// `X`: mismatch
-    /// `I`: character in text but not in pattern.
-    /// `D`: character in pattern but not in text.
+    /// `I`: consume pattern/query but not text/ref
+    /// `D`: consume text/ref but not pattern/query
     #[derivative(PartialOrd = "ignore")]
     #[derivative(Ord = "ignore")]
     pub cigar: Cigar,
@@ -77,6 +76,7 @@ impl Debug for Match {
 }
 
 impl Match {
+    //fixme: use deltas from pa-types
     /// Convert the match to a list of (pattern pos, text pos) positions.
     pub fn to_path(&self) -> Vec<Pos> {
         let (path_start_text, sign) = if self.strand == Strand::Rc {
@@ -90,8 +90,8 @@ impl Match {
             for _ in 0..op.cnt {
                 pos += match op.op {
                     CigarOp::Match | CigarOp::Sub => Pos(1, sign),
-                    CigarOp::Del => Pos(1, 0),
-                    CigarOp::Ins => Pos(0, sign),
+                    CigarOp::Ins => Pos(1, 0),    // consumes pattern/query
+                    CigarOp::Del => Pos(0, sign), // consumes text/ref
                 };
                 path.push(pos);
             }
