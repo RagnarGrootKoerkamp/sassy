@@ -75,14 +75,18 @@ This package ships [PEP 561](https://peps.python.org/pep-0561/) type stubs (`sas
 
 See [sassy/example_typed.py](sassy/example_typed.py) for a typed example that exercises all public APIs.
 
-To run the typed example with [`uv`](https://docs.astral.sh/uv/):
+Running the example requires the sassy package be installed in your environment.
+
+To install muatrin and the package in an isolated environment, then run the typed example you can use a single [`uv`](https://docs.astral.sh/uv/) command:
 ```console
 uv run \
     --with maturin \
     sh -c 'maturin develop && python python/sassy/example_typed.py'
 ```
 
-To run type checking on the typed example with [`uv`](https://docs.astral.sh/uv/):
+Running type checking on the type example requires mypy be installed in your environment.
+
+To install mypy in an isolated environment then run type checking on the typed example you can use a single [`uv`](https://docs.astral.sh/uv/) command:
 ```console
 uv run \
     --with mypy \
