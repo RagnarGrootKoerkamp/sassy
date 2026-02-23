@@ -21,6 +21,9 @@ v2 also adds new variants of the existing `Searcher::search` method:
   a user-specified underlying algorithm.
   
 Further changes:
+- **Breaking**: Cigar output now follows the SAM spec and reversed `I` and `D`
+  compared to before. `I` now means the pattern contains a character that is not
+  in the text.
 - feat: Support AVX512 for pattern tiling.
 - feat: moved pretty printing from `bin/grep.rs` to publicly available `Match::pretty_print`.
 - feat: `Match` now contains `text_idx` and `pattern_idx` for multi-search variants.
