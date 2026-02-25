@@ -35,3 +35,6 @@ many_matches: list[Match] = searcher_ascii.search_many(
     threads=1,
     mode="single",
 )
+
+# search_all returns list[Match]
+all_matches: list[Match] = searcher_dna.search_all(b"ATCGATCG", b"GGGGATCGATCGTTTT", k=2)

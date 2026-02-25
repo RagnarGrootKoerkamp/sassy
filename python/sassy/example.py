@@ -91,3 +91,22 @@ for i, match in enumerate(matches4):
     print(
         f"  Match {i+1}: pattern={match.pattern_idx} text={match.text_idx} start={match.text_start}, end={match.text_end}, cost={match.cost}"
     )
+
+# Example 5: Search all end positions
+print("\n=== Search All Example ===")
+pattern5 = b"ATCGATCG"
+text5 = b"GGGGATCGATCGTTTT"
+
+searcher5 = sassy.Searcher("dna", rc=False)
+matches_default = searcher5.search(pattern5, text5, k=2)
+matches_all = searcher5.search_all(pattern5, text5, k=2)
+
+print(f"Pattern: {pattern5.decode()}")
+print(f"Text:    {text5.decode()}")
+print(f"search() returned {len(matches_default)} match(es)")
+print(f"search_all() returned {len(matches_all)} match(es)")
+
+for i, match in enumerate(matches_all):
+    print(
+        f"  Match {i+1}: start={match.text_start}, end={match.text_end}, cost={match.cost}, cigar={match.cigar}"
+    )
