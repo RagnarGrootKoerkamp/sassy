@@ -1,9 +1,13 @@
 use crate::sassy1::edlib_bench::edlib::*;
 use crate::sassy1::edlib_bench::grid::*;
 use crate::sassy1::edlib_bench::sim_data::*;
+use rand::{SeedableRng, rngs::SmallRng};
 use sassy::{Match, Searcher};
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
+
+// Add seed such that all benches have the same patterns and texts
+const BENCH_SEED: u64 = 63;
 
 fn remove_10_percent_outliers(times: &mut Vec<f64>) {
     times.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -13,7 +17,7 @@ fn remove_10_percent_outliers(times: &mut Vec<f64>) {
 }
 
 macro_rules! time_it {
-    ($label:expr, $expr:expr, $iters:expr, $pairs:expr) => {{
+    ($label:expr, $expr:expr, $iters:expr, $gen:expr) => {{
         let _label = $label;
         const WARMUP_RUNS: usize = 5;
         const SAMPLES_PER_PAIR: usize = 3;
@@ -23,41 +27,50 @@ macro_rules! time_it {
         let mut plus_one_times = Vec::with_capacity($iters);
 
         // Warmup phase
-        for _ in 0..WARMUP_RUNS {
-            for (q, t, _, _) in $pairs.iter() {
-                std::hint::black_box($expr(q, t));
+            let mut rng = SmallRng::seed_from_u64(BENCH_SEED.wrapping_add(1));
+            for _ in 0..WARMUP_RUNS {
+                for _ in 0..$iters {
+                    let (q, t, t_plus_one_q, _) = $gen(&mut rng);
+                    std::hint::black_box($expr(&q, &t));
+                    drop((q, t, t_plus_one_q));
+                }
             }
-        }
 
-        for (q, t, t_plus_one_q, _) in $pairs.iter() {
+        let mut rng = SmallRng::seed_from_u64(BENCH_SEED);
+        for _ in 0..$iters {
+            let (q, t, t_plus_one_q, _) = $gen(&mut rng);
+
             for _ in 0..SAMPLES_PER_PAIR {
                 // Run base case
                 let start = std::time::Instant::now();
-                let r = std::hint::black_box($expr(q, t));
-                let elapsed = start.elapsed();
-                base_times.push(elapsed.as_nanos() as f64);
+                let r = std::hint::black_box($expr(&q, &t));
+                base_times.push(start.elapsed().as_nanos() as f64);
                 final_result = Some(r);
 
                 // Run base case + 1 extra query
                 let start = std::time::Instant::now();
-                 std::hint::black_box($expr(q, t_plus_one_q));
-                let elapsed = start.elapsed();
-                plus_one_times.push(elapsed.as_nanos() as f64);
+                std::hint::black_box($expr(&q, &t_plus_one_q));
+                plus_one_times.push(start.elapsed().as_nanos() as f64);
             }
         }
 
         // Then we also subtract the plus one from base times to get the extra time for one more match
-        let mut base_minus_plus_one: Vec<f64> = base_times.iter().zip(plus_one_times.iter()).map(|(b, p)| p - b).collect();
+        let mut base_minus_plus_one: Vec<f64> = base_times
+            .iter()
+            .zip(plus_one_times.iter())
+            .map(|(b, p)| p - b)
+            .collect();
 
         // For the base times we remove the top and bottom 10% outliers
         remove_10_percent_outliers(&mut base_times);
         remove_10_percent_outliers(&mut base_minus_plus_one);
 
         let base_mean = base_times.iter().sum::<f64>() / base_times.len() as f64;
-        let base_minus_plus_one_mean = base_minus_plus_one.iter().sum::<f64>() / base_minus_plus_one.len() as f64;
+        let base_minus_plus_one_mean =
+            base_minus_plus_one.iter().sum::<f64>() / base_minus_plus_one.len() as f64;
 
         (final_result.unwrap(), base_mean, base_minus_plus_one_mean)
-    }};
+    }}
 }
 
 pub fn run(grid_config: &str) {
@@ -78,7 +91,8 @@ pub fn run(grid_config: &str) {
     writeln!(
         writer,
         "query_length,text_length,k,edlib_matches,sassy_matches,max_edits,bench_iter,alphabet,profile,rc,edlib_ns,edlib_ns_plus_one,sassy_ns,sassy_ns_plus_one"
-    ).unwrap();
+    )
+    .unwrap();
 
     // Get combinations
     for param_set in grid.all_combinations() {
@@ -87,19 +101,19 @@ pub fn run(grid_config: &str) {
         let num_matches = param_set.matches;
         let bench_iter = param_set.bench_iter;
 
-        // Generate all query-text pairs upfront
-        let pairs: Vec<_> = (0..bench_iter)
-            .map(|_| {
-                generate_query_and_text_with_matches(
-                    param_set.query_length,
-                    param_set.text_length,
-                    num_matches,
-                    param_set.max_edits,
-                    param_set.max_edits,
-                    &param_set.alphabet,
-                )
-            })
-            .collect();
+        // Generate all query-text pairs (based on seed)
+        // use as generator so we don't have to keep all in memory
+        let gen_data = |rng: &mut SmallRng| {
+            generate_query_and_text_with_matches(
+                param_set.query_length,
+                param_set.text_length,
+                num_matches,
+                param_set.max_edits,
+                param_set.max_edits,
+                &param_set.alphabet,
+                rng,
+            )
+        };
 
         // Running Edlib
         let (edlib_matches, edlib_mean_ms, edlib_plus_one_ms) = if param_set.edlib {
@@ -108,7 +122,7 @@ pub fn run(grid_config: &str) {
                 "edlib",
                 |q, t| { run_edlib(q, t, &edlib_config) },
                 bench_iter,
-                &pairs
+                gen_data
             );
             let edlib_matches = r.startLocations.unwrap_or(vec![]);
             (edlib_matches, ms, ms_plus_one)
@@ -124,7 +138,7 @@ pub fn run(grid_config: &str) {
             "sassy",
             |q, t| { search_fn(q, t, param_set.k) },
             bench_iter,
-            &pairs
+            gen_data
         );
 
         if param_set.edlib {
@@ -146,7 +160,7 @@ pub fn run(grid_config: &str) {
         // Write row to CSV
         writeln!(
             writer,
-            "{},{},{},{},{},{},{},{:?},{},{},{:.0},{:.0},{:.0},{:.0}", // Added one more .0 for plus_one_ms
+            "{},{},{},{},{},{},{},{:?},{},{},{:.0},{:.0},{:.0},{:.0}",
             param_set.query_length,
             param_set.text_length,
             param_set.k,

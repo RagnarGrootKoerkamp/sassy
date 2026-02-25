@@ -8,9 +8,9 @@ There are 3 separate evals related to the paper:
 
 
 ## Section 3: Sassy vs Edlib on synthetic data
-First make sure to build the `benchmarks` executable:
+First make sure to build the `evals` executable:
 
-`cargo build --release -p benchmarks`
+`cargo build --release -p evals`
 
 This creates the `benchmarks` executable in `/target/release/`.
 This is what the python scripts use to run the benchmarks. 

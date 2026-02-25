@@ -25,6 +25,7 @@ plt.rcParams.update(
     }
 )
 
+USE_TEXT_LENGTH = 100_000
 
 # Get all files with "results_" in the name
 files = glob("data/*.csv")
@@ -45,6 +46,7 @@ for file in files:
             group_k = int(group_k)
         k_group_files.append((group_k, k, file))
         df_temp = df_temp[df_temp["query_length"] > 3 * k]
+        df_temp = df_temp[df_temp["text_length"] == USE_TEXT_LENGTH]
         df_temp = (
             df_temp.groupby("query_length")
             .agg({"text_length": "mean", "edlib_ns": "mean", "sassy_ns": "mean"})
@@ -99,8 +101,9 @@ for group_k, single_k, file in k_group_files:
     )
 
 # Set log scales
-ax.set_xscale("log")
-ax.set_yscale("log")
+ax.set_xscale("log", base=2)
+ax.set_yscale("log", base=2)
+
 
 # Grid, labels
 ax.grid(True, which="major", linewidth=0.5, alpha=0.7)

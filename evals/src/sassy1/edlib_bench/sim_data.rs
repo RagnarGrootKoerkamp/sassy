@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::{RngExt, SeedableRng, rngs::SmallRng};
 use serde::{Deserialize, Serialize};
 
 #[derive(Copy, Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -17,8 +17,8 @@ pub fn generate_query_and_text_with_matches(
     min_edits: usize,
     max_edits: usize,
     alphabet: &Alphabet,
+    rng: &mut SmallRng,
 ) -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<(usize, usize)>) {
-    let mut rng = rand::rng();
     let query = generate_random_sequence(ql, alphabet, None);
 
     // Get the original text, where we insert NUM queries
@@ -146,16 +146,30 @@ mod sim_data_tests {
 
     #[test]
     fn test_random_data_single_match_no_edits() {
-        let (q, t, t_plus_one_q, locs) =
-            generate_query_and_text_with_matches(10, 100, 1, 0, 0, &Alphabet::Dna);
+        let (q, t, t_plus_one_q, locs) = generate_query_and_text_with_matches(
+            10,
+            100,
+            1,
+            0,
+            0,
+            &Alphabet::Dna,
+            &mut SmallRng::seed_from_u64(1),
+        );
         let (s, e) = locs[0];
         assert_eq!(q, t[s..e]);
     }
 
     #[test]
     fn test_random_data_single_match_1_edit() {
-        let (q, t, t_plus_one_q, locs) =
-            generate_query_and_text_with_matches(10, 100, 1, 1, 1, &Alphabet::Dna);
+        let (q, t, t_plus_one_q, locs) = generate_query_and_text_with_matches(
+            10,
+            100,
+            1,
+            1,
+            1,
+            &Alphabet::Dna,
+            &mut SmallRng::seed_from_u64(1),
+        );
         let (s, e) = locs[0];
         assert_ne!(q, t[s..e]);
         // Get actual edits using edlib wrapper
@@ -165,8 +179,15 @@ mod sim_data_tests {
 
     #[test]
     fn test_random_two_matches() {
-        let (q, t, t_plus_one_q, locs) =
-            generate_query_and_text_with_matches(10, 100, 2, 1, 1, &Alphabet::Dna);
+        let (q, t, t_plus_one_q, locs) = generate_query_and_text_with_matches(
+            10,
+            100,
+            2,
+            1,
+            1,
+            &Alphabet::Dna,
+            &mut SmallRng::seed_from_u64(1),
+        );
         assert_eq!(locs.len(), 2);
         for loc in locs {
             let (s, e) = loc;

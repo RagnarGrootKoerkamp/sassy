@@ -28,6 +28,8 @@ plt.rcParams.update(
     }
 )
 
+USE_TEXT_LENGTH = 100_000
+
 # Get all files with "results_" in the name
 files = glob("data/*.csv")
 
@@ -47,6 +49,8 @@ for file in files:
             group_k = int(group_k)
         k_group_files.append((group_k, k, file))
         df_temp = df_temp[df_temp["query_length"] > 3 * k]
+        if "text_length" in df_temp.columns:
+            df_temp = df_temp[df_temp["text_length"] == USE_TEXT_LENGTH]
         df_temp = (
             df_temp.groupby("query_length")
             .agg(
@@ -72,8 +76,8 @@ if not dfs:
 df = pd.concat(dfs, ignore_index=True)
 
 # Convert time differences to microseconds
-df["sassy_time_diff"] = 1000 / (df["sassy_ns_plus_one"] * -1 / 1000)
-df["edlib_time_diff"] = 1000 / (df["edlib_ns_plus_one"] * -1 / 1000)
+df["sassy_time_diff"] = 1000 / (df["sassy_ns_plus_one"] * 1 / 1000)
+df["edlib_time_diff"] = 1000 / (df["edlib_ns_plus_one"] * 1 / 1000)
 
 # === Plotting parameters ===
 sassy_color = "#fcc007"  # yellow

@@ -6,14 +6,12 @@ import numpy as np
 import os
 import toml
 
-bench_cmd = "../../target/release/benchmarks"
+bench_cmd = os.path.join(os.path.dirname(__file__), "..", "target", "release", "evals")
 
 # Test if we are all set
-import os
-
-status = os.system(f"{bench_cmd} edlib --help")  # just to check if all is good
+status = os.system(f"{bench_cmd} sassy1 edlib --help")  # just to check if all is good
 if status != 0:
-    print("Error: benchmarks executable not found")
+    print("Error: evals executable not found. Build with: cargo build --release -p evals")
     exit(1)
 
 # Create benchmarks folder if not exists already
@@ -25,7 +23,8 @@ if not os.path.exists(out_dir):
 tool_comp_template = f"{out_dir}/template.toml"
 template_data = {
     "query_lengths": [20, 30, 50, 100, 200, 300, 500, 1000],
-    "text_lengths": [100_000],
+    # 100k in text lengths for original figures
+    "text_lengths": [50, 100, 150, 250, 500, 1000, 2000, 4000, 8000, 16000, 32000, 64000, 100000, 128000],
     "k": [0],
     "matches": [0],
     "bench_iter": [1000],
@@ -71,7 +70,7 @@ print("All tool comparison config files created successfully!")
 
 print("Running benchmarks...")
 for config_file in config_files:
-    cmd = f"{bench_cmd} edlib --config {config_file}"
+    cmd = f"{bench_cmd} sassy1 edlib --config {config_file}"
     print(cmd)
     status = os.system(cmd)
     if status != 0:
