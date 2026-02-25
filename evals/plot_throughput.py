@@ -106,10 +106,10 @@ ax.set_yscale("log", base=2)
 
 
 # Grid, labels
-ax.grid(True, which="major", linewidth=0.5, alpha=0.7)
+ax.grid(True, which="major", linewidth=0.8, alpha=0.2)
 
-ax.set_xlabel("Pattern length")
-ax.set_ylabel("Search throughput (GB/s)")
+ax.set_xlabel("Pattern length (bp)")
+ax.set_ylabel("Search throughput (GBp/s)")
 
 # Y-axis formatter
 ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=[1.0, 2.0, 5.0], numticks=10))

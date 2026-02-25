@@ -118,9 +118,9 @@ ax.set_xscale("log")
 ax.set_yscale("log")
 
 # Grid, labels
-ax.grid(True, which="major", linewidth=0.5, alpha=0.7)
+ax.grid(True, which="major", linewidth=0.8, alpha=0.2)
 
-ax.set_xlabel("Pattern length")
+ax.set_xlabel("Pattern length (bp)")
 ax.set_ylabel("Trace throughput ($10^3$ matches/s)")
 
 # Y-axis formatter

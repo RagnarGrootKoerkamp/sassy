@@ -95,6 +95,11 @@ for group_k, single_k, file in k_group_files:
 ax.set_xscale("log", base=2)
 ax.set_yscale("log", base=2)
 
+#  Add 2 if not there alreayd
+ymin, ymax = ax.get_ylim()
+if ymax < 2:
+    ax.set_ylim(top=2)
+
 ax.set_xlabel("Text length (bp)")
 ax.set_ylabel("Total throughput (Gbp/s)")
 
@@ -136,8 +141,7 @@ def y_fraction_formatter(x, _pos):
 
 ax.yaxis.set_major_formatter(FuncFormatter(y_fraction_formatter))
 
-ax.grid(True, which="major", linewidth=0.4, alpha=0.5, color="#DCDCDC")
-ax.grid(True, which="minor", linewidth=0.3, alpha=0.45, color="#E8E8E8")
+ax.grid(True, which="major", linewidth=0.8, alpha=0.2)
 ax.set_axisbelow(True)
 
 for spine in ax.spines.values():
