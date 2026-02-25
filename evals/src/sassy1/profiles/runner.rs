@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::RngExt;
 use sassy::Searcher;
 use serde::Deserialize;
 use std::fs;
