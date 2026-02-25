@@ -86,6 +86,7 @@ impl GridConfig {
                                     })
                                     // Avoid cases with accidental matches.
                                     .filter(|param| param.query_length > 3 * param.k)
+                                    .filter(|param| param.text_length > param.query_length)
                                     .filter(|param| {
                                         (param.alphabet == Alphabet::Dna && param.profile == "dna")
                                             || (param.alphabet == Alphabet::Dna
