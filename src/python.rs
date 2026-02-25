@@ -111,6 +111,24 @@ impl Searcher {
             }
         }
     }
+
+    #[pyo3(signature = (pattern, text, k))]
+    #[doc = "Search for a pattern in a text. Returns a list of Matches for *all* end positions with score <=k."]
+    fn search_all(
+        &mut self,
+        pattern: &Bound<'_, PyBytes>,
+        text: &Bound<'_, PyBytes>,
+        k: usize,
+    ) -> Vec<Match> {
+        // We don't let control go back to Python while we hold the slices.
+        let pattern = pattern.as_bytes();
+        let text = text.as_bytes();
+        match &mut self.searcher {
+            SearcherType::Ascii(searcher) => searcher.search_all(&pattern, &text, k),
+            SearcherType::Dna(searcher) => searcher.search_all(&pattern, &text, k),
+            SearcherType::Iupac(searcher) => searcher.search_all(&pattern, &text, k),
+        }
+    }
 }
 
 #[pymethods]

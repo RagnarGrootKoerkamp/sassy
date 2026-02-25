@@ -115,3 +115,21 @@ class Searcher:
             A list of Match objects.
         """
         ...
+
+    def search_all(self, pattern: bytes, text: bytes, k: int) -> list[Match]:
+        """
+        Search for a pattern in a text, returning all end positions with score <= k.
+
+        This may generate many many matches.
+        Only use this instead of `search` if you know what you are doing,
+        which typically means there is some postprocessing step to filter overlapping matches.
+
+        Args:
+            pattern: The pattern to search for.
+            text: The text to search in.
+            k: Maximum edit distance (number of allowed errors).
+
+        Returns:
+            A list of Match objects.
+        """
+        ...
