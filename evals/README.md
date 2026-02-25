@@ -24,9 +24,9 @@ python3 run_tool_bench.py
 This creates `benchmarks/` that contains some configuration, and `data/*.csv`
 with benchmark results.
 
-**Throughput plot.**
+**Throughput plot (scaling with pattern length).**
 ```bash
-python3 plot_tool_bench.py
+python3 plot_throughput.py
 ```
 Outputs `figs/throughput.{svg,pdf}`.
 
@@ -36,9 +36,16 @@ Prints numeric throughput (GB/s) statistics corresponding to the plot above.
 python3 throughput_stats.py results_*.csv
 ```
 
+**Throughput plot (scaling with text length).**
+```bash
+python3 plot_throughput_text.py
+```
+Outputs `figs/throughput_text.{svg,pdf}`.
+
+
 **Trace plot.**
 ```bash
-python3 plot_trace_bench.py
+python3 plot_trace.py
 ```
 Outputs `figs/trace.{svg,pdf}`.
 
