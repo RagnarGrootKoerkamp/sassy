@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 
+mod benchsuite;
 mod sassy1;
 mod sassy2;
 
@@ -27,13 +28,6 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum Sassy1Commands {
-    /// Run the edlib grid benchmark
-    Edlib {
-        /// Path to the grid config TOML file
-        #[arg(long)]
-        config: String,
-    },
-
     /// Run the overhang benchmark
     Overhang {
         /// Path to the overhang config TOML file
@@ -48,10 +42,26 @@ enum Sassy1Commands {
         config: String,
     },
 
-    /// Run the agrep comparison benchmark
-    Agrep {
-        /// Path to the agrep config TOML file
-        #[arg(long)]
+    /// Run the throughput (vs pattern length)
+    #[command(name = "throughput_m")]
+    ThroughputM {
+        /// Path to the throughput_m config TOML file
+        #[arg(short, long)]
+        config: String,
+    },
+
+    /// Run the throughput (vs text length)
+    #[command(name = "throughput_n")]
+    ThroughputN {
+        /// Path to the throughput_n config TOML file
+        #[arg(short, long)]
+        config: String,
+    },
+
+    /// Run trace time bench (random text vs random text +1 match)
+    Trace {
+        /// Path to the trace config TOML file
+        #[arg(short, long)]
         config: String,
     },
 }
@@ -91,10 +101,6 @@ fn main() {
     let args = Args::parse();
     match args.command {
         Commands::Sassy1 { command } => match command {
-            Sassy1Commands::Edlib { config } => {
-                println!("Running sassy1 edlib grid");
-                sassy1::edlib_bench::runner::run(&config);
-            }
             Sassy1Commands::Overhang { config } => {
                 println!("Running sassy1 overhang benchmark");
                 sassy1::overhang::runner::run(&config);
@@ -103,9 +109,16 @@ fn main() {
                 println!("Running sassy1 profiles benchmark");
                 sassy1::profiles::runner::run(&config);
             }
-            Sassy1Commands::Agrep { config } => {
-                println!("Running sassy1 agrep comparison benchmark");
-                sassy1::agrep_comparison::runner::run(&config);
+            Sassy1Commands::ThroughputM { config } => {
+                println!("Running sassy1 throughput_m benchmark");
+                sassy1::throughput_m::run(&config);
+            }
+            Sassy1Commands::ThroughputN { config } => {
+                println!("Running sassy1 throughput_n benchmark");
+                sassy1::throughput_n::run(&config);
+            }
+            Sassy1Commands::Trace { config } => {
+                sassy1::trace::run(&config);
             }
         },
 

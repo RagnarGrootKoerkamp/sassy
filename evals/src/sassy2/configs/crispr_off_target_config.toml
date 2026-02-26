@@ -6,3 +6,4 @@ min_benchtime = 1  # min seconds per tool
 warmup_iterations = 0
 output_file = "evals/src/sassy2/output/off_target_results.csv"
 threads = 16
+tools = ["sassy1", "sassy2", "edlib"]

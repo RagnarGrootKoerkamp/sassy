@@ -1,0 +1,10 @@
+target_len = 100_000
+query_lens = [20, 30, 50, 100, 200, 300, 500, 1000]
+ks = [3, 20, 0.01, 0.05]
+n_pairs = 10 # so we have 10 random (p,t) pairs per bench iter (each at least 0.05s)
+min_benchtime = 0.05 # per pair then
+warmup_iterations = 0
+output_file = "evals/src/sassy1/output/trace_extra_time.csv"
+run_edlib = true
+edlib_alphabet = "iupac"
+tools = ["sassy1", "edlib"]

@@ -2,20 +2,23 @@ use rand::RngExt;
 use serde::Deserialize;
 use std::fs;
 
-use crate::sassy1::edlib_bench::sim_data::Alphabet;
-use crate::sassy2::bench;
+use crate::benchsuite::bench;
+use crate::benchsuite::sim_data::Alphabet;
 
 #[derive(Deserialize)]
 struct Config {
     query_len: usize,
     text_len: usize,
-    k: usize,
+    /// K: integer (e.g. 3) or fraction of pattern length (e.g. 0.05 = 5%, rounded up).
+    k: f64,
     num_queries_list: Vec<usize>,
     min_benchtime: f64,
     warmup_iterations: usize,
     output_file: String,
     run_edlib: bool,
     edlib_alphabet: String,
+    #[serde(default)]
+    tools: Option<Vec<bench::BenchTool>>,
 }
 
 pub fn run(config_path: &str) {
@@ -28,6 +31,15 @@ pub fn run(config_path: &str) {
     println!("Warmup iterations: {}", config.warmup_iterations);
     println!("Min bench time: {} s", config.min_benchtime);
     println!();
+
+    let k = bench::resolve_k(config.k, config.query_len);
+    if config.text_len <= config.query_len {
+        println!(
+            "Skipping: text_len={} <= query_len={}",
+            config.text_len, config.query_len
+        );
+        return;
+    }
 
     // Generate text
     let mut rng = rand::rng();
@@ -54,12 +66,14 @@ pub fn run(config_path: &str) {
         let suite = bench::benchmark_tools(
             &queries,
             &[text.clone()],
-            config.k,
+            k,
             config.warmup_iterations,
             config.min_benchtime,
             1,
             &Alphabet::Iupac,
             true,
+            config.tools.as_deref().unwrap_or(&bench::DEFAULT_TOOLS),
+            false,
         );
 
         println!("{}", &suite);
@@ -68,7 +82,7 @@ pub fn run(config_path: &str) {
             num_queries,
             config.text_len,
             config.query_len,
-            config.k,
+            &format!("{}", config.k),
             &suite,
             total_bytes,
         )

@@ -10,4 +10,6 @@ __pycache__
 c/sassy_example
 /evals/src/sassy2/output/*
 /evals/src/sassy2/figs/*
+/evals/src/sassy1/output/*
+/evals/src/sassy1/figs/*
 /evals/src/sassy2/data/downloaded/*

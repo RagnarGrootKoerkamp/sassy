@@ -1,4 +1,4 @@
-use crate::sassy1::edlib_bench::sim_data::Alphabet;
+use crate::benchsuite::sim_data::Alphabet;
 use crate::sassy2::bench;
 use needletail::parse_fastx_file;
 use serde::Deserialize;
@@ -11,8 +11,11 @@ struct Config {
     min_benchtime: f64,
     warmup_iterations: usize,
     output_file: String,
-    ks: Vec<usize>,
+    /// K values: integers (e.g. 3) or fraction of pattern length (e.g. 0.05 = 5%, rounded up).
+    ks: Vec<f64>,
     threads: usize,
+    #[serde(default)]
+    tools: Option<Vec<bench::BenchTool>>,
 }
 
 fn load_guide_sequences(path: &str) -> Vec<Vec<u8>> {
@@ -84,8 +87,10 @@ pub fn run(config_path: &str) {
     let query_len = guides.first().map(|g| g.len()).unwrap_or(0);
     let mut csv = bench::BenchCsv::new(&config.output_file).unwrap();
 
-    for &k in &config.ks {
-        println!("Benchmarking k={}", k);
+    for &k_config in &config.ks {
+        let k = bench::resolve_k(k_config, query_len);
+
+        println!("Benchmarking k={} (resolved from config {})", k, k_config);
 
         let suite = bench::benchmark_tools(
             &guides,
@@ -96,6 +101,8 @@ pub fn run(config_path: &str) {
             config.threads,
             &Alphabet::Iupac,
             false,
+            config.tools.as_deref().unwrap_or(&bench::DEFAULT_TOOLS),
+            false,
         );
 
         println!("{}", &suite);
@@ -104,7 +111,7 @@ pub fn run(config_path: &str) {
             guides.len(),
             total_text_len,
             query_len,
-            k,
+            &format!("{}", k_config),
             &suite,
             total_bytes,
         )

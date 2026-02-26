@@ -1,4 +1,5 @@
-pub mod agrep_comparison;
-pub mod edlib_bench;
 pub mod overhang;
 pub mod profiles;
+pub mod throughput_m;
+pub mod throughput_n;
+pub mod trace;

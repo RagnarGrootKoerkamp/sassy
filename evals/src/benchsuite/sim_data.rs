@@ -60,8 +60,21 @@ pub fn generate_query_and_text_with_matches(
     (query, text_base, text_with_insert, locs)
 }
 
+/// Return a copy of `text` with the last `query.len()` bytes replaced by `query`,
+/// so the query appears exactly once at the end. If `text.len() < query.len()`,
+/// returns `text` unchanged.
+pub fn text_with_query_at_end(text: &[u8], query: &[u8]) -> Vec<u8> {
+    if text.len() < query.len() {
+        return text.to_vec();
+    }
+    let keep_len = text.len() - query.len();
+    let mut out = text[..keep_len].to_vec();
+    out.extend_from_slice(query);
+    out
+}
+
 /// Generate random dna sequence of length "length" with alphabet
-fn generate_random_sequence(length: usize, alphabet: &Alphabet, bias: Option<&str>) -> Vec<u8> {
+pub fn generate_random_sequence(length: usize, alphabet: &Alphabet, bias: Option<&str>) -> Vec<u8> {
     let mut rng = rand::rng();
     // If there is bias just repeat the bias character length times
     if let Some(bias) = bias {

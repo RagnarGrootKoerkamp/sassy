@@ -1,7 +1,10 @@
 use edlib_rs::*;
+use parasail_rs::prelude::{Aligner, Matrix};
+use parasail_rs::profile::Profile;
 use sassy::EncodedPatterns;
 use sassy::Searcher;
 use sassy::profiles::Iupac;
+use serde::Deserialize;
 use std::cell::RefCell;
 use std::fmt;
 use std::fs::File;
@@ -10,8 +13,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::sassy1::edlib_bench::edlib::{get_edlib_config, run_edlib};
-use crate::sassy1::edlib_bench::sim_data::Alphabet;
+use super::edlib::{get_edlib_config, run_edlib};
+use super::sim_data::Alphabet;
 use rayon::prelude::*;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -21,6 +24,38 @@ const NO_IPC: f64 = 0.0; // If IPC is not measured, we set it to 0.0
 const USE_RC: bool = false; // Only applies to sassy 1/2, just for testing not used via config
 const MIN_PATTERNS_PER_CHUNK: usize = 32; // For amd we do want to have at least 32 to pipeline two blocks when k = 3
 const MIN_TEXT_BYTES_PER_CHUNK: usize = 1_000_000; // 1MB
+
+/// Which tools to run in a benchmark. Configs use e.g. tools = ["sassy1", "edlib", "sassy2", "parasail"].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BenchTool {
+    #[serde(rename = "sassy1")]
+    Sassy1,
+    #[serde(rename = "sassy2")]
+    Sassy2,
+    Edlib,
+    #[serde(rename = "parasail")]
+    Parasail,
+}
+
+// By default we just run all the tools
+pub const DEFAULT_TOOLS: [BenchTool; 4] = [
+    BenchTool::Sassy1,
+    BenchTool::Sassy2,
+    BenchTool::Edlib,
+    BenchTool::Parasail,
+];
+
+// In case we have a float we use it as fraction of pattern length
+// used in throughput benches only
+#[inline]
+pub fn resolve_k(k_config: f64, query_len: usize) -> usize {
+    if k_config > 0.0 && k_config < 1.0 {
+        (query_len as f64 * k_config).ceil() as usize
+    } else {
+        k_config as usize
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct BenchmarkResults {
@@ -34,6 +69,23 @@ pub struct BenchmarkResults {
     pub ci_upper_throughput_gbps: f64,
     pub n_matches: usize,
     pub ipc: Option<f64>,
+}
+
+impl Default for BenchmarkResults {
+    fn default() -> Self {
+        Self {
+            median: 0.0,
+            mean: 0.0,
+            std_dev: 0.0,
+            ci_lower: 0.0,
+            ci_upper: 0.0,
+            throughput_gbps: 0.0,
+            ci_lower_throughput_gbps: 0.0,
+            ci_upper_throughput_gbps: 0.0,
+            n_matches: 0,
+            ipc: None,
+        }
+    }
 }
 
 impl fmt::Display for BenchmarkResults {
@@ -56,6 +108,7 @@ pub struct BenchmarkSuite {
     pub search: BenchmarkResults,
     pub tiling: BenchmarkResults,
     pub edlib: BenchmarkResults,
+    pub parasail: BenchmarkResults,
 }
 
 impl fmt::Display for BenchmarkSuite {
@@ -72,6 +125,7 @@ impl fmt::Display for BenchmarkSuite {
         writeln!(f, "{:<20} {}", "Sassy Search", self.search)?;
         writeln!(f, "{:<20} {}", "Sassy Tiling", self.tiling)?;
         writeln!(f, "{:<20} {}", "Edlib", self.edlib)?;
+        writeln!(f, "{:<20} {}", "Parasail", self.parasail)?;
         writeln!(f, "{:─<80}", "")?;
         Ok(())
     }
@@ -202,12 +256,22 @@ fn create_pattern_chunks(num_patterns: usize) -> Vec<(usize, usize, usize)> {
     chunks
 }
 
+/// One pattern per chunk (paired mode; tracing)
+fn create_pattern_chunks_paired(n: usize) -> Vec<(usize, usize, usize)> {
+    (0..n).map(|i| (i, i, i + 1)).collect()
+}
+
+/// One text per group (paired mode; tracing)
+fn create_text_groups_paired(n: usize) -> Vec<(usize, usize)> {
+    (0..n).map(|i| (i, i + 1)).collect()
+}
+
 fn create_text_groups<T: AsRef<[u8]>>(texts: &[T]) -> Vec<(usize, usize)> {
     let mut groups = Vec::new();
     let mut text_start = 0;
 
     while text_start < texts.len() {
-        let mut accumulated_bytes = 0;
+        let mut accumulated_bytes: usize = 0;
         let mut text_end = text_start;
 
         // Accumulate texts until we hit MIN_TEXT_BYTES_PER_CHUNK or are done
@@ -342,6 +406,69 @@ impl SearchTool for SassyV2 {
     }
 }
 
+/// Parasail
+struct Parasail {
+    aligner: Aligner,
+}
+
+fn new_parasail_aligner() -> Aligner {
+    #[rustfmt::skip]
+    let matrix = Matrix::create(
+        b"ACGT",
+        0,
+        // Here it's mismatch **score** so should be negative (as per docs)
+        -1,
+    )
+    .unwrap();
+
+    Aligner::new()
+        .semi_global()
+        // Scan seems better than diag/striped in line with paper
+        .scan()
+        //.use_trace()
+        .profile(Profile::default())
+        // So we can get the matches, alternative is tracing but crashes when
+        // getting the cigars?
+        .use_stats()
+        // Gap costs (positive) as it's 'cost' in the bindings
+        .gap_open(1)
+        .gap_extend(1)
+        .matrix(matrix)
+        // 8 bit is enough for the edit distance
+        .solution_width(8)
+        .build()
+}
+
+impl SearchTool for Parasail {
+    type PreparedData = ();
+
+    fn prepare(&self, _queries: &[Vec<u8>]) -> Self::PreparedData {}
+
+    fn new_worker(&self) -> Self {
+        Parasail {
+            aligner: new_parasail_aligner(),
+        }
+    }
+
+    #[inline(always)]
+    fn search(
+        &mut self,
+        _prepared: &Self::PreparedData,
+        _chunk_idx: usize,
+        pattern_slice: &[Vec<u8>],
+        text: &[u8],
+        _k: usize, // Not used, there is no early breaking anyway
+    ) -> usize {
+        let mut count = 0;
+        for pattern in pattern_slice {
+            let res = self.aligner.align(Some(pattern), text);
+            let res = res.unwrap();
+            count += res.get_matches().unwrap_or(0) as usize;
+        }
+        count
+    }
+}
+
 /// Edlib
 struct Edlib {
     alphabet: Alphabet,
@@ -395,25 +522,59 @@ fn benchmark_tool<Tool, T>(
     threads: usize,
     log_label: &str,
     measure_ipc: bool,
+    paired: bool,
 ) -> BenchmarkResults
 where
     Tool: SearchTool + 'static,
     T: AsRef<[u8]> + Send + Sync,
 {
+    let n = queries.len();
+    if paired && n != texts.len() {
+        panic!("paired mode requires queries.len() == texts.len()");
+    }
+
     println!(
-        "  {} ({} texts, {} threads)...",
+        "  {} ({} texts, {} threads{})...",
         log_label,
         texts.len(),
-        threads.max(1)
+        threads.max(1),
+        if paired { ", paired" } else { "" }
     );
 
     let prepared = Arc::new(tool.prepare(queries));
 
-    // We do this once prior to benching so it does not affect the algos themselves
-    let pattern_chunks = create_pattern_chunks(queries.len());
-    let text_groups = create_text_groups(texts);
-    println!("Text groups: {:?}", text_groups.len());
-    println!("Pattern chunks: {:?}", pattern_chunks.len());
+    let (pattern_chunks, text_groups): (Vec<_>, Vec<_>) = if paired {
+        (
+            create_pattern_chunks_paired(n),
+            create_text_groups_paired(n),
+        )
+    } else {
+        (
+            create_pattern_chunks(queries.len()),
+            create_text_groups(texts),
+        )
+    };
+
+    let work_items: Vec<_> = if paired {
+        pattern_chunks
+            .iter()
+            .zip(text_groups.iter())
+            .map(
+                |(&(chunk_idx, pat_start, pat_end), &(text_start, text_end))| {
+                    (chunk_idx, pat_start, pat_end, text_start, text_end)
+                },
+            )
+            .collect()
+    } else {
+        pattern_chunks
+            .iter()
+            .flat_map(|&(chunk_idx, pat_start, pat_end)| {
+                text_groups.iter().map(move |&(text_start, text_end)| {
+                    (chunk_idx, pat_start, pat_end, text_start, text_end)
+                })
+            })
+            .collect()
+    };
 
     // Re-used threadpool
     let pool = if threads > 1 {
@@ -434,15 +595,6 @@ where
                     static WORKER: RefCell<Option<Box<dyn std::any::Any>>> = RefCell::new(None);
                 }
 
-                let work_items: Vec<_> = pattern_chunks
-                    .iter()
-                    .flat_map(|&(chunk_idx, pat_start, pat_end)| {
-                        text_groups.iter().map(move |&(text_start, text_end)| {
-                            (chunk_idx, pat_start, pat_end, text_start, text_end)
-                        })
-                    })
-                    .collect();
-
                 work_items
                     .par_iter()
                     .map(|&(chunk_idx, pat_start, pat_end, text_start, text_end)| {
@@ -454,7 +606,7 @@ where
                                 *worker_ref =
                                     Some(Box::new(tool.new_worker()) as Box<dyn std::any::Any>);
                             }
-                            // fixme: we so much for this?
+                            // fixme: why so much for this?
                             let worker = worker_ref
                                 .as_mut()
                                 .unwrap()
@@ -480,13 +632,10 @@ where
         } else {
             let mut worker = tool.new_worker();
             let mut count = 0usize;
-            for &(chunk_idx, pat_start, pat_end) in &pattern_chunks {
+            for &(chunk_idx, pat_start, pat_end, text_start, text_end) in &work_items {
                 let pattern_slice = &queries[pat_start..pat_end];
-                for &(text_start, text_end) in &text_groups {
-                    for text in &texts[text_start..text_end] {
-                        count +=
-                            worker.search(&*prepared, chunk_idx, pattern_slice, text.as_ref(), k);
-                    }
+                for text in &texts[text_start..text_end] {
+                    count += worker.search(&*prepared, chunk_idx, pattern_slice, text.as_ref(), k);
                 }
             }
             count
@@ -523,7 +672,7 @@ where
     }
 }
 
-/// Call this do to a single bench run across sassy v1, sassy v2, and edlib
+/// Call this to do a single bench run for the requested tools (sassy1, sassy2, edlib).
 #[allow(clippy::too_many_arguments)]
 pub fn benchmark_tools<T>(
     queries: &[Vec<u8>],
@@ -534,85 +683,132 @@ pub fn benchmark_tools<T>(
     threads: usize,
     alphabet: &Alphabet,
     measure_ipc: bool,
+    tools: &[BenchTool],
+    paired: bool,
 ) -> BenchmarkSuite
 where
     T: AsRef<[u8]> + Send + Sync,
 {
-    // We consider the total throughput the text * number of patterns as if
-    // each pattern entirely scans the text (like in v1, and edlib, but not in v2 really)
     let text_bytes: usize = texts.iter().map(|t| t.as_ref().len()).sum();
-    let total_bytes = text_bytes * queries.len();
+    let total_bytes = if paired {
+        assert_eq!(
+            queries.len(),
+            texts.len(),
+            "paired mode requires queries.len() == texts.len()"
+        );
+        text_bytes
+    } else {
+        text_bytes * queries.len()
+    };
 
     println!(
-        "Benchmarking with {} queries, {} texts ({} text bytes, {} total throughput bytes), k={}",
+        "Benchmarking with {} queries, {} texts ({} text bytes, {} total throughput bytes), k={:?}, tools={:?}{}",
         queries.len(),
         texts.len(),
         text_bytes,
         total_bytes,
-        k
+        k,
+        tools,
+        if paired { ", paired" } else { "" }
     );
 
-    let search = benchmark_tool(
-        SassyV1 {
-            searcher: if USE_RC {
-                Searcher::<Iupac>::new_rc()
-            } else {
-                Searcher::<Iupac>::new_fwd()
+    let search = if tools.contains(&BenchTool::Sassy1) {
+        benchmark_tool(
+            SassyV1 {
+                searcher: if USE_RC {
+                    Searcher::<Iupac>::new_rc()
+                } else {
+                    Searcher::<Iupac>::new_fwd()
+                },
             },
-        },
-        queries,
-        texts,
-        k,
-        total_bytes,
-        warmup,
-        min_benchtime_secs,
-        threads,
-        "Sassy V1",
-        measure_ipc,
-    );
+            queries,
+            texts,
+            k,
+            total_bytes,
+            warmup,
+            min_benchtime_secs,
+            threads,
+            "Sassy V1",
+            measure_ipc,
+            paired,
+        )
+    } else {
+        BenchmarkResults::default()
+    };
 
-    let tiling = benchmark_tool(
-        SassyV2 {
-            searcher: if USE_RC {
-                Searcher::<Iupac>::new_rc()
-            } else {
-                Searcher::<Iupac>::new_fwd()
+    let tiling = if tools.contains(&BenchTool::Sassy2) {
+        benchmark_tool(
+            SassyV2 {
+                searcher: if USE_RC {
+                    Searcher::<Iupac>::new_rc()
+                } else {
+                    Searcher::<Iupac>::new_fwd()
+                },
             },
-        },
-        queries,
-        texts,
-        k,
-        total_bytes,
-        warmup,
-        min_benchtime_secs,
-        threads,
-        "Sassy V2",
-        measure_ipc,
-    );
+            queries,
+            texts,
+            k,
+            total_bytes,
+            warmup,
+            min_benchtime_secs,
+            threads,
+            "Sassy V2",
+            measure_ipc,
+            paired,
+        )
+    } else {
+        BenchmarkResults::default()
+    };
 
-    let edlib = benchmark_tool(
-        Edlib {
-            alphabet: *alphabet,
-        },
-        queries,
-        texts,
-        k,
-        total_bytes,
-        warmup,
-        min_benchtime_secs,
-        threads,
-        "Edlib",
-        measure_ipc,
-    );
+    let edlib = if tools.contains(&BenchTool::Edlib) {
+        benchmark_tool(
+            Edlib {
+                alphabet: *alphabet,
+            },
+            queries,
+            texts,
+            k,
+            total_bytes,
+            warmup,
+            min_benchtime_secs,
+            threads,
+            "Edlib",
+            measure_ipc,
+            paired,
+        )
+    } else {
+        BenchmarkResults::default()
+    };
+
+    let parasail = if tools.contains(&BenchTool::Parasail) {
+        benchmark_tool(
+            Parasail {
+                aligner: new_parasail_aligner(),
+            },
+            queries,
+            texts,
+            k,
+            total_bytes,
+            warmup,
+            min_benchtime_secs,
+            threads,
+            "Parasail",
+            measure_ipc,
+            paired,
+        )
+    } else {
+        BenchmarkResults::default()
+    };
 
     BenchmarkSuite {
         search,
         tiling,
         edlib,
+        parasail,
     }
 }
 
-pub const BENCH_CSV_HEADER: &str = "search_median_ms,search_mean_ms,search_std_ms,search_ci_lower_ms,search_ci_upper_ms,search_n_matches,tiling_median_ms,tiling_mean_ms,tiling_std_ms,tiling_ci_lower_ms,tiling_ci_upper_ms,tiling_n_matches,edlib_median_ms,edlib_mean_ms,edlib_std_ms,edlib_ci_lower_ms,edlib_ci_upper_ms,edlib_n_matches,search_ipc,tiling_ipc,edlib_ipc,search_throughput_gbps,search_ci_lower_throughput_gbps,search_ci_upper_throughput_gbps,tiling_throughput_gbps,tiling_ci_lower_throughput_gbps,tiling_ci_upper_throughput_gbps,edlib_throughput_gbps,edlib_ci_lower_throughput_gbps,edlib_ci_upper_throughput_gbps,throughput_bytes";
+pub const BENCH_CSV_HEADER: &str = "search_median_ms,search_mean_ms,search_std_ms,search_ci_lower_ms,search_ci_upper_ms,search_n_matches,tiling_median_ms,tiling_mean_ms,tiling_std_ms,tiling_ci_lower_ms,tiling_ci_upper_ms,tiling_n_matches,edlib_median_ms,edlib_mean_ms,edlib_std_ms,edlib_ci_lower_ms,edlib_ci_upper_ms,edlib_n_matches,parasail_median_ms,parasail_mean_ms,parasail_std_ms,parasail_ci_lower_ms,parasail_ci_upper_ms,parasail_n_matches,search_ipc,tiling_ipc,edlib_ipc,parasail_ipc,search_throughput_gbps,search_ci_lower_throughput_gbps,search_ci_upper_throughput_gbps,tiling_throughput_gbps,tiling_ci_lower_throughput_gbps,tiling_ci_upper_throughput_gbps,edlib_throughput_gbps,edlib_ci_lower_throughput_gbps,edlib_ci_upper_throughput_gbps,parasail_throughput_gbps,parasail_ci_lower_throughput_gbps,parasail_ci_upper_throughput_gbps,throughput_bytes";
 
 pub struct BenchCsv {
     file: File,
@@ -635,17 +831,18 @@ impl BenchCsv {
         num_queries: usize,
         target_len: usize,
         query_len: usize,
-        k: usize,
+        k: &str,
         suite: &BenchmarkSuite,
         total_bytes: usize,
     ) -> std::io::Result<()> {
         let search = &suite.search;
         let tiling = &suite.tiling;
         let edlib = &suite.edlib;
+        let parasail = &suite.parasail;
 
         writeln!(
             self.file,
-            "{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{},{:.3},{:.3},{:.3},{:.3},{:.3},{},{:.3},{:.3},{:.3},{:.3},{:.3},{},{:.2},{:.2},{:.2},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{}",
+            "{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{},{:.3},{:.3},{:.3},{:.3},{:.3},{},{:.3},{:.3},{:.3},{:.3},{:.3},{},{:.3},{:.3},{:.3},{:.3},{:.3},{},{:.2},{:.2},{:.2},{:.2},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{}",
             num_queries,
             target_len,
             query_len,
@@ -668,9 +865,16 @@ impl BenchCsv {
             edlib.ci_lower,
             edlib.ci_upper,
             edlib.n_matches,
+            parasail.median,
+            parasail.mean,
+            parasail.std_dev,
+            parasail.ci_lower,
+            parasail.ci_upper,
+            parasail.n_matches,
             search.ipc.unwrap_or(NO_IPC),
             tiling.ipc.unwrap_or(NO_IPC),
             edlib.ipc.unwrap_or(NO_IPC),
+            parasail.ipc.unwrap_or(NO_IPC),
             search.throughput_gbps,
             search.ci_lower_throughput_gbps,
             search.ci_upper_throughput_gbps,
@@ -680,6 +884,9 @@ impl BenchCsv {
             edlib.throughput_gbps,
             edlib.ci_lower_throughput_gbps,
             edlib.ci_upper_throughput_gbps,
+            parasail.throughput_gbps,
+            parasail.ci_lower_throughput_gbps,
+            parasail.ci_upper_throughput_gbps,
             total_bytes
         )
     }

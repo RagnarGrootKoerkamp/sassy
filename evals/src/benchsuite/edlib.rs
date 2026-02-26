@@ -1,4 +1,4 @@
-use crate::sassy1::edlib_bench::sim_data::Alphabet;
+use crate::benchsuite::sim_data::Alphabet;
 use ::std::os::raw::c_char;
 use edlib_rs::edlib_sys::*;
 use edlib_rs::*;
@@ -11,7 +11,7 @@ pub fn get_edlib_config(k: i32, alphabet: &Alphabet) -> EdlibAlignConfigRs<'stat
     let mut config = EdlibAlignConfigRs::default();
     config.mode = EdlibAlignModeRs::EDLIB_MODE_HW;
     if alphabet == &Alphabet::Iupac {
-        println!("[EDLIB] Added iupac alphabet");
+        //println!("[EDLIB] Added iupac alphabet");
         config.additionalequalities = &EQUALITY_PAIRS;
     }
     config.k = k;

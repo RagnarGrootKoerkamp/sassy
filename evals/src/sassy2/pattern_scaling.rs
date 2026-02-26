@@ -2,20 +2,23 @@ use rand::RngExt;
 use serde::Deserialize;
 use std::fs;
 
-use crate::sassy1::edlib_bench::sim_data::Alphabet;
+use crate::benchsuite::sim_data::Alphabet;
 use crate::sassy2::bench;
 
 #[derive(Deserialize)]
 struct Config {
     target_lens: Vec<usize>,
     query_lens: Vec<usize>,
-    ks: Vec<usize>,
+    /// K values: integers (e.g. 3, 20) or fraction of pattern length (e.g. 0.05 = 5%, rounded up).
+    ks: Vec<f64>,
     min_benchtime: f64,
     warmup_iterations: usize,
     n_queries: usize,
     output_file: String,
     run_edlib: bool,
     edlib_alphabet: String,
+    #[serde(default)]
+    tools: Option<Vec<bench::BenchTool>>,
 }
 
 pub fn run(config_path: &str) {
@@ -40,12 +43,15 @@ pub fn run(config_path: &str) {
     // Test all combinations
     for &query_len in &config.query_lens {
         for &target_len in &config.target_lens {
-            for &k in &config.ks {
+            for &k_config in &config.ks {
+                let k = bench::resolve_k(k_config, query_len);
                 if k >= query_len {
                     continue;
                 }
-
-                println!("Testing q_len={}, t_len={}, k={}", query_len, target_len, k);
+                // println!(
+                //     "Testing q_len={}, t_len={}, k={} (config k={})",
+                //     query_len, target_len, k, k_config
+                // );
 
                 // Generate text
                 let text: Vec<u8> = (0..target_len)
@@ -72,6 +78,8 @@ pub fn run(config_path: &str) {
                     1,
                     &Alphabet::Iupac,
                     true,
+                    config.tools.as_deref().unwrap_or(&bench::DEFAULT_TOOLS),
+                    false,
                 );
 
                 println!("{}", &suite);
@@ -80,7 +88,7 @@ pub fn run(config_path: &str) {
                     config.n_queries,
                     target_len,
                     query_len,
-                    k,
+                    &format!("{}", k_config),
                     &suite,
                     total_bytes,
                 )

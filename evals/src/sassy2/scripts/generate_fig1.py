@@ -43,6 +43,7 @@ edlib_color = "#E76F51"  # coral
 
 if os.path.exists(scaling_csv):
     df_scaling = pd.read_csv(scaling_csv)
+    df_scaling["k"] = pd.to_numeric(df_scaling["k"], errors="coerce")
     # CSV columns: num_queries, target_len, query_len, k, search_*, tiling_*, edlib_*
     df_scaling = df_scaling[df_scaling["k"] < df_scaling["query_len"]]
 
@@ -70,7 +71,9 @@ if os.path.exists(scaling_csv):
             if sub_df.empty:
                 continue
 
-            linestyle, linewidth = line_style_map.get(k, ("-", 1.2))
+            linestyle, linewidth = line_style_map.get(
+                int(k) if k == int(k) else k, ("-", 1.2)
+            )
             for _name, col, color, marker in tool_config:
                 if col not in sub_df.columns:
                     continue

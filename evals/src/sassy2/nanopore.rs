@@ -1,5 +1,5 @@
-use crate::sassy1::edlib_bench::sim_data::Alphabet;
-use crate::sassy2::bench;
+use crate::benchsuite::bench;
+use crate::benchsuite::sim_data::Alphabet;
 use needletail::parse_fastx_file;
 use serde::Deserialize;
 use std::fs;
@@ -7,7 +7,8 @@ use std::fs;
 #[derive(Deserialize)]
 struct Config {
     read_file: String,
-    ks: Vec<usize>,
+    /// K values: integers (e.g. 3) or fraction of pattern length (e.g. 0.05 = 5%, rounded up).
+    ks: Vec<f64>,
     min_benchtime: f64,
     warmup_iterations: usize,
     output_file: String,
@@ -15,6 +16,8 @@ struct Config {
     /// Number of threads for parallel many-texts benchmarks (1 = sequential).
     #[serde(default = "default_threads")]
     threads: usize,
+    #[serde(default)]
+    tools: Option<Vec<bench::BenchTool>>,
 }
 
 fn default_threads() -> usize {
@@ -78,8 +81,10 @@ pub fn run(config_path: &str) {
 
     let mut csv = bench::BenchCsv::new(&config.output_file).unwrap();
 
-    for &k in &config.ks {
-        println!("Benchmarking k={}", k);
+    for &k_config in &config.ks {
+        let k = bench::resolve_k(k_config, query_len);
+
+        println!("Benchmarking k={} (resolved from config {})", k, k_config);
 
         let suite = bench::benchmark_tools(
             &barcodes,
@@ -90,6 +95,8 @@ pub fn run(config_path: &str) {
             config.threads,
             &Alphabet::Iupac,
             false,
+            config.tools.as_deref().unwrap_or(&bench::DEFAULT_TOOLS),
+            false,
         );
 
         println!("{}", &suite);
@@ -98,7 +105,7 @@ pub fn run(config_path: &str) {
             barcodes.len(),
             total_text_len,
             query_len,
-            k,
+            &format!("{}", k_config),
             &suite,
             total_bytes,
         )

@@ -8,3 +8,4 @@ run_edlib = true
 edlib_alphabet = "iupac"
 # Number of threads for parallel loop over reads (1 = sequential).
 threads = 16
+tools = ["sassy1", "sassy2", "edlib"]

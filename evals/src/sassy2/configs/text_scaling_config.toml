@@ -8,3 +8,4 @@ num_queries_list = [1, 2, 4, 8, 16, 32, 48,64, 96, 128]
 run_edlib = true
 edlib_alphabet = "iupac"
 warmup_iterations = 5
+tools = ["sassy1", "sassy2", "edlib"]

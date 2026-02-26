@@ -62,3 +62,15 @@ sassy2_fig1:
 flamegraph test_name:
     cargo test --no-run --lib
     flamegraph -- $(cargo test --release --no-run --lib 2>&1 | sed -n '/Executable/s/.*(\(.*\))/\1/p') {{test_name}}
+
+
+# Sassy 1 run all evals
+sassy1_figs:
+    mkdir -p evals/src/sassy1/output
+    mkdir -p evals/src/sassy1/figs
+    cargo run -r -p evals -- sassy1 throughput_m --config evals/src/sassy1/configs/throughput_m.toml
+    cargo run -r -p evals -- sassy1 throughput_n --config evals/src/sassy1/configs/throughput_n.toml
+    cargo run -r -p evals -- sassy1 trace --config evals/src/sassy1/configs/trace.toml
+    python3 evals/src/sassy1/scripts/plot_throughput_m.py
+    python3 evals/src/sassy1/scripts/plot_throughput_n.py
+    python3 evals/src/sassy1/scripts/plot_trace.py

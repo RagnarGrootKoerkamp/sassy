@@ -8,3 +8,4 @@ n_queries = 128
 output_file = "evals/src/sassy2/output/pattern_scaling_results.csv"
 run_edlib = true
 edlib_alphabet = "iupac"
+tools = ["sassy1", "sassy2", "edlib"]
