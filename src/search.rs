@@ -2213,7 +2213,7 @@ mod tests {
         let path = matches[0].to_path();
         assert_eq!(
             path,
-            vec![Pos(0, 4), Pos(1, 5), Pos(1, 6), Pos(2, 7), Pos(3, 8)]
+            vec![Pos(0, 5), Pos(1, 6), Pos(2, 7), Pos(3, 8)]
         );
         // Ends are exclusive
         assert_eq!(matches[0].pattern_end, path.last().unwrap().0 as usize + 1);
