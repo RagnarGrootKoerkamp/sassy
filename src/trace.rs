@@ -331,16 +331,16 @@ pub fn get_trace<P: Profile>(
         // We make some kind of mutation.
         g -= 1;
 
-        // Consumes i = text/ref (not j) = Del
-        if i > 0 && cost(j, i - 1) == g {
-            cigar.push(pa_types::CigarOp::Del);
-            i -= 1;
-            continue;
-        }
         // Mismatch.
         if i > 0 && cost(j - 1, i - 1) == g {
             cigar.push(pa_types::CigarOp::Sub);
             j -= 1;
+            i -= 1;
+            continue;
+        }
+        // Consumes i = text/ref (not j) = Del
+        if i > 0 && cost(j, i - 1) == g {
+            cigar.push(pa_types::CigarOp::Del);
             i -= 1;
             continue;
         }
