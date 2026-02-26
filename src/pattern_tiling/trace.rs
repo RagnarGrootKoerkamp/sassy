@@ -501,15 +501,16 @@ fn traceback_single<B: SimdBackend, P: Profile>(
                 // Only compute other costs if diagonal didn't match
                 let left_cost = get_cost(curr_step - 1, pattern_pos);
 
-                // Consumes step = text/ref (not pattern) = Del
-                if curr_cost == left_cost + 1 {
-                    cigar.push(CigarOp::Del);
-                    curr_step -= 1;
-                } else if curr_cost == diag_cost + match_cost && !is_match {
+                // Mismatch.
+                if curr_cost == diag_cost + match_cost && !is_match {
                     cigar.push(CigarOp::Sub);
                     curr_step -= 1;
                     pattern_pos -= 1;
                     pattern_start = (pattern_pos + 1).max(0) as usize;
+                } else if curr_cost == left_cost + 1 {
+                    // Consumes step = text/ref (not pattern) = Del
+                    cigar.push(CigarOp::Del);
+                    curr_step -= 1;
                 } else {
                     // Consumes pattern = query/pattern (not step) = Ins
                     let up_cost = get_cost(curr_step, pattern_pos - 1);
