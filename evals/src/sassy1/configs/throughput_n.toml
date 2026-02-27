@@ -1,11 +1,11 @@
 target_lens = [50, 100, 150, 250, 500, 1000, 2000, 4000, 8000, 16000, 32000]
 query_len = 100
 ks = [3, 20]
-n_queries = 1
+n_queries = 100
 n_refs = 10 # so we have 10 random texts
 min_benchtime = 0.1
 warmup_iterations = 0
 output_file = "evals/src/sassy1/output/search_throughput_text_len.csv"
 run_edlib = true
 edlib_alphabet = "iupac"
-tools = ["sassy1", "edlib", "parasail"]
+tools = ["sassy1", "edlib"]

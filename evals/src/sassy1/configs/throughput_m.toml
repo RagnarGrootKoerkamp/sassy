@@ -1,11 +1,11 @@
 target_len = 100_000
 query_lens = [20, 30, 50, 100, 200, 300, 500, 1000]
 ks = [3, 20, 0.01, 0.05]
-n_queries = 10 # so we have 10 random queries
-n_refs = 1
+n_queries = 100 # so we have 10 random queries
+n_refs = 10
 min_benchtime = 0.1  # min seconds per tool per (query_len,k)
 warmup_iterations = 0
 output_file = "evals/src/sassy1/output/search_throughput_pat_len.csv"
 run_edlib = true
 edlib_alphabet = "iupac"
-tools = ["sassy1", "edlib", "parasail"]
+tools = ["sassy1", "edlib"]
