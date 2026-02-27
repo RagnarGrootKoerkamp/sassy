@@ -22,7 +22,7 @@ report locations of matches, and `filter` to only output (non)-matching records.
 
 ![gif of `sassy grep`](fig/sassy-grep.gif)
 
-Highlights:
+Feature highlights:
 - Sassy uses bitpacking and SIMD (both AVX2 and NEON supported).
   Its main novelty is tiling these in the text direction.
 - Support for _overhang_ alignments where the pattern extends beyond the text.
@@ -31,7 +31,7 @@ Highlights:
 - Rust library (`cargo add sassy`), binary (`cargo install sassy`, see details below), Python
   bindings (`pip install sassy-rs`), and C bindings (see below).
 
-See **the paper**, and corresponding evals in [evals/](evals/):
+See **the paper**, [detailed docs on docs.rs][https://docs.rs/sassy/latest/sassy/], and corresponding evals in [evals/](evals/):
 
 > Rick Beeloo and Ragnar Groot Koerkamp.  
 > Sassy: Searching Short DNA Strings in the 2020s.  
