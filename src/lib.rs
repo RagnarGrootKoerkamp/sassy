@@ -14,10 +14,35 @@
 //!
 //! ## `search` vs `search_all`
 //!
-//! By default, [`Searcher::search`] will only return matches that end in a rightmost local minimum.
-//! [`Searcher::search_all`], on the other hand, always returns matches in all end-positions with cost <= `k`.
+//! Sassy faithfully implements 'Approximate String Matching' as defined by Navarro (2001):
+//! it finds all positions in the text where an alignment of the pattern with cost <= `k` ends,
+//! and returns those positions, with a traceback/alignment for each. This is covered by the [`Searcher::search_all`] mode.
+//!
+//! In practice, this can return a lot of overlapping matches. For example,
+//! searching `ABC` in `XXXABCXXX` aligns with cost `333210123` after every
+//! character. If we have `k=1`, `search_all` will return 3 matches with `AB` (cost 1), `ABC` (cost 0), and `ABCX` (cost 1).
+//! [`Searcher::search`] only returns a match at the _rightmost_ position of each local minimum, which in this case is only `ABC`.
 //!
 //! See the paper (linked on [GitHub](https://github.com/RagnarGrootKoerkamp/sassy)) for details.
+//!
+//! ## Reverse complements
+//!
+//! When searching reverse complements, by default Sassy searches the pattern in both the forward and reverse-complement text.
+//! Only Sassy2 ([`Searcher::search_encoded_patterns`]) instead searches the reverse complement of the pattern in the forward text.
+//!
+//! This has implications for the set of matches that is returned. By default,
+//! there is at most 1 match per text _end_ position of each RC match, but in v2,
+//! there is at most 1 match per text _start_ position of each RC match.
+//!
+//! ## Traceback
+//!
+//! Sassy uses a traceback that greedily prefers matches and substitutions, followed by deletions, followed by insertions.
+//! Note that this does not guarantee to find an alignment with the minimal number of substitutions.
+//!
+//! In case more precise alignments are needed, e.g. via affine-cost alignments, it is recommended to run sassy with [`Searcher::without_trace`].
+//! Then, each match only contains the end position in the text and pattern, and the user can manually run a backwards extension-alignment from that point.
+//! In case of a reverse-complement match, in v1, the match in against `RC(text[text_start..])`, while in v2 (`search_encoded_patterns`),
+//! the match is against `RC(pattern[pattern_start..])`.
 //!
 //! ## Example
 //!
