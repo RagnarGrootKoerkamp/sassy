@@ -31,7 +31,7 @@ Feature highlights:
 - Rust library (`cargo add sassy`), binary (`cargo install sassy`, see details below), Python
   bindings (`pip install sassy-rs`), and C bindings (see below).
 
-See **the paper**, [detailed docs on docs.rs][https://docs.rs/sassy/latest/sassy/], and corresponding evals in [evals/](evals/):
+See **the paper**, [detailed docs on docs.rs](https://docs.rs/sassy/latest/sassy/), and corresponding evals in [evals/](evals/):
 
 > Rick Beeloo and Ragnar Groot Koerkamp.  
 > Sassy: Searching Short DNA Strings in the 2020s.  
