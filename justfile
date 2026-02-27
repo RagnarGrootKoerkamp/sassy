@@ -74,3 +74,7 @@ sassy1_figs:
     python3 evals/src/sassy1/scripts/plot_throughput_m.py
     python3 evals/src/sassy1/scripts/plot_throughput_n.py
     python3 evals/src/sassy1/scripts/plot_trace.py
+
+sassy1_stats:
+    python3 evals/src/sassy1/scripts/show_stats.py evals/src/sassy1/output/search_throughput_pat_len.csv
+    python3 evals/src/sassy1/scripts/show_stats.py evals/src/sassy1/output/search_throughput_text_len.csv
