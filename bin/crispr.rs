@@ -39,6 +39,10 @@ pub struct CrisprArgs {
     #[arg(short = 'j', long)]
     threads: Option<usize>,
 
+    /// The length of the PAM.
+    #[arg(long, default_value_t = 3)]
+    pam_length: usize,
+
     // Flags
     /// Allow edits in PAM sequence.
     #[arg(long)]
@@ -87,7 +91,7 @@ fn print_and_check_params(args: &CrisprArgs, guide_sequences: &[Vec<u8>]) -> (St
     // We have at least one guide sequence, extract the PAM sequence
     let pam = if !guide_sequences.is_empty() {
         let guide = &guide_sequences[0];
-        let pam = &guide[guide.len() - 3..];
+        let pam = &guide[guide.len() - args.pam_length..];
         println!("[PAM] Sequence: [{}]", String::from_utf8_lossy(pam));
         println!(
             "[PAM] If the above PAM is incorrect, please make sure that the guide sequence ENDs with the PAM-sequence, i.e. XXXXXGGN (not it's reverse complement)"
@@ -101,7 +105,7 @@ fn print_and_check_params(args: &CrisprArgs, guide_sequences: &[Vec<u8>]) -> (St
     // not per se a requirement for the code to work but now we define that as a fixed PAM in the closure below
     if guide_sequences.len() > 1 {
         for guide_sequence in guide_sequences {
-            let guide_pam = &guide_sequence[guide_sequence.len() - 3..];
+            let guide_pam = &guide_sequence[guide_sequence.len() - args.pam_length..];
             if pam != guide_pam {
                 eprintln!(
                     "[PAM] One of the guide sequences has a PAM different than the provided PAM"
@@ -201,7 +205,7 @@ pub fn crispr(args: &CrisprArgs) {
                 };
 
                 let filter_fn = |_q: &[u8], text_up_to_end: &[u8], strand: Strand| {
-                    let pam_slice = &text_up_to_end[text_up_to_end.len() - 3..];
+                    let pam_slice = &text_up_to_end[text_up_to_end.len() - args.pam_length..];
                     if strand == Strand::Fwd {
                         matching_seq::<Iupac>(pam_slice, pam)
                     } else {

@@ -176,6 +176,8 @@ sassy crispr --threads 8 --guide guides.txt --k 5 --max-n-frac 0.1 --output hits
 
 Allows `<= k` edits in the sgRNA, and the PAM (the last 3 characters of each guide) has to match exactly, unless `--allow-pam-edits` is given.
 
+Use e.g. `--pam-length 5` to change the default of 3.
+
 Output of the `crispr` command is a tab-delimited file with one row per hit, e.g.:
 
 ```text

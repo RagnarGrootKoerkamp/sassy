@@ -4,6 +4,8 @@
 
 ## git
 
+- Add `sassy crispr --pam-length <len>` to allow changing the default of 3.
+
 ## 0.2.0
 The main new feature of this v2 release is `search_encoded_patterns`, written by @RickBeeloo,
 for searching many short and equal length patterns (say 23 bp; should be at most
