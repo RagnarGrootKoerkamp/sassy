@@ -2214,7 +2214,7 @@ mod tests {
         assert_eq!(
             path,
             vec![Pos(0, 5), Pos(1, 6), Pos(2, 7), Pos(3, 8)]
-        );
+        ); 
         // Ends are exclusive
         assert_eq!(matches[0].pattern_end, path.last().unwrap().0 as usize + 1);
         assert_eq!(matches[0].text_end, path.last().unwrap().1 as usize + 1);

@@ -484,7 +484,6 @@ mod tests {
     use crate::pattern_tiling::trace::{TraceBuffer, trace_batch_ranges};
     use crate::profiles::Iupac;
     use crate::search::Match;
-    use std::collections::{HashMap, HashSet};
 
     #[cfg(test)]
     type TestBackend = crate::pattern_tiling::backend::U64;
@@ -699,11 +698,6 @@ mod tests {
             let text_len = random_range(10..60);
             let batch_size = random_range(1..=25);
 
-            // Test in detail these?
-            // if text_len < q_len || (k as f32 * 0.5).floor() as usize >= q_len {
-            //     continue;
-            // }
-
             let mut text = random_dna_seq(text_len);
             let queries: Vec<Vec<u8>> = (0..batch_size).map(|_| random_dna_seq(q_len)).collect();
 
@@ -720,39 +714,31 @@ mod tests {
             }
 
             let pattern_tiling_encoded = pattern_tiling_searcher.encode(&queries, include_rc);
-            let matches = pattern_tiling_searcher.search_with_options(
-                &pattern_tiling_encoded,
-                &text,
-                k as u32,
-                if use_hierarchical { Some(true) } else { None },
-                if filter_local_pattern_tilingma {
-                    crate::pattern_tiling::minima::TracePostProcess::LocalMinima
-                } else {
-                    crate::pattern_tiling::minima::TracePostProcess::All
-                },
-            );
-
-            let mut pattern_tiling_map: HashMap<usize, Vec<Match>> = HashMap::new();
-            for m in matches {
-                pattern_tiling_map
-                    .entry(m.pattern_idx)
-                    .or_default()
-                    .push(m.clone());
-            }
-            pattern_tiling_map.values_mut().for_each(|matches| {
-                matches.sort_unstable_by_key(|m| {
-                    (
-                        m.text_start,
-                        m.text_end,
-                        m.cost,
-                        m.strand,
-                        m.cigar.to_string(),
-                    )
-                });
+            let mut pattern_tiling_matches: Vec<Match> = pattern_tiling_searcher
+                .search_with_options(
+                    &pattern_tiling_encoded,
+                    &text,
+                    k as u32,
+                    if use_hierarchical { Some(true) } else { None },
+                    if filter_local_pattern_tilingma {
+                        crate::pattern_tiling::minima::TracePostProcess::LocalMinima
+                    } else {
+                        crate::pattern_tiling::minima::TracePostProcess::All
+                    },
+                )
+                .to_vec();
+            pattern_tiling_matches.sort_unstable_by_key(|m| {
+                (
+                    m.pattern_idx,
+                    m.text_start,
+                    m.text_end,
+                    m.cost,
+                    m.strand,
+                    m.cigar.to_string(),
+                )
             });
 
-            let mut sassy_map: HashMap<usize, Vec<Match>> = HashMap::new();
-
+            let mut sassy_matches: Vec<Match> = Vec::new();
             for (idx, pattern) in queries.iter().enumerate() {
                 let fwd_matches = if filter_local_pattern_tilingma {
                     sassy_searcher.search(pattern, &text, k as usize)
@@ -775,83 +761,66 @@ mod tests {
                     all_matches.extend(rc_matches);
                 }
 
-                all_matches.sort_unstable_by_key(|m| {
-                    (
-                        m.text_start,
-                        m.text_end,
-                        m.cost,
-                        m.strand,
-                        m.cigar.to_string(),
-                    )
-                });
-
-                // Fix pattern idx
                 all_matches.iter_mut().for_each(|m| {
                     m.pattern_idx = idx;
                 });
-
-                if !all_matches.is_empty() {
-                    sassy_map.insert(idx, all_matches);
-                }
+                sassy_matches.extend(all_matches);
             }
+            sassy_matches.sort_unstable_by_key(|m| {
+                (
+                    m.pattern_idx,
+                    m.text_start,
+                    m.text_end,
+                    m.cost,
+                    m.strand,
+                    m.cigar.to_string(),
+                )
+            });
 
-            let sassy_pattern_ids: HashSet<_> = sassy_map.keys().copied().collect();
-            let pattern_tiling_pattern_ids: HashSet<_> =
-                pattern_tiling_map.keys().copied().collect();
+            if sassy_matches != pattern_tiling_matches {
+                eprintln!("Match mismatch");
+                eprintln!("Text: {:?}", String::from_utf8_lossy(&text));
+                eprintln!(
+                    "k: {}, text length: {}, batch_size: {}",
+                    k,
+                    text.len(),
+                    queries.len()
+                );
+                eprintln!();
 
-            let pooled_keys: HashSet<_> = sassy_pattern_ids
-                .union(&pattern_tiling_pattern_ids)
-                .copied()
-                .collect();
-
-            for i in pooled_keys {
-                let sassy_val = sassy_map.get(&i).cloned().unwrap_or_default();
-                let pattern_tiling_val = pattern_tiling_map.get(&i).cloned().unwrap_or_default();
-
-                if sassy_val != pattern_tiling_val {
-                    eprintln!("Mismatch for pattern {}", i);
-                    eprintln!("Text: {:?}", String::from_utf8_lossy(&text));
-                    eprintln!("pattern: {:?}", String::from_utf8_lossy(&queries[i]));
+                eprintln!("Sassy matches ({}):", sassy_matches.len());
+                for m in &sassy_matches {
                     eprintln!(
-                        "k: {}, pattern length: {}, text length: {}",
-                        k,
-                        queries[i].len(),
-                        text.len()
+                        "  pattern_idx: {}, pattern_start: {}, pattern_end: {}, text_start: {}, text_end: {}, cigar: {}, cost: {}, strand: {:?}",
+                        m.pattern_idx,
+                        m.pattern_start,
+                        m.pattern_end,
+                        m.text_start,
+                        m.text_end,
+                        m.cigar.to_string(),
+                        m.cost,
+                        m.strand
                     );
-                    eprintln!();
-
-                    eprintln!("Sassy matches ({}):", sassy_val.len());
-                    for m in &sassy_val {
-                        eprintln!(
-                            "  pattern_start: {}, pattern_end: {}, text_start: {}, text_end: {}, cigar: {}, cost: {}, strand: {:?}",
-                            m.pattern_start,
-                            m.pattern_end,
-                            m.text_start,
-                            m.text_end,
-                            m.cigar.to_string(),
-                            m.cost,
-                            m.strand
-                        );
-                    }
-                    eprintln!();
-
-                    eprintln!("Pattern_tiling matches ({}):", pattern_tiling_val.len());
-                    for m in &pattern_tiling_val {
-                        eprintln!(
-                            "  pattern_start: {}, pattern_end: {}, text_start: {}, text_end: {}, cigar: {}, cost: {}, strand: {:?}",
-                            m.pattern_start,
-                            m.pattern_end,
-                            m.text_start,
-                            m.text_end,
-                            m.cigar.to_string(),
-                            m.cost,
-                            m.strand
-                        );
-                    }
-                    eprintln!();
-
-                    panic!("Match mismatch detected");
                 }
+                eprintln!();
+
+                eprintln!("Pattern_tiling matches ({}):", pattern_tiling_matches.len());
+                for m in &pattern_tiling_matches {
+                    eprintln!(
+                        "  pattern_idx: {}, pattern_start: {}, pattern_end: {}, text_start: {}, text_end: {}, cigar: {}, cost: {}, strand: {:?}",
+                        m.pattern_idx,
+                        m.pattern_start,
+                        m.pattern_end,
+                        m.text_start,
+                        m.text_end,
+                        m.cigar.to_string(),
+                        m.cost,
+                        m.strand
+                    );
+                }
+                eprintln!();
+
+                panic!("Match mismatch detected");
             }
         }
     }
