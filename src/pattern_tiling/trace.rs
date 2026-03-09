@@ -184,28 +184,35 @@ fn trace_passing_alignments<B: SimdBackend, P: Profile>(
     post: TracePostProcess,
 ) {
     let text_len = text.len();
-    let pattern_length = t_queries.pattern_length as isize;
+    let pattern_length = t_queries.pattern_length;
     let k_isize = k as isize;
+    let max_valid_text_pos = text_len.saturating_sub(1) as isize;
 
     for lane in 0..batch_size {
         // r_start can be -1 in case of full prefix overhang (before text)
         let (r_start, r_end) = buffer.range_bounds[lane];
         let approx_start = buffer.approx_slices[lane].0;
         let pattern_idx = buffer.pattern_indices[lane];
-        let last_pattern_pos = pattern_length - 1;
+
+        let cost_lookup = V2CostLookup {
+            searcher,
+            lane_idx: lane,
+        };
 
         // Collect all passing positions (shared for both branches)
         buffer.pos_cost_buffer.clear();
         for pos in r_start..=r_end {
             let step_idx = pos - approx_start;
-            let cost = get_cost_at::<B, P>(
-                searcher,
-                lane,
-                step_idx,
-                last_pattern_pos,
-                approx_start,
-                text_len,
-            );
+            let i = (step_idx + 1).max(0) as usize;
+            let j = pattern_length;
+            let mut cost = cost_lookup.get(i, j) as isize;
+
+            // Apply overhang correct, fixme: can we do this neater in cost lookup?
+            if pos > max_valid_text_pos && searcher.alpha != 1.0 {
+                let overshoot = (pos - max_valid_text_pos) as usize;
+                cost += (overshoot as f32 * searcher.alpha).floor() as isize;
+            }
+
             if cost <= k_isize {
                 buffer.pos_cost_buffer.push((pos, cost));
             }
@@ -398,53 +405,6 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
 fn extract_simd_lane<B: SimdBackend>(simd_val: B::Simd, lane: usize) -> u64 {
     let arr = B::to_array(simd_val);
     B::scalar_to_u64(arr.as_ref()[lane])
-}
-
-#[inline(always)]
-fn get_cost_at<B: SimdBackend, P: Profile>(
-    searcher: &Myers<B, P>,
-    lane_idx: usize,
-    step_idx: isize,
-    pattern_pos_idx: isize,
-    approx_start: isize,
-    text_len: usize,
-) -> isize {
-    let mut cost = if step_idx < 0 {
-        // Handle Prefix Overhang
-        let mask = if pattern_pos_idx >= 63 {
-            !0u64
-        } else {
-            (1u64 << (pattern_pos_idx + 1)) - 1
-        };
-        (searcher.alpha_pattern & mask).count_ones() as isize
-    } else {
-        // Handle matrix cost
-        let step_data = &searcher.history[lane_idx].steps[step_idx as usize];
-        let vp_bits = extract_simd_lane::<B>(step_data.vp, lane_idx);
-        let vn_bits = extract_simd_lane::<B>(step_data.vn, lane_idx);
-
-        let mask = if pattern_pos_idx >= 63 {
-            !0u64
-        } else {
-            (1u64 << (pattern_pos_idx + 1)) - 1
-        };
-
-        let pos = (vp_bits & mask).count_ones() as isize;
-        let neg = (vn_bits & mask).count_ones() as isize;
-        pos - neg
-    };
-
-    // Apply suffix overhang correction
-    let abs_pos = approx_start + step_idx;
-    let max_valid_text_pos = text_len.saturating_sub(1) as isize;
-
-    if abs_pos > max_valid_text_pos && searcher.alpha != 1.0 {
-        let overshoot = (abs_pos - max_valid_text_pos) as usize;
-        let correction = (overshoot as f32 * searcher.alpha).floor() as isize;
-        cost += correction;
-    }
-
-    cost
 }
 
 #[inline(always)]
