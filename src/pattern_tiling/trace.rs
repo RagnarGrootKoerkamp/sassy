@@ -6,7 +6,8 @@ use crate::profiles::Profile;
 use crate::search::Match;
 use crate::search::Strand;
 use crate::search::get_overhang_steps;
-use pa_types::{Cigar, CigarOp, Cost};
+use crate::trace::{CostLookup, get_trace};
+use pa_types::Cost;
 
 pub struct PatternHistory<S: Copy> {
     pub steps: Vec<SimdHistoryStep<S>>,
@@ -21,7 +22,6 @@ impl<S: Copy> Default for PatternHistory<S> {
 pub struct SimdHistoryStep<S: Copy> {
     pub vp: S,
     pub vn: S,
-    pub eq: S,
 }
 
 pub struct TraceBuffer {
@@ -82,6 +82,39 @@ impl TraceBuffer {
     }
 }
 
+pub(crate) struct V2CostLookup<'a, B: SimdBackend, P: Profile> {
+    searcher: &'a Myers<B, P>,
+    lane_idx: usize,
+}
+
+impl<B: SimdBackend, P: Profile> CostLookup for V2CostLookup<'_, B, P> {
+    #[inline(always)]
+    fn get(&self, i: usize, j: usize) -> Cost {
+        if j == 0 {
+            return 0;
+        }
+        let step_idx = i as isize - 1;
+        let pattern_pos = j as isize - 1;
+
+        let mask = if pattern_pos >= 63 {
+            !0u64
+        } else {
+            (1u64 << (pattern_pos + 1)) - 1
+        };
+
+        if step_idx < 0 {
+            (self.searcher.alpha_pattern & mask).count_ones() as Cost
+        } else {
+            let step_data = &self.searcher.history[self.lane_idx].steps[step_idx as usize];
+            let vp_bits = extract_simd_lane::<B>(step_data.vp, self.lane_idx);
+            let vn_bits = extract_simd_lane::<B>(step_data.vn, self.lane_idx);
+            let pos = (vp_bits & mask).count_ones() as Cost;
+            let neg = (vn_bits & mask).count_ones() as Cost;
+            pos - neg
+        }
+    }
+}
+
 #[inline(always)]
 fn handle_suffix_overhangs<B: SimdBackend, P: Profile>(
     searcher: &mut Myers<B, P>,
@@ -104,14 +137,10 @@ fn handle_suffix_overhangs<B: SimdBackend, P: Profile>(
                 last_bit_shift,
                 last_bit_mask,
             );
-            let eq_arr = B::to_array(all_ones);
-            let eq_slice = eq_arr.as_ref();
-
             for lane in 0..batch_size {
                 searcher.history[lane].steps.push(SimdHistoryStep {
                     vp: vp_out,
                     vn: vn_out,
-                    eq: B::splat_scalar(eq_slice[lane]),
                 });
             }
             block.vp = vp_out;
@@ -128,7 +157,7 @@ fn traceback_positions<B: SimdBackend, P: Profile>(
     pattern_idx: usize,
     t_queries: &TQueries<B, P>,
     approx_start: isize,
-    text_len: usize,
+    text: &[u8],
     out: &mut Vec<Match>,
 ) {
     for &(pos, _cost) in positions_and_costs {
@@ -138,7 +167,7 @@ fn traceback_positions<B: SimdBackend, P: Profile>(
             pattern_idx,
             t_queries,
             (approx_start, pos),
-            text_len,
+            text,
         );
         out.push(aln);
     }
@@ -192,7 +221,7 @@ fn trace_passing_alignments<B: SimdBackend, P: Profile>(
                     pattern_idx,
                     t_queries,
                     approx_start,
-                    text_len,
+                    text,
                     &mut buffer.filtered_alignments,
                 );
             }
@@ -213,7 +242,7 @@ fn trace_passing_alignments<B: SimdBackend, P: Profile>(
                     pattern_idx,
                     t_queries,
                     approx_start,
-                    text_len,
+                    text,
                     &mut buffer.filtered_alignments,
                 );
             }
@@ -335,15 +364,12 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
             let cost_masked = (cost_new & keep_mask) | (block.cost & freeze_mask);
             let freeze_arr = B::to_array(freeze_mask);
             let freeze_slice = freeze_arr.as_ref();
-            let eq_arr = B::to_array(eq);
-            let eq_slice = eq_arr.as_ref();
             for lane in 0..batch_size {
                 let is_frozen = B::scalar_to_u64(freeze_slice[lane]) != 0;
                 if !is_frozen {
                     searcher.history[lane].steps.push(SimdHistoryStep {
                         vp: vp_masked,
                         vn: vn_masked,
-                        eq: B::splat_scalar(eq_slice[lane]),
                     });
                 }
             }
@@ -421,25 +447,6 @@ fn get_cost_at<B: SimdBackend, P: Profile>(
     cost
 }
 
-/*
-Op  BAM  Consumes query  Consumes reference
---  ---  --------------  ------------------
-M   0    yes             yes
-I   1    yes             no
-D   2    no              yes
-N   3    no              yes
-S   4    yes             no
-H   5    no              no
-P   6    no              no
-=   7    yes             yes
-X   8    yes             yes
-
-NOTE: query = pattern, reference = text.
-In this context mostly means:
-    i+1 , j+1  -> Match/Sub
-    i+1 , j    -> Ins
-    i   , j+1  -> Del
-*/
 #[inline(always)]
 fn traceback_single<B: SimdBackend, P: Profile>(
     searcher: &Myers<B, P>,
@@ -447,139 +454,39 @@ fn traceback_single<B: SimdBackend, P: Profile>(
     original_pattern_idx: usize,
     t_queries: &TQueries<B, P>,
     slice: (isize, isize),
-    text_len: usize,
+    text: &[u8],
 ) -> Match {
-    let history = &searcher.history[lane_idx];
-    let steps = &history.steps;
-    let pattern_len = t_queries.pattern_length as isize;
+    let pattern = &t_queries.queries[original_pattern_idx];
+    let approx_start = slice.0 as usize;
+    let end_pos_exclusive = (slice.1 + 1).max(0) as usize;
+    let text_slice_end = end_pos_exclusive.min(text.len());
+    let text_slice = &text[approx_start..text_slice_end];
 
-    let max_step = slice.1 - slice.0;
-    let end_pos = slice.1;
-    let mut curr_step = max_step;
-    let mut pattern_pos = pattern_len - 1;
-    let mut cigar: Cigar = Cigar::default();
-
-    let max_valid_text_pos = (text_len - 1) as isize;
-    let alpha_not_one = searcher.alpha != 1.0;
-    let pattern_end = if end_pos >= max_valid_text_pos && alpha_not_one {
-        let overshoot = end_pos - max_valid_text_pos;
-        (pattern_len as usize).saturating_sub(overshoot as usize)
+    let alpha = if searcher.alpha != 1.0 {
+        Some(searcher.alpha)
     } else {
-        pattern_len as usize
+        None
     };
 
-    let mut pattern_start = pattern_len as usize; // Will be updated as we go back
+    // Passes ref to searcher so re-creating struct shouldn't have to much overhead
+    let cost_lookup = V2CostLookup { searcher, lane_idx };
 
-    // Helper closure to keep the calls concise
-    let get_cost = |s: isize, p: isize| get_cost_at(searcher, lane_idx, s, p, slice.0, text_len);
-    let text_len_isize = text_len as isize;
-
-    while curr_step >= 0 && pattern_pos >= 0 {
-        let curr_cost = get_cost(curr_step, pattern_pos);
-
-        let beyond_text = slice.0 + curr_step > (text_len_isize - 1);
-
-        if beyond_text {
-            pattern_pos -= 1;
-            curr_step -= 1;
-            pattern_start = (pattern_pos + 1).max(0) as usize;
-        } else {
-            let diag_cost = get_cost(curr_step - 1, pattern_pos - 1);
-            let step = &steps[curr_step as usize];
-            // Fixme: this is a bit of a waste to first store eq bitmasks, then extract the bit
-            // perhaps we can just like in v1 check if profile:match(p,t)
-            let eq_bits = extract_simd_lane::<B>(step.eq, lane_idx);
-            let is_match = (eq_bits & (1u64 << pattern_pos)) != 0;
-            let match_cost = if is_match { 0 } else { 1 };
-
-            if curr_cost == diag_cost + match_cost && is_match {
-                cigar.push(CigarOp::Match);
-                curr_step -= 1;
-                pattern_pos -= 1;
-                pattern_start = (pattern_pos + 1).max(0) as usize;
-            } else {
-                // Only compute other costs if diagonal didn't match
-                let left_cost = get_cost(curr_step - 1, pattern_pos);
-
-                // Mismatch.
-                if curr_cost == diag_cost + match_cost && !is_match {
-                    cigar.push(CigarOp::Sub);
-                    curr_step -= 1;
-                    pattern_pos -= 1;
-                    pattern_start = (pattern_pos + 1).max(0) as usize;
-                } else if curr_cost == left_cost + 1 {
-                    // Consumes step = text/ref (not pattern) = Del
-                    cigar.push(CigarOp::Del);
-                    curr_step -= 1;
-                } else {
-                    // Consumes pattern = query/pattern (not step) = Ins
-                    let up_cost = get_cost(curr_step, pattern_pos - 1);
-                    if curr_cost == up_cost + 1 {
-                        cigar.push(CigarOp::Ins);
-                        pattern_pos -= 1;
-                        pattern_start = (pattern_pos + 1).max(0) as usize;
-                    } else {
-                        panic!("Invalid traceback step reached :(");
-                    }
-                }
-            }
-        }
-    }
-
-    // Handle prefix overhang, but we only add it as operations if overhang was disabled
-    if pattern_pos >= 0 && searcher.alpha == 1.0 {
-        let overhang_len = (pattern_pos + 1) as usize;
-        // Overhang technically consumes the reference (even though it doesn't exist)
-        // should use softclipping but for now Ins
-        for _ in 0..overhang_len {
-            cigar.push(CigarOp::Ins);
-        }
-        pattern_start = 0;
-    }
-
-    let slice_start_offset = (curr_step + 1).max(0);
-
-    let (text_start, text_end) = if end_pos == -1 {
-        // Before text
-        (0, 0)
-    } else {
-        let start = (slice.0 + slice_start_offset) as usize;
-        let end = end_pos as usize;
-        let last_valid_idx = text_len.saturating_sub(1);
-
-        if start > last_valid_idx && end > last_valid_idx {
-            // After text
-            (text_len, text_len)
-        } else {
-            // Within bounds - +1 report as exclusive like v1, so +1)
-            (start, end.min(last_valid_idx) + 1)
-        }
-    };
-
-    let final_cost = get_cost_at(
-        searcher,
-        lane_idx,
-        max_step,
-        pattern_len - 1,
-        slice.0,
-        text_len,
+    let mut m = get_trace::<P>(
+        pattern,
+        approx_start,
+        end_pos_exclusive,
+        text_slice,
+        &cost_lookup,
+        alpha,
+        searcher.max_overhang,
     );
 
-    cigar.reverse();
+    m.pattern_idx = original_pattern_idx % t_queries.n_original_queries;
+    m.strand = if original_pattern_idx >= t_queries.n_original_queries {
+        Strand::Rc
+    } else {
+        Strand::Fwd
+    };
 
-    Match {
-        pattern_idx: original_pattern_idx % t_queries.n_original_queries,
-        text_idx: 0,
-        text_start,
-        text_end,
-        pattern_start,
-        pattern_end,
-        cost: final_cost as Cost,
-        strand: if original_pattern_idx >= t_queries.n_original_queries {
-            Strand::Rc
-        } else {
-            Strand::Fwd
-        },
-        cigar,
-    }
+    m
 }

@@ -14,6 +14,12 @@ use crate::bitpacking::compute_block_simd;
 use crate::search::{Match, Strand};
 use std::array::from_fn;
 
+pub trait CostLookup {
+    /// Get the DP cost at text position `i`, pattern position `j`.
+    /// i=0 and j=0 are are "outside" the text/pattern
+    fn get(&self, i: usize, j: usize) -> Cost;
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CostMatrix {
     /// Query length.
@@ -23,9 +29,10 @@ pub struct CostMatrix {
     pub max_overhang: Option<usize>,
 }
 
-impl CostMatrix {
+impl CostLookup for CostMatrix {
     /// i: text idx
     /// j: query idx
+    #[inline(always)]
     fn get(&self, i: usize, j: usize) -> Cost {
         let mut s = if let Some(alpha) = self.alpha {
             if let Some(mo) = self.max_overhang {
@@ -262,7 +269,7 @@ pub fn get_trace<P: Profile>(
     text_offset: usize,
     end_pos: usize,
     text: &[u8],
-    m: &CostMatrix,
+    m: &impl CostLookup,
     alpha: Option<f32>,
     max_overhang: Option<usize>,
 ) -> Match {
