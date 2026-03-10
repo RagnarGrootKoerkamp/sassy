@@ -77,7 +77,7 @@ pub struct BaseArgs {
     )]
     alphabet: Alphabet,
 
-    /// Enable overhang alignment.
+    /// Cost per base of overhang alignment, where the pattern extends beyond the text in [0,1]. Default disabled.
     #[arg(long)]
     overhang: Option<f32>,
 

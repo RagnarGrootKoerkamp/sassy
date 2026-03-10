@@ -26,6 +26,7 @@ Feature highlights:
 - Sassy uses bitpacking and SIMD (both AVX2 and NEON supported).
   Its main novelty is tiling these in the text direction.
 - Support for _overhang_ alignments where the pattern extends beyond the text.
+  (See [paper](https://doi.org/10.1101/2025.07.22.666207) appendix for details.)
 - Support for (case-insensitive) ASCII, DNA (`ACGT`), and
   [IUPAC](https://www.bioinformatics.org/sms/iupac.html) (=`ACGT+NYR...`) alphabets.
 - Rust library (`cargo add sassy`), binary (`cargo install sassy`, see details below), Python
