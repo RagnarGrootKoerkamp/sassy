@@ -271,7 +271,10 @@ impl<P: Profile> Searcher<P> {
         let max_pattern_length = queries.iter().map(|q| q.len()).max().unwrap();
 
         // all queries should be the same max length
-        assert!(queries.iter().all(|q| q.len() == max_pattern_length));
+        assert!(
+            queries.iter().all(|q| q.len() == max_pattern_length),
+            "All pattern must have the same length"
+        );
 
         if max_pattern_length <= U8Backend::LIMB_BITS {
             EncodedPatterns::U8(TQueries::<U8Backend, P>::new(queries, include_rc))

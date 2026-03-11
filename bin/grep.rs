@@ -91,6 +91,11 @@ pub struct BaseArgs {
     #[arg(long, default_value_t = 0.2)]
     max_n_frac: f32,
 
+    /// Use Sassy v2 encoded search (faster for many equal-length patterns).
+    /// Note: results can differ slightly from V1 due to the difference in reverse complement searching.
+    #[arg(long)]
+    v2: bool,
+
     /// Number of threads to use. All CPUs by default.
     #[arg(short = 'j', long)]
     threads: Option<usize>,
@@ -199,6 +204,40 @@ impl FilterArgs {
     }
 }
 
+fn run_batch_v2<'a, P: Profile>(
+    searcher: &mut Searcher<P>,
+    //fixme: simpler return?
+    results: &mut Vec<(
+        &'a Path,
+        (TextBatch, usize),
+        Vec<(&'a PatternRecord, Match)>,
+    )>,
+    path: &'a Path,
+    patterns: &'a [PatternRecord],
+    text_batch: &TextBatch,
+    k: usize,
+    max_n_frac: f32,
+) {
+    let patterns_vec: Vec<Vec<u8>> = patterns.iter().map(|p| p.seq.clone()).collect();
+    let encoded = searcher.encode_patterns(&patterns_vec);
+    for (i, text) in text_batch.iter().enumerate() {
+        let record_matches = searcher.search_encoded_patterns(&encoded, &text.seq.text, k);
+        let batch_matches: Vec<_> = record_matches
+            .iter()
+            .filter(|m| check_n_frac(max_n_frac, &text.seq.text[m.text_start..m.text_end]))
+            .cloned()
+            .map(|m| {
+                let pattern = &patterns[m.pattern_idx];
+                (pattern, m)
+            })
+            .collect();
+        if batch_matches.is_empty() {
+            continue;
+        }
+        results.push((path, (text_batch.clone(), i), batch_matches));
+    }
+}
+
 impl Args {
     fn run(mut self) {
         if self.base.invert && self.filter.is_none() {
@@ -300,43 +339,65 @@ impl Args {
                         }
                     };
 
-                    let mut results: Vec<(
-                        &Path,
-                        (TextBatch, usize),
-                        Vec<(&PatternRecord, Match)>,
-                    )> = vec![];
+                    let mut results = vec![];
                     let mut local_histogram = vec![0usize; k + 1];
 
                     while let Some((batch_id, batch)) = task_iterator.next_batch() {
                         let path = batch.0;
-                        for (i, text) in batch.2.iter().enumerate() {
-                            let mut batch_matches = vec![];
-                            for pattern in batch.1 {
-                                let record_matches = match &mut searcher {
-                                    Either::Left(s) => s.search(&pattern.seq, &text.seq, k),
-                                    Either::Right(s) => s.search(&pattern.seq, &text.seq, k),
-                                };
-                                batch_matches.extend(
-                                    record_matches
-                                        .into_iter()
-                                        .filter(|m| {
-                                            check_n_frac(
-                                                args.base.max_n_frac,
-                                                &text.seq.text[m.text_start..m.text_end],
-                                            )
-                                        })
-                                        .map(|m| (pattern, m)),
-                                );
-                            }
 
-                            if batch_matches.is_empty() {
-                                continue;
+                        if args.base.v2 {
+                            match &mut searcher {
+                                Either::Left(s) => run_batch_v2(
+                                    s,
+                                    &mut results,
+                                    path,
+                                    batch.1,
+                                    &batch.2,
+                                    k,
+                                    args.base.max_n_frac,
+                                ),
+                                Either::Right(s) => run_batch_v2(
+                                    s,
+                                    &mut results,
+                                    path,
+                                    batch.1,
+                                    &batch.2,
+                                    k,
+                                    args.base.max_n_frac,
+                                ),
                             }
+                        } else {
+                            for (i, text) in batch.2.iter().enumerate() {
+                                let mut batch_matches = vec![];
+                                for pattern in batch.1 {
+                                    let record_matches = match &mut searcher {
+                                        Either::Left(s) => s.search(&pattern.seq, &text.seq, k),
+                                        Either::Right(s) => s.search(&pattern.seq, &text.seq, k),
+                                    };
+                                    batch_matches.extend(
+                                        record_matches
+                                            .into_iter()
+                                            .filter(|m| {
+                                                check_n_frac(
+                                                    args.base.max_n_frac,
+                                                    &text.seq.text[m.text_start..m.text_end],
+                                                )
+                                            })
+                                            .map(|m| (pattern, m)),
+                                    );
+                                }
 
-                            for (_pat, m) in &batch_matches {
+                                if batch_matches.is_empty() {
+                                    continue;
+                                }
+                                results.push((path, (batch.2.clone(), i), batch_matches));
+                            }
+                        }
+
+                        for (_, _, matches) in &results {
+                            for (_, m) in matches {
                                 local_histogram[m.cost as usize] += 1;
                             }
-                            results.push((path, (batch.2.clone(), i), batch_matches));
                         }
 
                         let (next_batch_id, output_buf) = &mut *output.lock().unwrap();
