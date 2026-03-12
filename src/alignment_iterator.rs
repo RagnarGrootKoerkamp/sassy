@@ -157,7 +157,8 @@ impl<'s, C: Callback> Context<'s, C> {
         let min_pos = Pos(self.range_start as _, 0);
         let pos = Pos(self.m.text_start as _, self.m.pattern_start as _);
 
-        let mut edges = vec![];
+        let mut edges = arrayvec::ArrayVec::<(CigarOp, Cost), 3>::new();
+
         for mut op in [CigarOp::Match, CigarOp::Del, CigarOp::Ins] {
             // Filter in-range edges.
             if !(min_pos + op.delta() <= pos) {

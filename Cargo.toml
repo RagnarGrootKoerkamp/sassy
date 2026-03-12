@@ -60,6 +60,7 @@ rayon = "1.11.0"
 itertools = "0.14.0"
 derivative = "2.2.0"
 memchr = "2.8.1"
+arrayvec = "0.7.6"
 
 # Optional: CLI binary dependencies
 clap = { version = "4.5.37", features = ["derive"], optional = true }
