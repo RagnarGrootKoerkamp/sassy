@@ -64,7 +64,7 @@ pub fn fill<P: Profile>(
 ) {
     // len can be more than text.len() for overhang
     // where we need more blocks than there is text
-    // assert_eq!(len, text.len());
+    assert!(text.len() <= len);
     if alpha.is_some() && !P::supports_overhang() {
         panic!(
             "Overhang is not supported for {:?}",
