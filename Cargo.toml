@@ -51,7 +51,7 @@ required-features = ["cli"]
 
 
 [dependencies]
-pa-types = "1.2.0"
+pa-types = "1.4.0"
 log = "0.4.27"
 either = "1.15.0"
 wide = "1.1.1"
