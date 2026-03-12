@@ -224,13 +224,13 @@ pub struct Searcher<P: Profile> {
     rc: bool,
     /// overhang cost
     /// If set, must satisfy `0.0 <= alpha <= 1.0`
-    alpha: Option<f32>,
+    pub(crate) alpha: Option<f32>,
     /// If set, only the best match of each (pattern, text) pair is returned.
     only_best_match: bool,
     /// If set, matches are returned without trace and starting position.
     without_trace: bool,
     /// If set, overhang can be at most this long.
-    max_overhang: Option<usize>,
+    pub(crate) max_overhang: Option<usize>,
 
     // pattern_tiling searcher
     pattern_tiling_searcher: PatterntilingSearcher<P>,

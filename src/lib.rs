@@ -142,6 +142,7 @@ mod trace;
 
 // (PARTIALLY) PUBLIC MODS
 
+pub mod alignment_iterator;
 mod pattern_tiling;
 pub mod profiles;
 pub use pattern_tiling::general::EncodedPatterns;
