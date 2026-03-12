@@ -58,21 +58,22 @@ pub fn fill<P: Profile>(
     query: &[u8],
     text: &[u8],
     len: usize,
-    m: &mut CostMatrix,
+    cm: &mut CostMatrix,
     alpha: Option<f32>,
     max_overhang: Option<usize>,
 ) {
+    assert_eq!(len, text.len());
     if alpha.is_some() && !P::supports_overhang() {
         panic!(
             "Overhang is not supported for {:?}",
             std::any::type_name::<P>()
         );
     }
-    m.alpha = alpha;
-    m.max_overhang = max_overhang;
-    m.q = query.len();
-    m.deltas.clear();
-    m.deltas.reserve((m.q + 1) * len.div_ceil(64));
+    cm.alpha = alpha;
+    cm.max_overhang = max_overhang;
+    cm.q = query.len();
+    cm.deltas.clear();
+    cm.deltas.reserve((cm.q + 1) * len.div_ceil(64));
     let (profiler, query_profile) = P::encode_pattern(query);
     let mut h = vec![H(1, 0); query.len()];
 
@@ -92,10 +93,10 @@ pub fn fill<P: Profile>(
 
         let mut v = V::zero();
 
-        m.deltas.push(v);
+        cm.deltas.push(v);
         for j in 0..query.len() {
             compute_block::<P>(&mut h[j], &mut v, &query_profile[j], &text_profile);
-            m.deltas.push(v);
+            cm.deltas.push(v);
         }
     }
 }
@@ -117,6 +118,9 @@ pub fn simd_fill<P: Profile>(
         );
     }
     let lanes = texts.len();
+    for text in texts {
+        assert!(text.len() <= max_len);
+    }
 
     let (profiler, pattern_profile) = P::encode_pattern(pattern);
     let num_chunks = max_len.div_ceil(64);
