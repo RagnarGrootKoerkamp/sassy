@@ -59,6 +59,7 @@ ensure_simd = "0.1.0"
 rayon = "1.11.0"
 itertools = "0.14.0"
 derivative = "2.2.0"
+arrayvec = "0.7.6"
 
 # Optional: CLI binary dependencies
 clap = { version = "4.5.37", features = ["derive"], optional = true }
