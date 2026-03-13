@@ -2,11 +2,30 @@
 
 from typing import Literal
 
-__all__ = ["features", "Match", "Searcher"]
+__all__ = ["features", "AllAlignmentsAtPosIter", "Match", "Searcher"]
 
 def features() -> None:
     """Print CPU features and throughput information."""
     ...
+
+class AllAlignmentsAtPosIter:
+    """Lazy iterator over all alignments at a single matched end position.
+
+    Do not instantiate directly; instances are obtained from
+    :meth:`Searcher.search_all_alignments`.
+
+    All yielded :class:`Match` objects share the same ``text_end``; they differ in
+    ``text_start``, ``cigar``, and (when ``margin > 0``) ``cost``.
+
+    Break out of the loop early to avoid enumerating exponentially many paths.
+    """
+
+    def __iter__(self) -> "AllAlignmentsAtPosIter": ...
+    def __next__(self) -> Match: ...
+    def optimal_cost(self) -> int:
+        """Return the minimum alignment cost at this end position."""
+        ...
+
 
 class Match:
     """A match result from a search operation."""
@@ -131,5 +150,35 @@ class Searcher:
 
         Returns:
             A list of Match objects.
+        """
+        ...
+
+    def search_all_alignments(
+        self,
+        pattern: bytes,
+        text: bytes,
+        k: int,
+        margin: int = 0,
+    ) -> list[AllAlignmentsAtPosIter]:
+        """
+        Search for all end positions with score <= k, returning a lazy iterator
+        of all alignments for each end position.
+
+        Returns a list with one :class:`AllAlignmentsAtPosIter` per matched end position.
+        Each inner iterator yields :class:`Match` objects for all distinct alignments
+        (different CIGAR strings / ``text_start`` values) consistent with that end
+        position and cost.
+
+        Iterate lazily and break early to avoid enumerating exponentially many results.
+
+        Args:
+            pattern: The pattern to search for.
+            text: The text to search in.
+            k: Maximum edit distance (number of allowed errors).
+            margin: Also yield alignments with cost <= optimal_cost + margin.
+                    Clamped to k. Default 0 (optimal alignments only).
+
+        Returns:
+            A list of AllAlignmentsAtPosIter objects (one per matched end position).
         """
         ...
