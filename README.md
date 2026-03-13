@@ -154,7 +154,31 @@ The `grep` output is coloured:
 - blue shows inserted characters (in text but not in pattern).
 ![screenshot of sassy grep output](fig/grep.png)
 
-#### 1.2: TSV output for matches
+#### 1.2: Grep patterns from a Fasta file
+
+`patterns.fasta`
+```
+>p1
+ATGAGCA
+>p2
+TTAAATA
+```
+
+```bash
+sassy search --pattern-fasta patterns.fasta -k 1 text.fasta
+```
+
+If your `patterns.fasta` has many patterns (>8) which are equally long and <=64bp enable V2 
+`--v2` for higher throughput:
+
+```bash
+sassy search --pattern-fasta patterns.fasta -k 1 text.fasta --v2
+```
+
+
+
+
+#### 1.3: TSV output for matches
 
 ```sh
 sassy search -p GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG -k 2 reads.fa > matches.tsv
@@ -182,7 +206,7 @@ pattern	AC_000001.1__1_123	0	+	1416	1458	GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTC
 pattern	AC_000001.1__1_127	0	+	27	69	GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG	42=
 ```
 
-#### 1.3: Filter matching records
+#### 1.4: Filter matching records
 ```sh
 sassy filter -p GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG -k 2 reads.fq > filtered.fq
 # or
@@ -193,7 +217,7 @@ sassy grep   -p GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG -k 2 reads.fq -o filt
 Writes a file containing only matching records. Use `--invert` to only
 write non-matching records.
 
-#### 1.4: CRISPR off-target search
+#### 1.5: CRISPR off-target search
 
 Search for one or more guides in `guides.txt`:
 ```bash
