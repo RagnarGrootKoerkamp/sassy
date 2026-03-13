@@ -32,12 +32,19 @@ Feature highlights:
 - Rust library (`cargo add sassy`), binary (`cargo install sassy`, see details below), Python
   bindings (`pip install sassy-rs`), and C bindings (see below).
 
-See **the paper**, [detailed docs on docs.rs](https://docs.rs/sassy/latest/sassy/), and corresponding evals in [evals/](evals/):
+See **the papers**, [detailed docs on docs.rs](https://docs.rs/sassy/latest/sassy/), and corresponding evals in [evals/](evals/):
 
 > Rick Beeloo and Ragnar Groot Koerkamp.  
-> Sassy: Searching Short DNA Strings in the 2020s.  
-> bioRxiv, July 2025.
-> https://doi.org/10.1101/2025.07.22.666207.
+> Sassy2: Batch Searching of Short DNA Patterns  
+> bioRxiv, March 2026.  
+> https://doi.org/10.64898/2026.03.10.710811
+
+and
+
+> Rick Beeloo and Ragnar Groot Koerkamp.  
+> Sassy: Fuzzy Searching DNA Sequences using SIMD  
+> bioRxiv, July 2025.  
+> https://doi.org/10.1101/2025.07.22.666207
 
 ## Installation
 
@@ -98,6 +105,24 @@ assert_eq!(matches[0].cost, 1);
 assert_eq!(matches[0].strand, Strand::Fwd);
 assert_eq!(matches[0].cigar.to_string(), "2=1X1=");
 ```
+
+When searching __multiple equally long (<=64bp) patterns__ you can pre-encode the patterns. This is around 10-20x faster for short texts (<=200bp), and 2-3x faster for longer texts.
+
+```rust
+use sassy::{Searcher, Match, profiles::Iupac, Strand};
+
+let patterns = [b"ATG".to_vec(), b"TTT".to_vec()];
+let text = b"CCCCATGCCCCTTT";
+let k = 1;
+
+let mut searcher = Searcher::<Iupac>::new_fwd();
+let encoded = searcher.encode_patterns(&patterns);
+let matches = searcher.search_encoded_patterns(&encoded, text, k);
+assert_eq!(matches.len(), 2);
+assert_eq!(matches[0].text_start, 4);  // ATG
+assert_eq!(matches[1].text_start, 11); // TTT
+```
+
 
 ### 1. Command-line interface (CLI)
 
