@@ -4,6 +4,8 @@
 
 ## git
 
+## 0.2.1
+
 - **Breaking:** Tracebacks now prefer substitutions over indels, as this is
   more practically useful: [#46](https://github.com/RagnarGrootKoerkamp/sassy/pull/46)
   (Previous behaviour was to prefer matches, and otherwise deletion over
