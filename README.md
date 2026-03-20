@@ -63,7 +63,7 @@ conda install -c bioconda sassy
 
 ### Build from source
 ``` sh
-RUSTFLAGS="-C target-cpu=native" cargo install sassy
+RUSTFLAGS="-C target-cpu=native" cargo install --git https://github.com/RagnarGrootKoerkamp/sassy sassy
 ```
 
 Sassy uses AVX2 or NEON instructions performance reasons, which requires either
