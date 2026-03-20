@@ -4,7 +4,25 @@
 
 ## git
 
-- Add `sassy crispr --pam-length <len>` to allow changing the default of 3.
+- **Breaking:** Tracebacks now prefer substitutions over indels, as this is
+  more practically useful: [#46](https://github.com/RagnarGrootKoerkamp/sassy/pull/46)
+  (Previous behaviour was to prefer matches, and otherwise deletion over
+  substitution over insertion.)
+- docs: Add Rust and CLI examples for v2 to the readme
+- docs: Clarify the tsv output of `sassy search` in the readme.
+- docs: Clarify overhang [#37](https://github.com/RagnarGrootKoerkamp/sassy/issues/37)
+- feat: Add `sassy grep --v2` for searching based on the algorithm of the v2 paper.
+- feat: Add `sassy search --sam` flag to report negative-strand matches and CIGARs in the
+  text direction, rather than the default of reverse-complementing them to match
+  the pattern direction. [#49](https://github.com/RagnarGrootKoerkamp/sassy/issues/49)
+- feat: Add `sassy crispr --pam-length <len>` to allow changing the default of 3.
+- python: Add python typing [#43](https://github.com/RagnarGrootKoerkamp/sassy/pull/43)
+- misc: Introduce default-enabled `cli` and `diagnostics` features to allow
+  pruning dependencies and building for WASM. [#50](https://github.com/RagnarGrootKoerkamp/sassy/issues/50) [#51](https://github.com/RagnarGrootKoerkamp/sassy/pull/51)
+  redundant dependencies.
+- misc: Refactors to share traceback code between v1 and v2.
+- evals: Updates to v1 and v2 evals.
+
 
 ## 0.2.0
 The main new feature of this v2 release is `search_encoded_patterns`, written by @RickBeeloo,
@@ -42,7 +60,7 @@ Further changes:
 - **bugfix**: `sassy grep` had a bug in the batching logic, making it skip a
   record after every 1MB of input. So for human genomes it would only search
   every other record.
-- docs: Recommend to use `Profile::Iupac` instead of `Profile::Dna` in docs and examples. (#38)
+- docs: Recommend to use `Profile::Iupac` instead of `Profile::Dna` in docs and examples. ([#38](https://github.com/RagnarGrootKoerkamp/sassy/issues/38))
 - misc: set up `cargo release`
 
 ## 0.1.9
@@ -59,39 +77,39 @@ Further changes:
   as well.
 
 ## 0.1.7
-- Improved compile error message when not using `-target-cpu=native`. (#37)
+- Improved compile error message when not using `-target-cpu=native`. ([#37](https://github.com/RagnarGrootKoerkamp/sassy/issues/37))
 - Added installation section to README, explaining the use of `RUSTFLAGS` and
-  minimal required rust version. (#37)
+  minimal required rust version. ([#37](https://github.com/RagnarGrootKoerkamp/sassy/issues/37))
 - Assert whether the selected profile supports overhang.
 - Add `cargo-dist` for binary release artefacts.
 - Move some internal features from feature-gated to `#[doc(hidden)] mod private {}`.
 
 ## 0.1.6
 - feat: Use `wide` instead of `portable-simd` so that `sassy` now works on
-  stable Rust (#26). It's slightly (<5%) slower and has slightly ugly code, but
+  stable Rust ([#26](https://github.com/RagnarGrootKoerkamp/sassy/issues/26)). It's slightly (<5%) slower and has slightly ugly code, but
   good enough for now.
 
 ## 0.1.5
-- feat: Add `sassy search`, `sassy filter`, and `sassy grep` (#35, see updated readme).
+- feat: Add `sassy search`, `sassy filter`, and `sassy grep` ([#35](https://github.com/RagnarGrootKoerkamp/sassy/issues/35), see updated readme).
 - perf: Improvements when searching short (len ~16) patterns, by avoiding
   redundant expensive `find_mininima` call.
 - perf: Improvements when searching short texts without overhang, by avoiding redundant
   floating point operations.
 - misc: Bump `pa-types` to `1.2.0` for `Cigar::to_char_pairs` to conveniently
   iterate over corresponding characters.
-- misc: `derive(Clone)` for `Searcher` (#36)
+- misc: `derive(Clone)` for `Searcher` ([#36](https://github.com/RagnarGrootKoerkamp/sassy/pull/36))
 - misc: Bugfix for mixed-case IUPAC input.
 - docs: Minor documentation & readme fixes.
 
 ## 0.1.4
-- Improve docs for `sassy crispr` (#34 by @tfenne).
-- Require value for `--max-n-frac` (#33 by @tfenne).
+- Improve docs for `sassy crispr` ([#34](https://github.com/RagnarGrootKoerkamp/sassy/pull/34) by @tfenne).
+- Require value for `--max-n-frac` ([#33](https://github.com/RagnarGrootKoerkamp/sassy/pull/33) by @tfenne).
 - Check that AVX2 or NEON instructions are enabled; otherwise `-F scalar` is required.
 - Non-x86 support: Use `swizzle_dyn` instead of hardcoding `_mm256_shuffle_epi8`.
 - Add fallback for non-BMI2 instruction sets; 5-20% slower.
 - Update `pa-types` to `1.1.0` for CIGAR output that always includes `1` (eg `1=`).
 - Fix/invert `sassy crispr --no-rc` flag.
-- Ensure output columns of `sassy crispr` match content (#31 by @tfenne).
+- Ensure output columns of `sassy crispr` match content ([#31](https://github.com/RagnarGrootKoerkamp/sassy/pull/31) by @tfenne).
 
 ## 0.1.3
 - Include source code in pypi distribution.
