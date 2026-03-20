@@ -33,6 +33,13 @@ name = 'sassy'
 path = 'bin/main.rs'
 required-features = ["cli"]
 
+[[example]]
+name = 'modes'
+required-features = ["cli"]
+[[example]]
+name = 'all_vs_all_barcodes'
+required-features = ["cli"]
+
 
 [dependencies]
 pa-types = "1.2.0"
