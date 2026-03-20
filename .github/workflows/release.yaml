@@ -32,6 +32,7 @@ jobs:
       - name: Build & test & rename
         run: |
           mv .cargo/config-portable.toml .cargo/config.toml
+          cargo build --no-default-features
           cargo build --profile dist
           cargo test --profile dist
 
