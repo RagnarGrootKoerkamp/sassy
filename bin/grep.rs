@@ -9,6 +9,7 @@ use std::{
 use colored::Colorize;
 use either::Either;
 use needletail::parse_fastx_file;
+use pa_types::Cigar;
 use sassy::{
     Match, Searcher, Strand,
     pretty_print::{PrettyPrintDirection, PrettyPrintStyle},
@@ -103,6 +104,11 @@ pub struct BaseArgs {
     /// Only report non-matching records. Only applies to `filter` output.
     #[arg(short = 'v', long)]
     invert: bool,
+
+    /// SAM-compatible output: print the `match_region` and `cigar` in text direction.
+    /// (By default, sassy outputs these in the _pattern_ direction, and reverse complements the `match_region` and `cigar` for rc matches.)
+    #[arg(long)]
+    sam: bool,
 
     // Positional
     /// Input Fastx files. May be gzipped.
@@ -592,41 +598,53 @@ impl Args {
         let start = m.text_start;
         let end = m.text_end;
         let slice = &text.seq.text[start..end];
-
-        // If we match reverse complement, reverse complement the slice to make it easier to read
-        let slice_str = if m.strand == Strand::Rc {
-            match self.base.alphabet {
-                Alphabet::Dna => {
-                    String::from_utf8_lossy(&<Dna as Profile>::reverse_complement(slice))
-                        .into_owned()
-                }
-                Alphabet::Iupac => {
-                    String::from_utf8_lossy(&<Iupac as Profile>::reverse_complement(slice))
-                        .into_owned()
-                }
-            }
-        } else {
-            String::from_utf8_lossy(slice).into_owned()
-        };
+        let match_region = self.format_match_region(slice, m.strand);
+        let match_region = String::from_utf8_lossy(&match_region);
 
         let pat_id = &pattern.id;
         let text_id = &text.id;
-        let cigar = m.cigar.to_string();
+        let cigar = self.format_cigar(&m.cigar, m.strand);
         let strand = match m.strand {
             Strand::Fwd => "+",
             Strand::Rc => "-",
         };
         writeln!(
             writer,
-            "{pat_id}\t{text_id}\t{cost}\t{strand}\t{start}\t{end}\t{slice_str}\t{cigar}"
+            "{pat_id}\t{text_id}\t{cost}\t{strand}\t{start}\t{end}\t{match_region}\t{cigar}"
         )
         .unwrap();
+    }
+
+    fn format_match_region(&self, slice: &[u8], strand: Strand) -> Vec<u8> {
+        if strand == Strand::Rc && !self.base.sam {
+            match self.base.alphabet {
+                Alphabet::Dna => <Dna as Profile>::reverse_complement(slice),
+                Alphabet::Iupac => <Iupac as Profile>::reverse_complement(slice),
+            }
+        } else {
+            slice.to_vec()
+        }
+    }
+
+    fn format_cigar(&self, cigar: &Cigar, strand: Strand) -> String {
+        if strand == Strand::Rc && self.base.sam {
+            let mut cigar = cigar.clone();
+            cigar.reverse();
+            cigar.to_string()
+        } else {
+            cigar.to_string()
+        }
     }
 }
 
 #[cfg(test)]
 mod test {
+    use clap::Parser;
+    use pa_types::Cigar;
     use sassy::profiles::{Dna, Profile};
+
+    use super::{Args, GrepArgs, SearchArgs};
+    use sassy::Strand;
 
     #[test]
     fn amplicon_crash() {
@@ -648,5 +666,56 @@ mod test {
                 sassy::pretty_print::PrettyPrintStyle::Full,
             );
         });
+    }
+
+    #[test]
+    fn sam_output() {
+        // Grep and search support --sam
+        let args = GrepArgs::try_parse_from(["grep", "-p", "ACGT", "-k", "1", "--sam"]).unwrap();
+        assert!(args.base.sam);
+        let args =
+            SearchArgs::try_parse_from(["search", "-p", "ACGT", "-k", "1", "--sam"]).unwrap();
+        assert!(args.base.sam);
+
+        let args_sam = test_args(true);
+        let args_dft = test_args(false);
+
+        // In SAM mode, RC matches are still in text direction.
+        let slice = b"AAGT";
+        assert_eq!(
+            args_dft.format_match_region(slice, Strand::Rc),
+            Dna::reverse_complement(slice)
+        );
+        assert_eq!(
+            args_sam.format_match_region(slice, Strand::Rc),
+            b"AAGT".to_vec()
+        );
+
+        // In SAM mode, RC cigars are still in text direction.
+        let cigar = Cigar::from_string("2=1X3D");
+        assert_eq!(args_dft.format_cigar(&cigar, Strand::Rc), "2=1X3D");
+        assert_eq!(args_sam.format_cigar(&cigar, Strand::Rc), "3D1X2=");
+        assert_eq!(args_sam.format_cigar(&cigar, Strand::Fwd), "2=1X3D");
+        assert_eq!(args_dft.format_cigar(&cigar, Strand::Fwd), "2=1X3D");
+    }
+
+    fn test_args(sam: bool) -> Args {
+        let mut argv = vec!["grep", "-p", "ACGT", "-k", "1"];
+        if sam {
+            argv.push("--sam");
+        }
+        let GrepArgs {
+            base,
+            context,
+            search,
+            filter,
+        } = GrepArgs::try_parse_from(argv).unwrap();
+        Args {
+            base,
+            context,
+            grep: true,
+            search,
+            filter,
+        }
     }
 }
