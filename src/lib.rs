@@ -135,6 +135,7 @@
 mod bitpacking;
 mod delta_encoding;
 mod minima;
+#[cfg(feature = "cli")]
 pub mod pretty_print;
 mod search;
 mod trace;
@@ -175,9 +176,8 @@ const LANES: usize = 8;
 #[cfg(feature = "avx512")]
 type S = wide::u64x8;
 
-// TESTS
-
 /// Print info on CPU features and speed of searching.
+#[cfg(feature = "diagnostics")]
 pub fn test_cpu_features() {
     eprintln!("CPU features during compilation and runtime:");
     #[cfg(target_arch = "x86_64")]
@@ -237,6 +237,7 @@ pub fn test_cpu_features() {
 }
 
 /// Print throughput in GB/s for random pattern and text.
+#[cfg(feature = "diagnostics")]
 pub fn test_throughput() {
     eprintln!("Running a little test: aligning a 23bp pattern against 100kb text, with 1 error.");
     eprintln!("With AVX2, this is typically around 2GB/s. Without, closer to 1.3GB/s.");
@@ -262,6 +263,7 @@ pub fn test_throughput() {
 }
 
 #[cfg(test)]
+#[cfg(feature = "diagnostics")]
 mod test {
     #[test]
     fn test_cpu_features() {

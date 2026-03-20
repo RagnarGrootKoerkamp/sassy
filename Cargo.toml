@@ -31,24 +31,35 @@ debug = false
 [[bin]]
 name = 'sassy'
 path = 'bin/main.rs'
+required-features = ["cli"]
 
 
 [dependencies]
-rand = "0.9.0"
 pa-types = "1.2.0"
-clap = { version = "4.5.37", features = ["derive"] }
 log = "0.4.27"
-env_logger = "0.11.8"
-num_cpus = "1.16.0"
-needletail = "0.6.3"
-pyo3 = { version = "0.27", features = ["extension-module", "abi3-py38", "generate-import-lib"], optional = true }
-colored = "3.0.0"
 either = "1.15.0"
 wide = "1.1.1"
 ensure_simd = "0.1.0"
 rayon = "1.11.0"
 itertools = "0.14.0"
 derivative = "2.2.0"
+
+# Optional: CLI binary dependencies
+clap = { version = "4.5.37", features = ["derive"], optional = true }
+needletail = { version = "0.6.3", optional = true }
+env_logger = { version = "0.11.8", optional = true }
+num_cpus = { version = "1.16.0", optional = true }
+colored = { version = "3.0.0", optional = true }
+
+# Optional: diagnostic functions (test_throughput, test_cpu_features)
+rand = { version = "0.9.0", optional = true }
+
+# Optional: Python bindings
+pyo3 = { version = "0.27", features = [
+  "extension-module",
+  "abi3-py38",
+  "generate-import-lib",
+], optional = true }
 
 [dev-dependencies]
 tempfile = "3.20.0"
@@ -60,6 +71,14 @@ criterion = { version = "0.5", features = ["html_reports"] }
 perfcnt = "0.8.0"
 
 [features]
+default = ["cli", "diagnostics"]
+
+# CLI binary and pretty-printing support
+cli = ["clap", "needletail", "env_logger", "num_cpus", "colored"]
+
+# Diagnostic functions (test_throughput, test_cpu_features) that depend on rand
+diagnostics = ["rand"]
+
 avx512 = []
 python = ["pyo3"]
 c = []
@@ -68,14 +87,9 @@ c = []
 # Without this, it requires either AVX2 or NEON to be available at compile time.
 scalar = ["ensure_simd/scalar"]
 
-default = []
-
 
 [workspace]
-members = [
-    ".",
-    "evals"
-]
+members = [".", "evals"]
 
 [[bench]]
 name = "perf"
