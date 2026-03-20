@@ -206,6 +206,29 @@ pattern	AC_000001.1__1_123	0	+	1416	1458	GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTC
 pattern	AC_000001.1__1_127	0	+	27	69	GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG	42=
 ```
 
+**Table specification:**
+- `pat_id`: the record id of the matched pattern
+- `text_id`: the record id of the matching text
+- `cost`: the edit distance (non-negative integer) of the match
+- `strand`: the strand of the match, either `+` for forward or `-` for rc matches
+- `start`: the 0-based inclusive start of the match in the text
+- `end`: the 0-based exclusive end of the match in the text
+- `match_region`: the region of the text that matches the pattern, _possibly
+  reverse-complemented to 'align' with the direction of the pattern_.
+  `text[start..end]` for forward (`+`) matches and `rc(text[start..end])` for
+  reverse (`-`) matches.
+- `cigar`: the CIGAR string between the pattern and `match_region`, _in the
+  direction of the pattern_.
+
+**Note on SAM-compatibility:** The SAM format outputs the information for
+reverse complement matches differently. Rather than reverse-complementing the
+text to align with the pattern, it reverse-complements the pattern to align with
+the text. That means the equivalent to the `match_region` column always reads
+_in the direction of the text_, and likewise the `cigar` is oriented to
+correspond to `match_region`, also in the direction of the text.
+
+Use the `--sam` flag to get this SAM-compatible output.
+
 #### 1.4: Filter matching records
 ```sh
 sassy filter -p GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG -k 2 reads.fq > filtered.fq
