@@ -220,6 +220,11 @@ pattern	AC_000001.1__1_127	0	+	27	69	GTACAGAAACGAGCGGATGGAAAGAGTAGTGAGCGCCTCGCG	
 - `cigar`: the CIGAR string between the pattern and `match_region`, _in the
   direction of the pattern_.
 
+**Note on CIGAR strings and tracebacks:** Since version 0.2.1, the alignment
+returned by Sassy prefers matches and mismatches, and otherwise prefers
+deletions over insertions, see [#46](https://github.com/RagnarGrootKoerkamp/sassy/pull/46). In older versions, deletions were preferred
+over substitutions, possibly resulting in suboptimal alignments.
+
 **Note on SAM-compatibility:** The SAM format outputs the information for
 reverse complement matches differently. Rather than reverse-complementing the
 text to align with the pattern, it reverse-complements the pattern to align with
