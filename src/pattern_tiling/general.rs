@@ -337,7 +337,7 @@ impl<P: Profile> Searcher<P> {
         k: u32,
         prefilter: PrefilterBackend,
         post: TracePostProcess,
-    ) -> &[Match] {
+    ) -> &mut [Match] {
         match (prefilter, full_queries) {
             (PrefilterBackend::U8, EncodedPatterns::U16 { full, suffix_u8 }) => run_hierarchical!(self, full, suffix_u8, suffix_searcher_u8, searcher_u16, text, k, post, "U8"),
             (PrefilterBackend::U8, EncodedPatterns::U32 { full, suffix_u8, .. }) => run_hierarchical!(self, full, suffix_u8, suffix_searcher_u8, searcher_u32, text, k, post, "U8"),
@@ -347,7 +347,7 @@ impl<P: Profile> Searcher<P> {
             (PrefilterBackend::U32, EncodedPatterns::U64 { full, suffix_u32, .. }) => run_hierarchical!(self, full, suffix_u32, suffix_searcher_u32, searcher_u64, text, k, post, "U32"),
             _ => panic!("Invalid prefilter backend combination"),
         }
-        self.alignments_buf.as_slice()
+        self.alignments_buf.as_mut_slice()
     }
 
     pub fn search(
@@ -355,7 +355,7 @@ impl<P: Profile> Searcher<P> {
         encoded_queries: &EncodedPatterns<P>,
         text: &[u8],
         k: u32,
-    ) -> &[Match] {
+    ) -> &mut [Match] {
         self.search_with_options(
             encoded_queries,
             text,
@@ -370,7 +370,7 @@ impl<P: Profile> Searcher<P> {
         encoded_queries: &EncodedPatterns<P>,
         text: &[u8],
         k: u32,
-    ) -> &[Match] {
+    ) -> &mut [Match] {
         self.search_with_options(encoded_queries, text, k, Some(true), TracePostProcess::All)
     }
 
@@ -381,7 +381,7 @@ impl<P: Profile> Searcher<P> {
         k: u32,
         use_hierarchical: Option<bool>,
         post: TracePostProcess,
-    ) -> &[Match] {
+    ) -> &mut [Match] {
         if let Some(prefilter) = Self::should_use_hierarchical(encoded_queries, k, use_hierarchical)
         {
             self.hierarchical_search_with_prefilter(encoded_queries, text, k, prefilter, post)
@@ -401,7 +401,7 @@ impl<P: Profile> Searcher<P> {
                     &mut self.alignments_buf,
                     &mut self.trace_buffer,
                 );
-                self.alignments_buf.as_slice()
+                self.alignments_buf.as_mut_slice()
             })
         }
     }
