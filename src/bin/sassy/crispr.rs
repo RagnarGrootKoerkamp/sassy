@@ -35,6 +35,10 @@ pub struct CrisprArgs {
     #[arg(long)]
     max_n_frac: f32,
 
+    /// Use Sassy v2 encoded search (faster for many equal-length patterns).
+    #[arg(long)]
+    v2: bool,
+
     /// Number of threads to use. All CPUs by default.
     #[arg(short = 'j', long)]
     threads: Option<usize>,
@@ -198,7 +202,7 @@ pub fn crispr(args: &CrisprArgs) {
         for _ in 0..num_threads {
             scope.spawn(|| {
                 // Searcher, IUPAC and always reverse complement
-                let mut searcher = if args.no_rc {
+                let mut searcher = if args.no_rc || args.v2 {
                     Searcher::<Iupac>::new_fwd()
                 } else {
                     Searcher::<Iupac>::new_rc()
@@ -214,32 +218,155 @@ pub fn crispr(args: &CrisprArgs) {
                 };
 
                 while let Some((_batch_id, batch)) = task_iter.next_batch() {
+                    // If all patterns have the same length, we can use the faster v2 search.
+                    // Only drawback is that it does not (yet?) support the filter fn for exact PAM matches.
+                    // So we filter those out afterwards.
+
+                    if args.v2 {
+                        let len = batch.1[0].seq.len();
+                        let all_same = batch.1.iter().all(|p| p.seq.len() == len);
+                        assert!(
+                            all_same,
+                            "All guide sequences must have the same length to use v2 search"
+                        );
+
+                        let patterns = &batch.1.iter().map(|p| p.seq.clone()).collect::<Vec<_>>();
+                        let encoded = searcher.encode_patterns(patterns);
+                        let rc_encoded = if args.no_rc {
+                            None
+                        } else {
+                            let rc_patterns = &batch
+                                .1
+                                .iter()
+                                .map(|p| Iupac::complement(&p.seq))
+                                .collect::<Vec<_>>();
+                            Some(searcher.encode_patterns(rc_patterns))
+                        };
+
+                        for text in &*batch.2 {
+                            let rcs = if args.no_rc {
+                                vec![false]
+                            } else {
+                                vec![false, true]
+                            };
+                            for rc in rcs {
+                                let rc_text;
+                                let fwd_or_rev_text = if rc {
+                                    rc_text = text.seq.rev_text();
+                                    rc_text.as_ref()
+                                } else {
+                                    &text.seq.text
+                                };
+                                let fwd_or_compl_pattern = if rc {
+                                    &rc_encoded.as_ref().unwrap()
+                                } else {
+                                    &encoded
+                                };
+                                let matches = searcher.search_all_encoded_patterns(
+                                    &fwd_or_compl_pattern,
+                                    fwd_or_rev_text,
+                                    args.k,
+                                );
+                                if matches.is_empty() {
+                                    continue;
+                                }
+
+                                let id = &text.id;
+                                let mut writer_guard = writer.lock().unwrap();
+                                let mut num_matches = 0;
+
+                                for m in matches {
+                                    // Check PAM match.
+                                    if !args.allow_pam_edits {
+                                        let pam_match = filter_fn(
+                                            &[],
+                                            &fwd_or_rev_text[..m.text_end],
+                                            if rc { Strand::Rc } else { Strand::Fwd },
+                                        );
+                                        if !pam_match {
+                                            continue;
+                                        }
+                                    }
+
+                                    // Fix start and end of rc matches
+                                    if rc {
+                                        let len = fwd_or_rev_text.len();
+                                        (m.text_start, m.text_end) = (len - m.text_end, len- m.text_start);
+                                        m.strand = Strand::Rc;
+                                    }
+
+                                    let start = m.text_start;
+                                    let end = m.text_end;
+
+                                    let text = text.seq.text();
+                                    let slice = &text.as_ref()[start..end];
+
+                                    // Check if satisfies user max N cut off
+                                    let n_ok = if max_n_frac < 100.0 {
+                                        check_n_frac(max_n_frac, slice)
+                                    } else {
+                                        true
+                                    };
+
+                                    if !n_ok {
+                                        continue;
+                                    }
+                                    num_matches += 1;
+
+                                    let match_region = if m.strand == Strand::Rc {
+                                        let rc = <Iupac as Profile>::reverse_complement(slice);
+                                        String::from_utf8_lossy(&rc).into_owned()
+                                    } else {
+                                        String::from_utf8_lossy(slice).into_owned()
+                                    };
+                                    let cost = m.cost;
+                                    let cigar = m.cigar.to_string();
+                                    let strand = match m.strand {
+                                        Strand::Fwd => "+",
+                                        Strand::Rc => "-",
+                                    };
+                                    let guide_string =
+                                        String::from_utf8_lossy(&patterns[m.pattern_idx as usize]);
+                                    writeln!(
+                                        writer_guard,
+                                        "{guide_string}\t{id}\t{cost}\t{strand}\t{start}\t{end}\t{match_region}\t{cigar}"
+                                    ).unwrap();
+                                }
+                                drop(writer_guard);
+                                total_found.fetch_add(num_matches, Ordering::Relaxed);
+                            }
+                        }
+                        continue;
+                    }
+
                     for text in &*batch.2 {
                         for pattern in batch.1 {
                             let guide_sequence = &pattern.seq;
-                            let guide_string = String::from_utf8_lossy(guide_sequence);
-                            let id_text = &text;
-
-                            let id = &id_text.id;
-                            let text = &id_text.seq;
 
                             let matches = if !args.allow_pam_edits {
-                                searcher.search_with_fn(guide_sequence, text, args.k, true, filter_fn)
+                                searcher.search_with_fn(
+                                    guide_sequence,
+                                    &text.seq,
+                                    args.k,
+                                    true,
+                                    filter_fn,
+                                )
                             } else {
-                                searcher.search_all(guide_sequence, text, args.k)
+                                searcher.search_all(guide_sequence, &text.seq, args.k)
                             };
                             if matches.is_empty() {
                                 continue;
                             }
 
-                            total_found.fetch_add(matches.len(), Ordering::Relaxed);
-
+                            let id = &text.id;
                             let mut writer_guard = writer.lock().unwrap();
+                            let mut num_matches = 0;
+                            let guide_string = String::from_utf8_lossy(guide_sequence);
 
                             for m in matches {
                                 let start = m.text_start;
                                 let end = m.text_end;
-                                let text = text.text();
+                                let text = text.seq.text();
                                 let slice = &text.as_ref()[start..end];
 
                                 // Check if satisfies user max N cut off
@@ -252,8 +379,7 @@ pub fn crispr(args: &CrisprArgs) {
                                 if !n_ok {
                                     continue;
                                 }
-
-                                total_found.fetch_add(1, Ordering::Relaxed);
+                                num_matches += 1;
 
                                 let match_region = if m.strand == Strand::Rc {
                                     let rc = <Iupac as Profile>::reverse_complement(slice);
@@ -270,10 +396,10 @@ pub fn crispr(args: &CrisprArgs) {
                                 writeln!(
                                     writer_guard,
                                     "{guide_string}\t{id}\t{cost}\t{strand}\t{start}\t{end}\t{match_region}\t{cigar}"
-                                )
-                                    .unwrap();
+                                ).unwrap();
                             }
                             drop(writer_guard);
+                            total_found.fetch_add(num_matches, Ordering::Relaxed);
                         }
                     }
                 }
