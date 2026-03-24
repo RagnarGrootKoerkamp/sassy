@@ -61,9 +61,14 @@ or via conda/mamba/pixi:
 conda install -c bioconda sassy
 ```
 
+**AVX-512:** The prebuilt x86-64 binaries distributed via GitHub
+releases and bioconda (but not Pypi) target both AVX2 and AVX-512 using [`cargo
+multivers`](https://github.com/ronnychevalier/cargo-multivers).
+Specifically, version 2 (`sassy {search,crispr} --v2`) is 2x faster for AVX-512.
+
 ### Build from source
 ``` sh
-RUSTFLAGS="-C target-cpu=native" cargo install --git https://github.com/RagnarGrootKoerkamp/sassy sassy
+RUSTFLAGS="-C target-cpu=native" cargo install --profile dist --git https://github.com/RagnarGrootKoerkamp/sassy sassy
 ```
 
 Sassy uses AVX2 or NEON instructions performance reasons, which requires either
@@ -71,6 +76,11 @@ Sassy uses AVX2 or NEON instructions performance reasons, which requires either
 See [this README](https://github.com/ragnargrootkoerkamp/ensure_simd) for details and [this
 blog](https://curiouscoding.nl/posts/distributing-rust-simd-binaries/) for background.
 The same restrictions apply when using the sassy library in a larger project.
+
+Sassy2 can also use AVX-512.
+This requires `target-cpu=x86-64-v4`, `target-cpu=native` on a machine
+with AVX-512 support, or [`cargo
+multivers --profile dist`](https://github.com/ronnychevalier/cargo-multivers).
 
 Sassy requires Rust 1.91 or newer. Get it via `rustup update`. (Switch to
 [rustup](https://rustup.rs) when your system installation is too old).
