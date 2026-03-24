@@ -30,7 +30,6 @@ debug = false
 
 [[bin]]
 name = 'sassy'
-path = 'bin/main.rs'
 required-features = ["cli"]
 
 [[example]]
