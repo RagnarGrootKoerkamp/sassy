@@ -29,15 +29,28 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-multivers
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo install cargo-multivers
       - name: Build & test & rename
         run: |
           mv .cargo/config-portable.toml .cargo/config.toml
+
+          # Test base configuration
           cargo build --no-default-features
           cargo build --profile dist
           cargo test --profile dist
 
-          mkdir artifacts
-          mv target/dist/sassy artifacts/sassy-${{ matrix.target }}
+          # Output artifact directory
+          mkdir -p artifacts
+
+          # For x86-64, use cargo-multivers to build a AVX2+AVX-512 combined binary.
+          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-gnu" ]; then
+            cargo multivers --profile dist
+            mv target/cargo-multivers/${{ matrix.target }}/release/sassy artifacts/sassy-${{ matrix.target }}
+          else
+            mv target/dist/sassy artifacts/sassy-${{ matrix.target }}
+          fi
 
       - uses: actions/upload-artifact@v4
         with:

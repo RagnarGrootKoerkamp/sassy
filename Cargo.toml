@@ -28,6 +28,9 @@ lto = true
 debug = false
 
 
+[package.metadata.multivers.x86_64]
+cpus = ["x86-64-v3", "x86-64-v4"]
+
 [[bin]]
 name = 'sassy'
 path = 'bin/main.rs'
@@ -86,7 +89,11 @@ cli = ["clap", "needletail", "env_logger", "num_cpus", "colored"]
 # Diagnostic functions (test_throughput, test_cpu_features) that depend on rand
 diagnostics = ["rand"]
 
+# Enable AVX-512 variant of version 1.
+# Not enabled by default, since it's not faster.
+# V2 automatically uses AVX-512 based on compile-time feature detection of the target cpu.
 avx512 = []
+
 python = ["pyo3"]
 c = []
 
