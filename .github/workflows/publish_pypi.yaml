@@ -39,8 +39,8 @@ jobs:
       - name: Build wheel
         uses: PyO3/maturin-action@v1
         with:
-          args: --release --features python --out dist --target ${{ matrix.target }}
-          sccache: 'true'
+          args: --profile dist --features python --out dist --target ${{ matrix.target }}
+          sccache: "true"
           manylinux: auto
         env:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: 1
