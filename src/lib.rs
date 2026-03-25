@@ -204,6 +204,16 @@ pub fn test_cpu_features() {
         #[cfg(not(target_feature = "avx"))]
         eprintln!("AVX2 - {avx2}");
 
+        let avx512 = if is_x86_feature_detected!("avx512f") {
+            "+"
+        } else {
+            "-"
+        };
+        #[cfg(target_feature = "avx512f")]
+        eprintln!("AVX-512f + {avx512}");
+        #[cfg(not(target_feature = "avx512f"))]
+        eprintln!("AVX-512F - {avx512}");
+
         let bmi2 = if is_x86_feature_detected!("bmi2") {
             "+"
         } else {
