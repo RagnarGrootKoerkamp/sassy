@@ -3,23 +3,13 @@ use crate::search::{self, Match, Strand};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
 
-/// A Python module implemented in Rust.
-#[pymodule]
-#[pyo3(name = "sassy")]
-fn sassy(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(features, m)?)?;
-    m.add_class::<Searcher>()?;
-    m.add_class::<Match>()?;
-    Ok(())
-}
-
 enum SearcherType {
     Ascii(search::Searcher<Ascii>),
     Dna(search::Searcher<Dna>),
     Iupac(search::Searcher<Iupac>),
 }
 
-#[pyclass]
+#[pyclass(module = "sassy")]
 #[doc = "A reusable searcher object for fast sequence search."]
 pub struct Searcher {
     searcher: SearcherType,
@@ -196,4 +186,17 @@ impl Match {
             self.cigar.to_string()
         )
     }
+}
+
+#[pymodule]
+#[pyo3(name = "sassy")]
+mod sassy_module {
+    #[pymodule_export]
+    use super::features;
+
+    #[pymodule_export]
+    use super::Searcher;
+
+    #[pymodule_export]
+    use crate::search::Match;
 }

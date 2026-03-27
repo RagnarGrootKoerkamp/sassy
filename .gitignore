@@ -7,6 +7,8 @@
 *.png
 __pycache__
 *.so
+*.dylib
+*.dSYM/
 c/sassy_example
 /evals/src/sassy2/output/*
 /evals/src/sassy2/figs/*
