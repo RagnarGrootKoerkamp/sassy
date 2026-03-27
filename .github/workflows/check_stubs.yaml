@@ -37,7 +37,7 @@ jobs:
           STUB_PATH="python/sassy/__init__.pyi"
           if ! git diff --exit-code "$STUB_PATH"; then
             echo "FAIL: $STUB_PATH is out of date."
-            echo "See python/README.md for regeneration instructions (note: macOS requires RUSTFLAGS)."
+            echo "See python/README.md for regeneration instructions."
             exit 1
           fi
           echo "PASS: stubs are up to date."
