@@ -36,6 +36,11 @@ name = 'sassy'
 path = 'bin/main.rs'
 required-features = ["cli"]
 
+[[bin]]
+name = "gen_stubs"
+path = "src/bin/gen_stubs.rs"
+required-features = ["python-stubs"]
+
 [[example]]
 name = 'modes'
 required-features = ["cli"]
@@ -65,11 +70,15 @@ colored = { version = "3.0.0", optional = true }
 rand = { version = "0.9.0", optional = true }
 
 # Optional: Python bindings
-pyo3 = { version = "0.27", features = [
+pyo3 = { version = "0.28", features = [
   "extension-module",
   "abi3-py38",
   "generate-import-lib",
+  "experimental-inspect",
 ], optional = true }
+
+# Optional: Python stub generation via pyo3-introspection
+pyo3-introspection = { version = "0.28", optional = true }
 
 [dev-dependencies]
 tempfile = "3.20.0"
@@ -95,6 +104,7 @@ diagnostics = ["rand"]
 avx512 = []
 
 python = ["pyo3"]
+python-stubs = ["pyo3-introspection"]
 c = []
 
 # Build the library with scalar types, with reduced performance.

@@ -26,7 +26,7 @@ A simple usage is as follows:
 import sassy
 pattern = b"ATCGATCG"
 text = b"GGGGATCGATCGTTTT"
-# alphabet: ascii, dna, uipac
+# alphabet: ascii, dna, iupac
 searcher = sassy.Searcher("dna")
 matches = searcher.search(pattern, text, k=1)
 for i, match in enumerate(matches):
@@ -71,7 +71,7 @@ See [sassy/example.py](sassy/example.py) for a larger example.
 
 ## Type Hints
 
-This package ships [PEP 561](https://peps.python.org/pep-0561/) type stubs (`sassy/py.typed` + `sassy/sassy.pyi`) so that type checkers and IDEs can provide autocomplete and type checking out of the box.
+This package ships [PEP 561](https://peps.python.org/pep-0561/) type stubs (`sassy/py.typed` + `sassy/__init__.pyi`) so that type checkers and IDEs can provide autocomplete and type checking out of the box.
 
 See [sassy/example_typed.py](sassy/example_typed.py) for a typed example that exercises all public APIs.
 
@@ -93,10 +93,29 @@ uv run \
     sh -c 'mypy python/sassy/example_typed.py'
 ```
 
-**Note on auto-generation.** The `.pyi` stubs are currently maintained by hand.
-PyO3's [type stub introspection](https://pyo3.rs/main/type-stub.html) is a work-in-progress and does not yet support the function-based `#[pymodule]` declaration used here.
-Maturin does not generate stubs itself — it only packages them.
-Until PyO3 introspection matures, the manual stubs are the most reliable approach and should be kept in sync with `src/python.rs` when the API changes.
+**Regenerating stubs.** The `.pyi` stubs in `sassy/__init__.pyi` are auto-generated
+from the compiled extension using [`pyo3-introspection`](https://github.com/PyO3/pyo3/tree/main/pyo3-introspection).
+If you change the Python-facing API in `src/python.rs`, regenerate and commit:
+
+```bash
+# Build the extension first
+# (macOS needs -undefined dynamic_lookup to defer Python symbol resolution)
+RUSTFLAGS="-C link-arg=-undefined -C link-arg=dynamic_lookup" cargo build --features python  # macOS
+cargo build --features python                                                                # Linux
+
+# Run the stub generator
+cargo run --features python-stubs --bin gen_stubs -- target/debug/libsassy.dylib  # macOS
+cargo run --features python-stubs --bin gen_stubs -- target/debug/libsassy.so     # Linux
+
+git add python/sassy/__init__.pyi
+git commit -m "chore(python): regenerate type stubs"
+```
+
+The CI `check_stubs` job will fail on PRs if the committed stub is out of sync.
+
+**Note on `Literal` types.** The auto-generator emits `str` for string parameters
+like `alphabet`, `strand`, and `mode` rather than precise `Literal` types.
+This is type-correct; if stricter narrowing is needed, manually narrow the stubs after regenerating.
 
 ## Troubleshooting
 
@@ -111,7 +130,7 @@ Your output might look like:
 ```
 Whereas it should look like:
 ```python
-['Searcher', '__all__', '__builtins__', '__cached__', '__doc__', '__file__', '__loader__', '__name__', '__package__', '__path__', '__spec__', 'features', 'sassy']
+['Match', 'Searcher', '__all__', '__builtins__', '__cached__', '__doc__', '__file__', '__loader__', '__name__', '__package__', '__path__', '__spec__', 'features']
 ```
 
 **2. Other sassy issues.**

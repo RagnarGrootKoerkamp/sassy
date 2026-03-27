@@ -29,7 +29,7 @@ use crate::pattern_tiling::general::Searcher as PatterntilingSearcher;
 /// Follows SAM format: https://samtools.github.io/hts-specs/SAMv1.pdf (page 8)
 #[derive(derivative::Derivative, Clone, PartialEq, Eq)]
 #[derivative(PartialOrd, Ord)]
-#[cfg_attr(feature = "python", pyo3::pyclass)]
+#[cfg_attr(feature = "python", pyo3::pyclass(module = "sassy", from_py_object))]
 pub struct Match {
     /// index of the pattern (when multiple patterns are given)
     pub pattern_idx: usize,

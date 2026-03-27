@@ -1,0 +1,43 @@
+name: Check Python Stubs
+
+on:
+  pull_request:
+    branches: ["master"]
+  push:
+    branches: ["master"]
+  workflow_dispatch:
+
+jobs:
+  check-stubs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Use portable config
+        run: mv .cargo/config-portable.toml .cargo/config.toml
+
+      - name: Build Python extension (with introspection metadata)
+        run: cargo build --features python
+
+      - name: Generate stubs
+        run: |
+          LIB=$(find target/debug -maxdepth 1 -name "libsassy*.so" | head -1)
+          if [ -z "$LIB" ]; then
+            echo "ERROR: could not find compiled libsassy.so in target/debug"
+            exit 1
+          fi
+          cargo run --features python-stubs --bin gen_stubs -- "$LIB"
+
+      - name: Check stubs are up to date
+        run: |
+          STUB_PATH="python/sassy/__init__.pyi"
+          if ! git diff --exit-code "$STUB_PATH"; then
+            echo "FAIL: $STUB_PATH is out of date."
+            echo "See python/README.md for regeneration instructions (note: macOS requires RUSTFLAGS)."
+            exit 1
+          fi
+          echo "PASS: stubs are up to date."
