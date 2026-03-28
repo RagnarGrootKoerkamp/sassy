@@ -3,7 +3,7 @@ name: Build and publish sassy-rs wheels
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
 
 jobs:
@@ -18,12 +18,12 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python (ABI-stable build)
         uses: actions/setup-python@v5
         with:
-          python-version: '3.8'
+          python-version: "3.8"
 
       - name: Install build dependencies
         run: pip install "packaging>=24.2"
@@ -46,7 +46,7 @@ jobs:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: 1
 
       - name: Upload wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: wheel-${{ matrix.target }}
           path: dist/*
@@ -59,7 +59,7 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download built artifacts
         uses: actions/download-artifact@v4
