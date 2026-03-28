@@ -4,6 +4,9 @@
 
 ## git
 
+## 0.2.2
+- Build GitHub x86-64 binaries for both AVX2 and AVX-512 using [`cargo multivers`](https://github.com/ronnychevalier/cargo-multivers).
+
 ## 0.2.1
 
 - **Breaking:** Tracebacks now prefer substitutions over indels, as this is
