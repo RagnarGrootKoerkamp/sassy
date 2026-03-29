@@ -5,7 +5,10 @@ use std::hint::assert_unchecked;
 use crate::delta_encoding::H;
 use crate::minima::prefix_min;
 use crate::profiles::Profile;
-use crate::trace::{CostMatrix, fill, get_trace, simd_fill, simd_fill_multipattern};
+use crate::trace::{
+    AllAlignmentsAtPos, CostMatrix, all_alignments_at_position, fill, get_trace, simd_fill,
+    simd_fill_multipattern,
+};
 use crate::{LANES, S};
 use crate::{bitpacking::compute_block_simd, delta_encoding::V};
 use pa_types::{Cigar, CigarOp, Cost, Pos};
@@ -697,6 +700,118 @@ impl<P: Profile> Searcher<P> {
             Some(filter_fn),
         );
         std::mem::take(&mut self.matches)
+    }
+
+    // ── search_all_alignments ──────────────────────────────────────────────
+
+    /// Collect end positions and build one [`AllAlignmentsAtPos`] per match.
+    ///
+    /// Only called from [`search_all_alignments_one_strand`] with a single
+    /// pattern and text.
+    fn create_alignment_groups(
+        &self,
+        pattern: &[u8],
+        text: &[u8],
+        k: Cost,
+        strand: Strand,
+        fwd_text_len: Option<usize>,
+        margin: Cost,
+    ) -> Vec<AllAlignmentsAtPos> {
+        let fill_len = pattern.len() + k as usize;
+        let mut groups = Vec::new();
+        for lane in 0..LANES {
+            for &(end_pos, _) in &self.lanes[lane].matches {
+                let offset = end_pos.saturating_sub(fill_len);
+                let slice = &text[offset..end_pos.min(text.len())];
+                groups.push(all_alignments_at_position::<P>(
+                    pattern,
+                    slice,
+                    offset,
+                    end_pos,
+                    k,
+                    self.alpha,
+                    self.max_overhang,
+                    strand,
+                    fwd_text_len,
+                    margin,
+                ));
+            }
+        }
+        groups
+    }
+
+    /// Run search for one strand and return one [`AllAlignmentsAtPos`] per match.
+    fn search_all_alignments_one_strand(
+        &mut self,
+        pattern: &[u8],
+        text: &[u8],
+        k: usize,
+        strand: Strand,
+        fwd_text_len: Option<usize>,
+        margin: Cost,
+    ) -> Vec<AllAlignmentsAtPos> {
+        self.search_positions_bounded(
+            MultiPattern::one(pattern),
+            MultiText::one(text),
+            k as Cost,
+            true,
+        );
+        self.create_alignment_groups(pattern, text, k as Cost, strand, fwd_text_len, margin)
+    }
+
+    /// Search for *all* end positions with score <= k, returning a lazy
+    /// [`AllAlignmentsAtPos`] per end position.
+    ///
+    /// Each [`AllAlignmentsAtPos`] implements [`Iterator`] and yields all
+    /// distinct alignments (different CIGARs and/or start positions) at
+    /// that position. Iteration is lazy and performs a depth-first search (DFS)
+    /// through the filled cost matrix: starting from the end cell `(i, j)`, the
+    /// DFS tries each of the four edit operations (Match>Sub>Del>Ins) in order,
+    /// recursing into valid predecessors and yielding a [`Match`] whenever the
+    /// alignment reaches a valid start cell (`j == 0` or left-overshoot).
+    /// The caller should break out of the lazy iterator(s) early to avoid exponential
+    /// enumeration.
+    ///
+    /// `margin` controls sub-optimal enumeration: the DFS within each group
+    /// yields all alignments with cost ≤ `optimal_cost + margin`. Set `margin`
+    /// to `0` to enumerate only optimal alignments.
+    pub fn search_all_alignments<I: RcSearchAble + ?Sized>(
+        &mut self,
+        pattern: &[u8],
+        input: &I,
+        k: usize,
+        margin: usize,
+    ) -> Vec<AllAlignmentsAtPos> {
+        let fwd_text = input.text();
+        let fwd_text_ref = fwd_text.as_ref();
+        let fwd_len = fwd_text_ref.len();
+        let margin = margin as Cost;
+
+        let mut groups = self.search_all_alignments_one_strand(
+            pattern,
+            fwd_text_ref,
+            k,
+            Strand::Fwd,
+            None,
+            margin,
+        );
+
+        if self.rc {
+            let rev_text = input.rev_text();
+            let rev_text_ref = rev_text.as_ref();
+            let complement_pattern = P::complement(pattern);
+            let mut rc_groups = self.search_all_alignments_one_strand(
+                &complement_pattern,
+                rev_text_ref,
+                k,
+                Strand::Rc,
+                Some(fwd_len),
+                margin,
+            );
+            groups.append(&mut rc_groups);
+        }
+
+        groups
     }
 
     /// Appends results to `self.idx_matches`.
@@ -3059,5 +3174,178 @@ mod tests {
         let encoded = dna_searcher.encode_patterns(&[p]);
         let matches = dna_searcher.search_encoded_patterns(&encoded, &t, 0);
         assert_eq!(matches.len(), 0);
+    }
+
+    // ── search_all_iter_all_alignments consistency tests ────────────────────
+
+    /// Verify the basic contract of `search_all_iter_all_alignments` against `search_all`:
+    ///   - same set of (text_end, cost) end positions
+    ///   - first alignment per group matches the `search_all` greedy result exactly
+    ///   - all alignments within a group share the same text_end and cost
+    fn assert_consistent_with_search_all<P: Profile>(
+        searcher: &mut Searcher<P>,
+        pattern: &[u8],
+        text: &[u8],
+        k: usize,
+    ) {
+        let all_matches = searcher.search_all(pattern, text, k);
+        let mut groups = searcher.search_all_alignments(pattern, text, k, 0);
+
+        assert_eq!(
+            groups.len(),
+            all_matches.len(),
+            "number of end positions must match search_all"
+        );
+
+        for (group, expected) in groups.iter_mut().zip(&all_matches) {
+            let alignments: Vec<_> = group.collect();
+            assert!(
+                !alignments.is_empty(),
+                "each group must yield at least one alignment"
+            );
+
+            // Every alignment in the group must share the anchor coordinate and cost.
+            // For Fwd alignments the anchor is text_end (all start positions vary).
+            // For Rc alignments the anchor is text_start in forward coords (all
+            // end positions vary, because the RC end maps to the forward start).
+            for m in &alignments {
+                match expected.strand {
+                    Strand::Fwd => assert_eq!(
+                        m.text_end, expected.text_end,
+                        "all Fwd alignments in group must share text_end"
+                    ),
+                    Strand::Rc => assert_eq!(
+                        m.text_start, expected.text_start,
+                        "all Rc alignments in group must share text_start (forward coord)"
+                    ),
+                }
+                assert_eq!(
+                    m.cost, expected.cost,
+                    "all alignments in group must share cost"
+                );
+                assert_eq!(
+                    m.strand, expected.strand,
+                    "strand must match search_all result"
+                );
+            }
+
+            // First alignment must agree with the greedy search_all result.
+            let first = &alignments[0];
+            assert_eq!(
+                first.text_start, expected.text_start,
+                "first alignment text_start must match search_all"
+            );
+            assert_eq!(
+                first.cigar.to_string(),
+                expected.cigar.to_string(),
+                "first alignment cigar must match search_all"
+            );
+        }
+    }
+
+    #[test]
+    fn test_iter_all_alignments_consistent_with_search_all_exact() {
+        // Exact match: single end position, single alignment.
+        let mut s = Searcher::<Dna>::new_fwd();
+        assert_consistent_with_search_all(&mut s, b"ACGT", b"NNACGTNN", 0);
+    }
+
+    #[test]
+    fn test_iter_all_alignments_consistent_with_search_all_one_error() {
+        // One substitution: multiple end positions possible.
+        let mut s = Searcher::<Dna>::new_fwd();
+        assert_consistent_with_search_all(&mut s, b"GCATG", b"GCATGGCATG", 1);
+    }
+
+    #[test]
+    fn test_iter_all_alignments_consistent_with_search_all_no_matches() {
+        // No matches within k=0.
+        let mut s = Searcher::<Dna>::new_fwd();
+        assert_consistent_with_search_all(&mut s, b"ACGT", b"TTTTTTTT", 0);
+    }
+
+    #[test]
+    fn test_iter_all_alignments_consistent_with_search_all_rc() {
+        // RC match: pattern appears on minus strand.
+        let rc = Dna::reverse_complement(b"ATCGATCA");
+        let text = [b"GGGGGGGG".as_ref(), rc.as_ref(), b"GGGGGGGG"].concat();
+        let mut s = Searcher::<Dna>::new_rc();
+        assert_consistent_with_search_all(&mut s, b"ATCGATCA", &text, 0);
+    }
+
+    #[test]
+    fn test_iter_all_alignments_multiple_alignments_per_position() {
+        // "AT" vs "ACT" at k=1.
+        //
+        // Expected end positions and alignments (sorted by text_start within each group):
+        //   text_end=1, cost=1: AT : A- 1=1I
+        //   text_end=2, cost=1: AT : AC  1=1X
+        //   text_end=3, cost=1: three alignments
+        //     text_start=0: A-T : ACT 1=1D1=
+        //     text_start=1: AT  : CT  1X1=
+        //     text_start=2: AT  : -T   1I1=
+        let pattern = b"AT";
+        let text = b"ACT";
+        let mut s = Searcher::<Dna>::new_fwd();
+
+        let mut groups = s.search_all_alignments(pattern, text, 1, 0);
+
+        // Collect and sort each group by (text_start, cigar) for deterministic comparison.
+        let collected: Vec<Vec<(usize, usize, i32, String)>> = groups
+            .iter_mut()
+            .map(|g| {
+                let mut aligns: Vec<_> = g
+                    .map(|m| (m.text_start, m.text_end, m.cost, m.cigar.to_string()))
+                    .collect();
+                aligns.sort_unstable();
+                aligns
+            })
+            .collect();
+
+        assert_eq!(collected.len(), 3, "expected 3 end positions");
+
+        assert_eq!(
+            collected[0],
+            vec![(0, 1, 1, "1=1I".to_string())],
+            "text_end=1 alignments mismatch"
+        );
+        assert_eq!(
+            collected[1],
+            vec![(0, 2, 1, "1=1X".to_string())],
+            "text_end=2 alignments mismatch"
+        );
+        assert_eq!(
+            collected[2],
+            vec![
+                (0, 3, 1, "1=1D1=".to_string()),
+                (1, 3, 1, "1X1=".to_string()),
+                (2, 3, 1, "1I1=".to_string()),
+            ],
+            "text_end=3 alignments mismatch"
+        );
+    }
+
+    #[test]
+    fn test_iter_all_alignments_consistent_fuzz() {
+        // Fuzz: for random patterns/texts, verify consistency with search_all.
+        let mut searcher = Searcher::<Dna>::new_fwd();
+        let mut rc_searcher = Searcher::<Dna>::new_rc();
+
+        for _ in 0..200 {
+            let plen = random_range(3..20);
+            let tlen = random_range(plen..plen * 4);
+            let k = random_range(0..plen / 3 + 1);
+            let pattern: Vec<u8> = (0..plen).map(|_| b"ACGT"[random_range(0..4)]).collect();
+            let text: Vec<u8> = (0..tlen).map(|_| b"ACGT"[random_range(0..4)]).collect();
+
+            // Print inputs before asserting so they appear in test output on failure.
+            eprintln!(
+                "pattern={} text={} k={k}",
+                String::from_utf8_lossy(&pattern),
+                String::from_utf8_lossy(&text),
+            );
+            assert_consistent_with_search_all(&mut searcher, &pattern, &text, k);
+            assert_consistent_with_search_all(&mut rc_searcher, &pattern, &text, k);
+        }
     }
 }

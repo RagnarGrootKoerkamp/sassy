@@ -1,5 +1,6 @@
 use crate::profiles::{Ascii, Dna, Iupac};
 use crate::search::{self, Match, Strand};
+use crate::trace;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
 
@@ -10,7 +11,37 @@ fn sassy(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(features, m)?)?;
     m.add_class::<Searcher>()?;
     m.add_class::<Match>()?;
+    m.add_class::<PyAllAlignmentsAtPosIter>()?;
     Ok(())
+}
+
+/// Lazy Python iterator over all alignments at a single matched end position.
+///
+/// Obtained from `Searcher.search_all_alignments()`. Implements the Python iterator
+/// protocol (`__iter__` / `__next__`).
+///
+/// All yielded `Match` objects share the same `text_end`; they differ in
+/// `text_start`, `cigar`, and (when `margin > 0`) `cost`.
+/// Break early to avoid enumerating exponentially many paths.
+#[pyclass(name = "AllAlignmentsAtPosIter")]
+pub struct PyAllAlignmentsAtPosIter {
+    inner: trace::AllAlignmentsAtPos,
+}
+
+#[pymethods]
+impl PyAllAlignmentsAtPosIter {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&mut self) -> Option<Match> {
+        self.inner.next()
+    }
+
+    #[doc = "Return the optimal (minimum) alignment cost at this end position."]
+    fn optimal_cost(&self) -> i32 {
+        self.inner.optimal_cost()
+    }
 }
 
 enum SearcherType {
@@ -110,6 +141,32 @@ impl Searcher {
                 searcher.search_many(&patterns, &texts, k, threads, mode)
             }
         }
+    }
+
+    #[pyo3(signature = (pattern, text, k, margin=0))]
+    #[doc = "Search for all end positions with score <= k, returning a lazy iterator per end position. Each iterator yields alignments with cost <= optimal_cost + margin. Break early from the lazy iterator(s) to avoid exponential enumeration."]
+    fn search_all_alignments(
+        &mut self,
+        pattern: &Bound<'_, PyBytes>,
+        text: &Bound<'_, PyBytes>,
+        k: usize,
+        margin: usize,
+    ) -> Vec<PyAllAlignmentsAtPosIter> {
+        let pattern = pattern.as_bytes();
+        let text = text.as_bytes();
+        let groups = match &mut self.searcher {
+            SearcherType::Ascii(searcher) => {
+                searcher.search_all_alignments(pattern, text, k, margin)
+            }
+            SearcherType::Dna(searcher) => searcher.search_all_alignments(pattern, text, k, margin),
+            SearcherType::Iupac(searcher) => {
+                searcher.search_all_alignments(pattern, text, k, margin)
+            }
+        };
+        groups
+            .into_iter()
+            .map(|g| PyAllAlignmentsAtPosIter { inner: g })
+            .collect()
     }
 
     #[pyo3(signature = (pattern, text, k))]
