@@ -93,25 +93,10 @@ uv run \
     sh -c 'mypy python/sassy/example_typed.py'
 ```
 
-**Regenerating stubs.** The `.pyi` stubs in `sassy/__init__.pyi` are auto-generated
-from the compiled extension using [`pyo3-introspection`](https://github.com/PyO3/pyo3/tree/main/pyo3-introspection).
-If you change the Python-facing API in `src/python.rs`, regenerate and commit:
-
-```bash
-# Build the extension first
-# (macOS needs -undefined dynamic_lookup to defer Python symbol resolution)
-RUSTFLAGS="-C link-arg=-undefined -C link-arg=dynamic_lookup" cargo build --features python  # macOS
-cargo build --features python                                                                # Linux
-
-# Run the stub generator
-cargo run --features python-stubs --bin gen_stubs -- target/debug/libsassy.dylib  # macOS
-cargo run --features python-stubs --bin gen_stubs -- target/debug/libsassy.so     # Linux
-
-git add python/sassy/__init__.pyi
-git commit -m "chore(python): regenerate type stubs"
-```
-
-The CI `check_stubs` job will fail on PRs if the committed stub is out of sync.
+**Stubs are auto-generated.** The `.pyi` stubs are generated from the compiled
+extension using [`pyo3-introspection`](https://github.com/PyO3/pyo3/tree/main/pyo3-introspection)
+and bundled into the wheel automatically during the release build. They are not stored in git.
+The CI `check_stubs` job verifies that stub generation succeeds on every PR.
 
 **Note on `Literal` types.** The auto-generator emits `str` for string parameters
 like `alphabet`, `strand`, and `mode` rather than precise `Literal` types.
