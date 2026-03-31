@@ -13,8 +13,12 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            lib_name: libsassy.so
+            stub_rustflags: ""
           - os: macos-latest
             target: aarch64-apple-darwin
+            lib_name: libsassy.dylib
+            stub_rustflags: "-C link-arg=-undefined -C link-arg=dynamic_lookup"
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -35,6 +39,11 @@ jobs:
 
       - name: Initialize portable config
         run: mv .cargo/config-portable.toml .cargo/config.toml
+
+      - name: Generate stubs
+        run: |
+          RUSTFLAGS="${{ matrix.stub_rustflags }}" cargo build --features python
+          cargo run --features python-stubs --bin gen_stubs -- target/debug/${{ matrix.lib_name }}
 
       - name: Build wheel
         uses: PyO3/maturin-action@v1
