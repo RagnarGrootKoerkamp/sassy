@@ -28,5 +28,5 @@ python-source = "python"
 module-name = "sassy"
 bindings = "pyo3"
 features = ["python"] 
-
+include = [{ path = "python/sassy/__init__.pyi", format = "wheel" }]
 
