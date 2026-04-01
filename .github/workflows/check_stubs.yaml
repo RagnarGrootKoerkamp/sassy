@@ -26,6 +26,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - uses: astral-sh/setup-uv@v6
+
       - name: Use portable config
         run: mv .cargo/config-portable.toml .cargo/config.toml
 
@@ -33,3 +35,9 @@ jobs:
         run: |
           RUSTFLAGS="${{ matrix.stub_rustflags }}" cargo build --features python
           cargo run --features python-stubs --bin gen_stubs -- target/debug/${{ matrix.lib_name }}
+
+      - name: Check stubs
+        run: |
+          uv run \
+            --with mypy \
+            sh -c 'mypy python/sassy/example_typed.py'
