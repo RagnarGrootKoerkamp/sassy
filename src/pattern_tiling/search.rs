@@ -863,7 +863,7 @@ mod tests {
 
     #[test]
     // #[ignore]
-    fn fuzz_against_sassy_alll() {
+    fn fuzz_against_sassy_all() {
         // This is just sassy search all in pattern_tiling
         fuzz_against_sassy_batch(Some(0.5), true, true, false);
     }
