@@ -7,6 +7,10 @@ on:
     branches: ["master"]
   workflow_dispatch:
 
+env:
+  UV_VERSION: 0.8.22
+  PYTHON_VERSION: 3.9
+
 jobs:
   check-stubs:
     strategy:
@@ -26,7 +30,13 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - uses: astral-sh/setup-uv@v6
+      - name: Install uv
+        uses: astral-sh/setup-uv@bd01e18f51369d5a26f1651c3cb451d3417e3bba  # v6.3.1
+        with:
+          version: "${{ env.UV_VERSION }}"
+          python-version: "${{ env.PYTHON_VERSION }}"
+          enable-cache: 'true'
+          cache-suffix: "${{ env.PYTHON_VERSION }}"
 
       - name: Use portable config
         run: mv .cargo/config-portable.toml .cargo/config.toml
