@@ -2,6 +2,7 @@ use std::cmp::Reverse;
 use std::fmt::Debug;
 use std::hint::assert_unchecked;
 
+use crate::alignment_iterator::Continuation;
 use crate::delta_encoding::H;
 use crate::minima::prefix_min;
 use crate::profiles::Profile;
@@ -667,6 +668,49 @@ impl<P: Profile> Searcher<P> {
             None::<fn(&[u8], &[u8], Strand) -> bool>,
         );
         std::mem::take(&mut self.matches)
+    }
+
+    /// Enumerate all alignments at every forward-strand end position with cost ≤ k.
+    ///
+    /// Returns groups sorted by `text_end`; each group contains every distinct alignment
+    /// (different CIGAR or `text_start`) ending at that position.
+    /// RC matches are not included.
+    pub fn search_all_alignments(
+        &mut self,
+        pattern: &[u8],
+        text: &[u8],
+        k: usize,
+        prune_suboptimal: bool,
+    ) -> Vec<Vec<Match>> {
+        let fwd: Vec<Match> = self
+            .search_all(pattern, text, k)
+            .into_iter()
+            .filter(|m| m.strand == Strand::Fwd)
+            .collect();
+
+        let mut groups: Vec<Vec<Match>> = Vec::new();
+        let mut cur_end: Option<usize> = None;
+
+        self.iterate_all_alignments(
+            pattern,
+            text,
+            k,
+            &fwd,
+            false,
+            prune_suboptimal,
+            &mut |complete, m| {
+                if complete {
+                    if cur_end != Some(m.text_end) {
+                        groups.push(Vec::new());
+                        cur_end = Some(m.text_end);
+                    }
+                    groups.last_mut().unwrap().push(m.clone());
+                }
+                Continuation::Continue
+            },
+        );
+
+        groups
     }
 
     /// Returns matches for *all* end positions where `end_filter_fn` returns true.
@@ -1620,9 +1664,220 @@ pub(crate) fn init_deltas_for_overshoot_all_lanes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alignment_iterator::Continuation;
     use crate::profiles::{Dna, Iupac};
     use itertools::Itertools;
     use rand::random_range;
+
+    // --- search_all_alignments tests ---
+
+    #[test]
+    fn exact_match() {
+        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(b"ACGT", b"ACGT", 0, false);
+        assert_eq!(groups.len(), 1);
+        let m = &groups[0][0];
+        assert_eq!(m.cost, 0);
+        assert_eq!(m.cigar.to_string(), "4=");
+        assert_eq!(m.pattern_start, 0);
+        assert_eq!(m.pattern_end, 4);
+        assert_eq!(m.text_start, 0);
+        assert_eq!(m.text_end, 4);
+    }
+
+    #[test]
+    fn no_match() {
+        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(b"ACGT", b"TTTT", 2, false);
+        assert_eq!(groups.len(), 0);
+    }
+
+    #[test]
+    fn three_alignments_one_end() {
+        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(b"AT", b"ACT", 1, false);
+        let multi: Vec<_> = groups.iter().filter(|g| g.len() > 1).collect();
+        assert_eq!(multi.len(), 1, "expected exactly one end position with >1 alignment");
+        let aligns = multi[0];
+        assert_eq!(aligns.len(), 3);
+        for m in aligns {
+            assert_eq!(m.cost, 1);
+            assert_eq!(m.pattern_start, 0);
+        }
+        let mut cigars: Vec<String> = aligns.iter().map(|m| m.cigar.to_string()).collect();
+        cigars.sort();
+        cigars.dedup();
+        assert_eq!(cigars.len(), 3);
+    }
+
+    #[test]
+    fn multiple_end_positions() {
+        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(b"AA", b"AAAA", 0, false);
+        assert_eq!(groups.len(), 3, "expected three end positions, got {}", groups.len());
+        for group in &groups {
+            assert_eq!(group.len(), 1);
+            assert_eq!(group[0].cost, 0);
+            assert_eq!(group[0].pattern_start, 0);
+            assert_eq!(group[0].pattern_end, 2);
+            assert_eq!(group[0].text_end - group[0].text_start, 2);
+        }
+    }
+
+    #[test]
+    fn all_costs_within_k() {
+        let k = 2;
+        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(b"ACGT", b"AACGTT", k, false);
+        for group in &groups {
+            for m in group {
+                assert!(m.cost <= k as i32, "cost {} exceeds k={}", m.cost, k);
+            }
+        }
+    }
+
+    #[test]
+    fn complete_matches_span_full_pattern() {
+        let pattern = b"ACGT";
+        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(pattern, b"AACGTT", 2, false);
+        assert!(!groups.is_empty());
+        for group in &groups {
+            for m in group {
+                assert_eq!(m.pattern_start, 0);
+                assert_eq!(m.pattern_end, pattern.len());
+            }
+        }
+    }
+
+    #[test]
+    fn combinatorial_count() {
+        let t = 5usize;
+        let k = 3usize;
+        let pattern = vec![b'A'; t + k];
+        let text = vec![b'A'; t];
+        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(&pattern, &text, k, false);
+        let total: usize = groups.iter().map(|g| g.len()).sum();
+        // C(8, 3) = 56
+        assert_eq!(total, 56, "expected C(8,3)=56 alignments, got {total}");
+    }
+
+    #[test]
+    fn no_partial_callbacks_when_disabled() {
+        let mut searcher = Searcher::<Dna>::new(false, None);
+        let pattern = b"ACG";
+        let text = b"AACG";
+        let k = 1;
+        let fwd: Vec<Match> = searcher
+            .search_all(pattern, text, k)
+            .into_iter()
+            .filter(|m| m.strand == Strand::Fwd)
+            .collect();
+        searcher.iterate_all_alignments(
+            pattern, text, k, &fwd, false, false,
+            &mut |complete, _m| {
+                assert!(complete, "callback fired for incomplete match with partial_matches=false");
+                Continuation::Continue
+            },
+        );
+    }
+
+    #[test]
+    fn partial_callbacks_when_enabled() {
+        let mut searcher = Searcher::<Dna>::new(false, None);
+        let pattern = b"ACG";
+        let text = b"AACG";
+        let k = 1;
+        let fwd: Vec<Match> = searcher
+            .search_all(pattern, text, k)
+            .into_iter()
+            .filter(|m| m.strand == Strand::Fwd)
+            .collect();
+        let mut saw_partial = false;
+        searcher.iterate_all_alignments(pattern, text, k, &fwd, true, false, &mut |complete, m| {
+            if !complete {
+                saw_partial = true;
+                assert!(m.pattern_start > 0, "incomplete match should have pattern_start > 0");
+            }
+            Continuation::Continue
+        });
+        assert!(saw_partial, "expected at least one partial callback with partial_matches=true");
+    }
+
+    #[test]
+    fn empty_matches_no_callbacks() {
+        let searcher = Searcher::<Dna>::new(false, None);
+        let mut called = false;
+        searcher.iterate_all_alignments(
+            b"ACGT", b"ACGT", 1, &[], false, false,
+            &mut |_complete, _m| {
+                called = true;
+                Continuation::Continue
+            },
+        );
+        assert!(!called, "callback should not fire when matches slice is empty");
+    }
+
+    #[test]
+    fn homopolymer_prune_gives_one_exact_per_end() {
+        let pattern = b"AAAA";
+        let text = b"AAAAAA";
+        let k = 2;
+        let full = Searcher::<Dna>::new(false, None).search_all_alignments(pattern, text, k, false);
+        let pruned = Searcher::<Dna>::new(false, None).search_all_alignments(pattern, text, k, true);
+        let full_total: usize = full.iter().map(|g| g.len()).sum();
+        let pruned_total: usize = pruned.iter().map(|g| g.len()).sum();
+        // Exact counts derived analytically: 6+10+31+36+51 = 134 unpruned; 3 pruned (one per end at text_end=4,5,6).
+        assert_eq!(full_total, 134, "unexpected full alignment count");
+        assert_eq!(pruned_total, 3, "unexpected pruned alignment count");
+        for group in &pruned {
+            assert_eq!(group.len(), 1, "expected exactly 1 alignment per text_end with prune=true, got {}", group.len());
+        }
+        for group in &pruned {
+            let m = &group[0];
+            assert_eq!(m.cost, 0, "expected cost 0 for pruned homopolymer alignment, got {}", m.cost);
+            assert_eq!(
+                m.text_end - m.text_start,
+                m.pattern_end - m.pattern_start,
+                "expected equal text and pattern span (exact diagonal)"
+            );
+            let expected_cigar = format!("{}=", pattern.len());
+            assert_eq!(
+                m.cigar.to_string(), expected_cigar,
+                "expected pure-match CIGAR {expected_cigar}, got {}", m.cigar.to_string()
+            );
+        }
+    }
+
+    #[test]
+    fn pruned_is_subset_of_full() {
+        use std::collections::HashSet;
+        let cases: &[(&[u8], &[u8], usize)] = &[
+            (b"AAAA", b"AAAAAA", 2),
+            (b"TTTT", b"AAAAAA", 2),
+            (b"ACGT", b"AACGTT", 2),
+            (b"AT", b"ACT", 1),
+            (b"AA", b"AAAA", 1),
+        ];
+        for &(pattern, text, k) in cases {
+            let full = Searcher::<Dna>::new(false, None).search_all_alignments(pattern, text, k, false);
+            let pruned = Searcher::<Dna>::new(false, None).search_all_alignments(pattern, text, k, true);
+            for pruned_group in &pruned {
+                let end = pruned_group[0].text_end;
+                let full_group = full
+                    .iter()
+                    .find(|g| g[0].text_end == end)
+                    .unwrap_or_else(|| panic!("pruned group at text_end={end} has no corresponding full group"));
+                let full_keys: HashSet<(usize, String)> = full_group
+                    .iter()
+                    .map(|m| (m.text_start, m.cigar.to_string()))
+                    .collect();
+                for m in pruned_group {
+                    assert!(
+                        full_keys.contains(&(m.text_start, m.cigar.to_string())),
+                        "pruned alignment not found in full set: pattern={} text={} k={k} text_end={end} cigar={}",
+                        std::str::from_utf8(pattern).unwrap(),
+                        std::str::from_utf8(text).unwrap(),
+                        m.cigar.to_string()
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn overhang_test() {
