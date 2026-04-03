@@ -16,7 +16,7 @@ use std::array::from_fn;
 
 pub trait CostLookup {
     /// Get the DP cost at text position `i`, pattern position `j`.
-    /// i=0 and j=0 are are "outside" the text/pattern
+    /// i=0 and j=0 are "outside" the text/pattern
     fn get(&self, i: usize, j: usize) -> Cost;
 }
 
