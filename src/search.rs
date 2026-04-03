@@ -1691,7 +1691,7 @@ mod tests {
     }
 
     #[test]
-    fn three_alignments_one_end() {
+    fn multiple_alignments_one_end() {
         let groups = Searcher::<Dna>::new(false, None).search_all_alignments(b"AT", b"ACT", 1, false);
         let multi: Vec<_> = groups.iter().filter(|g| g.len() > 1).collect();
         assert_eq!(multi.len(), 1, "expected exactly one end position with >1 alignment");
@@ -1717,17 +1717,6 @@ mod tests {
             assert_eq!(group[0].pattern_start, 0);
             assert_eq!(group[0].pattern_end, 2);
             assert_eq!(group[0].text_end - group[0].text_start, 2);
-        }
-    }
-
-    #[test]
-    fn all_costs_within_k() {
-        let k = 2;
-        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(b"ACGT", b"AACGTT", k, false);
-        for group in &groups {
-            for m in group {
-                assert!(m.cost <= k as i32, "cost {} exceeds k={}", m.cost, k);
-            }
         }
     }
 
@@ -1876,6 +1865,81 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    // --- search_all_alignments consistency tests ---
+
+    /// For each end position returned by `search_all`, verify that `search_all_alignments`:
+    /// - produces exactly one group per end position
+    /// - yields at least one alignment per group
+    /// - all alignments in a group share the same `text_end`
+    /// - all alignments have cost ≤ k
+    /// - the first alignment matches the greedy traceback (`text_start` and CIGAR)
+    fn assert_consistent_with_search_all(searcher: &mut Searcher<Dna>, pattern: &[u8], text: &[u8], k: usize) {
+        let all_matches = searcher.search_all(pattern, text, k)
+            .into_iter()
+            .filter(|m| m.strand == Strand::Fwd)
+            .collect::<Vec<_>>();
+        let groups = searcher.search_all_alignments(pattern, text, k, false);
+
+        assert_eq!(
+            groups.len(),
+            all_matches.len(),
+            "number of groups must equal number of fwd search_all endpoints \
+             (pattern={} text={} k={k})",
+            String::from_utf8_lossy(pattern),
+            String::from_utf8_lossy(text),
+        );
+
+        for (group, expected) in groups.iter().zip(&all_matches) {
+            assert!(!group.is_empty(), "each group must yield at least one alignment");
+            for m in group {
+                assert_eq!(m.text_end, expected.text_end, "all alignments in group must share text_end");
+                assert!(m.cost <= k as i32, "alignment cost {} exceeds k={k}", m.cost);
+            }
+            let first = &group[0];
+            assert_eq!(first.text_start, expected.text_start, "first alignment text_start must match search_all");
+            assert_eq!(
+                first.cigar.to_string(), expected.cigar.to_string(),
+                "first alignment cigar must match search_all"
+            );
+        }
+    }
+
+    #[test]
+    fn search_all_alignments_consistent_exact() {
+        let mut s = Searcher::<Dna>::new(false, None);
+        assert_consistent_with_search_all(&mut s, b"ACGT", b"NNACGTNN", 0);
+    }
+
+    #[test]
+    fn search_all_alignments_consistent_one_error() {
+        let mut s = Searcher::<Dna>::new(false, None);
+        assert_consistent_with_search_all(&mut s, b"GCATG", b"GCATGGCATG", 1);
+    }
+
+    #[test]
+    fn search_all_alignments_consistent_no_matches() {
+        let mut s = Searcher::<Dna>::new(false, None);
+        assert_consistent_with_search_all(&mut s, b"ACGT", b"TTTTTTTT", 0);
+    }
+
+    #[test]
+    fn search_all_alignments_consistent_fuzz() {
+        let mut searcher = Searcher::<Dna>::new(false, None);
+        for _ in 0..200 {
+            let plen = random_range(3..20);
+            let tlen = random_range(plen..plen * 4);
+            let k = random_range(0..plen / 3 + 1);
+            let pattern: Vec<u8> = (0..plen).map(|_| b"ACGT"[random_range(0..4)]).collect();
+            let text: Vec<u8> = (0..tlen).map(|_| b"ACGT"[random_range(0..4)]).collect();
+            eprintln!(
+                "pattern={} text={} k={k}",
+                String::from_utf8_lossy(&pattern),
+                String::from_utf8_lossy(&text),
+            );
+            assert_consistent_with_search_all(&mut searcher, &pattern, &text, k);
         }
     }
 
