@@ -8,6 +8,11 @@ use crate::{
     trace::{CostLookup, CostMatrix, fill},
 };
 
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(eq, from_py_object, module = "sassy")
+)]
+#[derive(PartialEq, Clone)]
 pub enum Continuation {
     /// Continue exploring the subtree.
     Continue,
@@ -32,6 +37,7 @@ impl<P: Profile> Searcher<P> {
     ///
     /// If `prune_suboptimal` is `true`, path for which some part can be replaced by exact matches are skipped.
     /// E.g., if `====` is an option, this will skip over `=I=D=`, and similarly, this will prefer `===...` over `=I=...`.
+    #[allow(clippy::too_many_arguments)]
     pub fn iterate_all_alignments(
         &self,
         pattern: &[u8],
@@ -90,8 +96,6 @@ impl<P: Profile> Searcher<P> {
             cigar: Cigar::default(),
         };
 
-        m.cost = 0;
-
         let last_row_in_diagonal = &mut vec![];
 
         // 2. iterate over the ranges
@@ -109,18 +113,21 @@ impl<P: Profile> Searcher<P> {
             last_row_in_diagonal.resize(range.len() + pattern.len() + 1, pattern.len() as _);
             last_row_in_diagonal.fill(pattern.len() as _);
 
-            for text_end in range.clone() {
+            for text_end in range.start..=range.end {
                 // This end_pos is > k.
                 if cm.get(text_end - range.start, pattern.len()) > k as Cost {
                     continue;
                 }
 
                 // 6. Backtrack to get all cost <=k alignments ending at this position.
-                // TODO: Filter out clearly suboptimal paths.
                 // TODO: Order returned paths by cost.
 
+                m.pattern_start = pattern.len();
                 m.pattern_end = pattern.len();
+                m.text_start = text_end;
                 m.text_end = text_end;
+                m.cost = 0;
+                m.cigar = Cigar::default();
 
                 let mut context = Context {
                     pattern,
@@ -174,10 +181,11 @@ impl<'s, C: Callback> Context<'s, C> {
 
         for mut op in [CigarOp::Match, CigarOp::Del, CigarOp::Ins] {
             // Filter in-range edges.
-            if !(min_pos + op.delta() <= pos) {
+            let new_pos = pos - op.delta();
+            if new_pos.0 < min_pos.0 || new_pos.1 < min_pos.1 {
+                // matrix OOB (either coordinate out of range)
                 continue;
             }
-            let new_pos = pos - op.delta();
             // Replate Match by Sub if needed
             if op == CigarOp::Match
                 && self.text[new_pos.0 as usize] != self.pattern[new_pos.1 as usize]
@@ -199,8 +207,7 @@ impl<'s, C: Callback> Context<'s, C> {
                 // We may not *leave* a diagonal if it can be extended by exact matches to the top of the matrix.
                 if op == CigarOp::Ins || op == CigarOp::Del {
                     let pat_slice = &self.pattern[..pos.1 as usize];
-                    let text_slice =
-                        &self.text[pos.0.saturating_sub(pos.1) as usize..pos.0 as usize];
+                    let text_slice = &self.text[(pos.0 - pos.1).max(0) as usize..pos.0 as usize];
                     if pat_slice == text_slice {
                         continue;
                     }
@@ -213,14 +220,16 @@ impl<'s, C: Callback> Context<'s, C> {
                     // The last (most recent) row we visited in the `new_pos` diagonal.
                     // Defaults to `pattern.len()` for bottom of the matrix.
                     let last_in_diag = self.last_row_in_diagonal[new_pos.0 as usize
-                        - new_pos.1 as usize
                         + self.pattern.len()
-                        - self.range_start];
+                        - self.range_start
+                        - new_pos.1 as usize];
                     let pat_slice = &self.pattern[new_pos.1 as usize..last_in_diag as usize];
-                    let text_slice =
-                        &self.text[new_pos.0 as usize..new_pos.0 as usize + pat_slice.len()];
-                    if pat_slice == text_slice {
-                        continue;
+                    let text_end = new_pos.0 as usize + pat_slice.len();
+                    if text_end <= self.text.len() {
+                        let text_slice = &self.text[new_pos.0 as usize..text_end];
+                        if pat_slice == text_slice {
+                            continue;
+                        }
                     }
                 }
             }
@@ -233,11 +242,11 @@ impl<'s, C: Callback> Context<'s, C> {
 
         for (op, _cost) in edges {
             let delta = op.delta();
-            let new_pos = pos + delta;
+            let new_pos = pos - delta;
 
             // update last_in_diagonal
             let diagonal =
-                new_pos.0 as usize - new_pos.1 as usize + self.pattern.len() - self.range_start;
+                new_pos.0 as usize + self.pattern.len() - self.range_start - new_pos.1 as usize;
             let old_last_in_diag = self.last_row_in_diagonal[diagonal];
             self.last_row_in_diagonal[diagonal] = new_pos.1;
 
@@ -249,10 +258,10 @@ impl<'s, C: Callback> Context<'s, C> {
             // Recurse!
             let continuation = self.dfs();
             // Revert the match
-            assert_eq!(self.m.cigar.pop_op(), Some(op));
-            self.m.cost -= op.edit_cost();
-            self.m.pattern_start += delta.1 as usize;
             self.m.text_start += delta.0 as usize;
+            self.m.pattern_start += delta.1 as usize;
+            self.m.cost -= op.edit_cost();
+            assert_eq!(self.m.cigar.pop_op(), Some(op));
 
             // Revert last_in_diagonal
             self.last_row_in_diagonal[diagonal] = old_last_in_diag;
@@ -264,6 +273,6 @@ impl<'s, C: Callback> Context<'s, C> {
             }
         }
 
-        return Continuation::Continue;
+        Continuation::Continue
     }
 }
