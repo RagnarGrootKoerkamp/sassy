@@ -141,7 +141,7 @@ impl<P: Profile> Searcher<P> {
                     callback,
                     last_row_in_diagonal,
                 };
-                context.dfs();
+                context.dfs::<P>();
             }
         }
     }
@@ -161,7 +161,7 @@ struct Context<'s, C: Callback> {
 }
 
 impl<'s, C: Callback> Context<'s, C> {
-    fn dfs(&mut self) -> Continuation {
+    fn dfs<P: Profile>(&mut self) -> Continuation {
         let full_match = self.m.pattern_start == 0;
         if full_match || self.partial_matches {
             self.m.cigar.reverse();
@@ -187,8 +187,7 @@ impl<'s, C: Callback> Context<'s, C> {
                 continue;
             }
             // Replate Match by Sub if needed
-            if op == CigarOp::Match
-                && self.text[new_pos.0 as usize] != self.pattern[new_pos.1 as usize]
+            if op == CigarOp::Match && !P::is_match(self.text[new_pos.0 as usize], self.pattern[new_pos.1 as usize])
             {
                 op = CigarOp::Sub;
             }
@@ -208,7 +207,7 @@ impl<'s, C: Callback> Context<'s, C> {
                 if op == CigarOp::Ins || op == CigarOp::Del {
                     let pat_slice = &self.pattern[..pos.1 as usize];
                     let text_slice = &self.text[(pos.0 - pos.1).max(0) as usize..pos.0 as usize];
-                    if pat_slice == text_slice {
+                    if P::is_match_slice(pat_slice, text_slice) {
                         continue;
                     }
                 }
@@ -227,7 +226,7 @@ impl<'s, C: Callback> Context<'s, C> {
                     let text_end = new_pos.0 as usize + pat_slice.len();
                     if text_end <= self.text.len() {
                         let text_slice = &self.text[new_pos.0 as usize..text_end];
-                        if pat_slice == text_slice {
+                        if P::is_match_slice(pat_slice, text_slice) {
                             continue;
                         }
                     }
@@ -256,7 +255,7 @@ impl<'s, C: Callback> Context<'s, C> {
             self.m.cost += op.edit_cost();
             self.m.cigar.push(op);
             // Recurse!
-            let continuation = self.dfs();
+            let continuation = self.dfs::<P>();
             // Revert the match
             self.m.text_start += delta.0 as usize;
             self.m.pattern_start += delta.1 as usize;
