@@ -180,6 +180,10 @@ impl<'s, C: Callback> Context<'s, C> {
         let mut edges = arrayvec::ArrayVec::<(CigarOp, Cost), 3>::new();
 
         for mut op in [CigarOp::Match, CigarOp::Del, CigarOp::Ins] {
+            // Don't allow leading or trailing deletions
+            if op == CigarOp::Del && (self.m.pattern_start == 0 || self.m.pattern_start == self.pattern.len()) {
+                continue;
+            }
             // Filter in-range edges.
             let new_pos = pos - op.delta();
             if new_pos.0 < min_pos.0 || new_pos.1 < min_pos.1 {
