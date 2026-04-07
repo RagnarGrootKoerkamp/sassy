@@ -22,6 +22,19 @@ pub enum Continuation {
     Break,
 }
 
+fn net_insertions_since_last_match(cigar: &Cigar) -> i32 {
+    let mut net = 0i32;
+    for elem in cigar.ops.iter().rev() {
+        match elem.op {
+            CigarOp::Match => break,
+            CigarOp::Ins   => net += elem.cnt,
+            CigarOp::Del   => net -= elem.cnt,
+            CigarOp::Sub   => {} // ignore
+        }
+    }
+    net
+}
+
 /// (match_is_complete, (partial) match) -> continuation.
 pub trait Callback: FnMut(bool, &mut Match) -> Continuation {}
 
@@ -289,6 +302,13 @@ impl<'s, C: Callback> Context<'s, C> {
                         }
                     }
                 }
+
+                // We may not have both inserted and deleted bases since the last match
+                // NB: This forces taking a diagonal path (subs) wherever possible
+                let net_ins = net_insertions_since_last_match(&self.m.cigar);
+                if (op == CigarOp::Ins && net_ins < 0) || (op == CigarOp::Del && net_ins > 0)  {
+                    continue;
+                }
             }
 
             edges.push((op, total_cost));
@@ -296,6 +316,7 @@ impl<'s, C: Callback> Context<'s, C> {
 
         // Stable sort edges by total cost, preferring match/sub in case of ties.
         edges.sort_by_key(|(_, cost)| *cost);
+
 
         for (op, _cost) in edges {
             let delta = op.delta();
@@ -331,5 +352,46 @@ impl<'s, C: Callback> Context<'s, C> {
         }
 
         Continuation::Continue
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::net_insertions_since_last_match;
+    use pa_types::{Cigar, CigarOp};
+    use CigarOp::{Del as D, Ins as I, Match as M, Sub as X};
+
+    fn cigar(ops: &[pa_types::CigarOp]) -> Cigar {
+        let mut c = Cigar::default();
+        for &op in ops {
+            c.push(op);
+        }
+        c
+    }
+
+    #[test]
+    fn net_insertions_since_last_match_cases() {
+        let cases: &[(&[pa_types::CigarOp], i32)] = &[
+            (&[],                  0),  // empty cigar
+            (&[M],                 0),  // match resets immediately
+            (&[I, I, I],           3),  // all insertions, no anchor
+            (&[D, D],             -2),  // all deletions, no anchor
+            (&[M, I, I],           2),  // two I's after match
+            (&[M, D, D],          -2),  // two D's after match
+            (&[M, I, I, D],        1),  // net 2I − 1D
+            (&[M, I, I, D, D],     0),  // balanced
+            (&[I, X, D],           0),  // X is transparent: +1 − 1
+            (&[M, I, X, D],        0),  // X between I and D, after anchor
+            (&[M, X, X, I],        1),  // X's skipped, only I counted
+            (&[I, I, M, D, D],    -2),  // stop at M, only trailing DD visible
+            (&[M, D, M, I, I],     2),  // stop at second M, see II
+        ];
+        for &(ops, expected) in cases {
+            assert_eq!(
+                net_insertions_since_last_match(&cigar(ops)),
+                expected,
+                "ops = {ops:?}"
+            );
+        }
     }
 }
