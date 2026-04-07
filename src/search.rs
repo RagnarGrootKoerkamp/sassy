@@ -3379,4 +3379,30 @@ mod tests {
         let matches = dna_searcher.search_encoded_patterns(&encoded, &t, 0);
         assert_eq!(matches.len(), 0);
     }
+
+    #[test]
+    fn check_iupac_comparison_used() {
+        let text = b"AAAAAAA";
+        let k = 2;
+
+        let count = |pattern: &[u8], prune: bool| -> usize {
+            let mut searcher = Searcher::<Iupac>::new(false, None);
+            let matches = searcher.search_all(pattern, text, k);
+            let mut n = 0;
+            searcher.iterate_all_alignments(
+                pattern, text, k, &matches, false, prune,
+                &mut |complete, _| {
+                    if complete { n += 1; }
+                    Continuation::Continue
+                },
+            );
+            n
+        };
+
+        assert_eq!(
+            count(b"NAAA", true),
+            count(b"AAAA", true),
+            "prune_suboptimal must use Profile::is_match, not raw ==, to handle N-containing patterns"
+        );
+    }
 }
