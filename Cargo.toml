@@ -34,7 +34,6 @@ cpus = ["x86-64-v3", "x86-64-v4"]
 
 [[bin]]
 name = 'sassy'
-path = 'bin/main.rs'
 required-features = ["cli"]
 
 [[bin]]

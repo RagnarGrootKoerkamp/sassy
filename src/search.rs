@@ -417,7 +417,7 @@ impl<P: Profile> Searcher<P> {
         encoded_queries: &EncodedPatterns<P>,
         text: &[u8],
         k: usize,
-    ) -> &[Match] {
+    ) -> &mut [Match] {
         self.pattern_tiling_searcher
             .search(encoded_queries, text, k as u32)
     }
@@ -427,7 +427,7 @@ impl<P: Profile> Searcher<P> {
         encoded_queries: &EncodedPatterns<P>,
         text: &[u8],
         k: usize,
-    ) -> &[Match] {
+    ) -> &mut [Match] {
         self.pattern_tiling_searcher
             .search_all(encoded_queries, text, k as u32)
     }
