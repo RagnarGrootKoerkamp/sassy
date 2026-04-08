@@ -253,7 +253,7 @@ pub fn test_throughput() {
     eprintln!("With AVX2, this is typically around 2GB/s. Without, closer to 1.3GB/s.");
     eprintln!("If you see 0.02GB/s, that means you're on a debug rather than release build.");
 
-    use rand::Rng;
+    use rand::RngExt;
     let n = 100000;
     let m = 23;
     let k = 1;

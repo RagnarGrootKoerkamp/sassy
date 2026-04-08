@@ -62,13 +62,13 @@ derivative = "2.2.0"
 
 # Optional: CLI binary dependencies
 clap = { version = "4.5.37", features = ["derive"], optional = true }
-needletail = { version = "0.6.3", optional = true }
+needletail = { version = "0.7.1", optional = true }
 env_logger = { version = "0.11.8", optional = true }
 num_cpus = { version = "1.16.0", optional = true }
 colored = { version = "3.0.0", optional = true }
 
 # Optional: diagnostic functions (test_throughput, test_cpu_features)
-rand = { version = "0.9.0", optional = true }
+rand = { version = "0.10.0", optional = true }
 
 # Optional: Python bindings
 pyo3 = { version = "0.28", features = [
@@ -84,8 +84,8 @@ pyo3-introspection = { version = "0.28", optional = true }
 [dev-dependencies]
 tempfile = "3.20.0"
 packed-seq = "4.3.0"
-rand = "0.9.0"
-criterion = { version = "0.5", features = ["html_reports"] }
+rand = "0.10.0"
+criterion = { version = "0.8", features = ["html_reports"] }
 
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dev-dependencies]
 perfcnt = "0.8.0"

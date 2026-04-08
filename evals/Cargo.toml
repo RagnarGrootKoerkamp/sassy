@@ -6,14 +6,14 @@ publish = false
 
 [dependencies]
 edlib_rs.git = "https://github.com/pairwise-alignment/edlib-rs"
-toml = "0.9"
+toml = "1.1"
 serde = { version = "1.0", features = ["derive"] }
 once_cell = "1.19.0"
 tempfile = "*"
 rand = "*"
 sassy = { path = ".." }
 clap = { version = "4.5.37", features = ["derive"] }
-needletail = "0.6.3"
+needletail = "0.7.1"
 rayon = "1.10"
 parasail-rs = "0.9.0"
 
