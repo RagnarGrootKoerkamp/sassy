@@ -1,5 +1,5 @@
 use clap::Parser;
-use rand::Rng;
+use rand::RngExt;
 use sassy::{Searcher, profiles::Iupac};
 
 #[derive(clap::Parser)]

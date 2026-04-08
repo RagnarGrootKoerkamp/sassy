@@ -2070,7 +2070,7 @@ mod tests {
         // env_logger::init();
 
         use rand::rngs::StdRng;
-        use rand::{Rng, SeedableRng};
+        use rand::{RngExt, SeedableRng};
         use std::iter::repeat_with;
 
         let mut rng = StdRng::seed_from_u64(42);
@@ -2249,7 +2249,7 @@ mod tests {
 
     #[test]
     fn test_random_patterns_60_range_fuzz() {
-        use rand::Rng;
+        use rand::RngExt;
         let mut rng = rand::rng();
         let mut i = 0;
 
@@ -2917,7 +2917,7 @@ mod tests {
         env_logger::init();
 
         use rand::rngs::StdRng;
-        use rand::{Rng, SeedableRng};
+        use rand::{RngExt, SeedableRng};
 
         let mut rng = StdRng::seed_from_u64(42);
         let mut searcher = Searcher::<Iupac>::new_fwd();

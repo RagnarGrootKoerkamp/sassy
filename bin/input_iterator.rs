@@ -208,7 +208,7 @@ impl<'a> InputIterator<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::Rng;
+    use rand::RngExt;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
