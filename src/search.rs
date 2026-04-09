@@ -1810,8 +1810,8 @@ mod tests {
         let pruned = Searcher::<Dna>::new(false, None).search_all_alignments(pattern, text, k, true);
         let full_total: usize = full.iter().map(|g| g.len()).sum();
         let pruned_total: usize = pruned.iter().map(|g| g.len()).sum();
-        // Exact counts derived analytically: 6+10+31+36+51 = 134 unpruned; 3 pruned (one per end at text_end=4,5,6).
-        assert_eq!(full_total, 134, "unexpected full alignment count");
+        // Exact counts: 97 unpruned (leading- and trailing-deletion paths excluded); 3 pruned (one per end at text_end=4,5,6).
+        assert_eq!(full_total, 97, "unexpected full alignment count");
         assert_eq!(pruned_total, 3, "unexpected pruned alignment count");
         for group in &pruned {
             assert_eq!(group.len(), 1, "expected exactly 1 alignment per text_end with prune=true, got {}", group.len());
@@ -1829,6 +1829,35 @@ mod tests {
                 m.cigar.to_string(), expected_cigar,
                 "expected pure-match CIGAR {expected_cigar}, got {}", m.cigar.to_string()
             );
+        }
+    }
+
+    #[test]
+    fn no_leading_or_trailing_deletions() {
+        // "X" chars at each end create Del-cost-1 opportunities.  Without the filter,
+        // alignments like `1D4=` (leading) and `4=1D` (trailing) would be generated.
+        let pattern = b"ACGT";
+        let text = b"XACGTX";
+        let k = 1;
+        for &rc in &[false, true] {
+            let groups = Searcher::<Dna>::new(rc, None).search_all_alignments(pattern, text, k, false);
+            for group in &groups {
+                for m in group {
+                    let cigar = m.cigar.to_string();
+                    assert_ne!(
+                        cigar.chars().find(|c| c.is_alphabetic()),
+                        Some('D'),
+                        "unexpected leading deletion ({:?}): cigar={cigar}",
+                        m.strand,
+                    );
+                    assert_ne!(
+                        cigar.chars().last(),
+                        Some('D'),
+                        "unexpected trailing deletion ({:?}): cigar={cigar}",
+                        m.strand,
+                    );
+                }
+            }
         }
     }
 
@@ -1883,27 +1912,33 @@ mod tests {
             .collect::<Vec<_>>();
         let groups = searcher.search_all_alignments(pattern, text, k, false);
 
-        assert_eq!(
+        // Endpoints with only leading-deletion paths produce no group, so groups.len() <= all_matches.len().
+        assert!(
+            groups.len() <= all_matches.len(),
+            "number of groups ({}) must not exceed number of search_all endpoints ({}) \
+             (pattern={} text={} k={k})",
             groups.len(),
             all_matches.len(),
-            "number of groups must equal number of fwd search_all endpoints \
-             (pattern={} text={} k={k})",
             String::from_utf8_lossy(pattern),
             String::from_utf8_lossy(text),
         );
 
-        for (group, expected) in groups.iter().zip(&all_matches) {
+        for group in &groups {
             assert!(!group.is_empty(), "each group must yield at least one alignment");
+            let anchor = &group[0];
+            // Match each group to its search_all endpoint by anchor coordinate.
+            let expected = match anchor.strand {
+                Strand::Fwd => all_matches.iter().find(|m| m.strand == Strand::Fwd && m.text_end == anchor.text_end),
+                Strand::Rc  => all_matches.iter().find(|m| m.strand == Strand::Rc  && m.text_start == anchor.text_start),
+            }.unwrap_or_else(|| panic!(
+                "group anchor not found in search_all results (pattern={} text={} k={k})",
+                String::from_utf8_lossy(pattern),
+                String::from_utf8_lossy(text),
+            ));
             for m in group {
                 assert_eq!(m.text_end, expected.text_end, "all alignments in group must share text_end");
                 assert!(m.cost <= k as i32, "alignment cost {} exceeds k={k}", m.cost);
             }
-            let first = &group[0];
-            assert_eq!(first.text_start, expected.text_start, "first alignment text_start must match search_all");
-            assert_eq!(
-                first.cigar.to_string(), expected.cigar.to_string(),
-                "first alignment cigar must match search_all"
-            );
         }
     }
 
@@ -3378,5 +3413,31 @@ mod tests {
         let encoded = dna_searcher.encode_patterns(&[p]);
         let matches = dna_searcher.search_encoded_patterns(&encoded, &t, 0);
         assert_eq!(matches.len(), 0);
+    }
+
+    #[test]
+    fn check_iupac_comparison_used() {
+        let text = b"AAAAAAA";
+        let k = 2;
+
+        let count = |pattern: &[u8], prune: bool| -> usize {
+            let mut searcher = Searcher::<Iupac>::new(false, None);
+            let matches = searcher.search_all(pattern, text, k);
+            let mut n = 0;
+            searcher.iterate_all_alignments(
+                pattern, text, k, &matches, false, prune,
+                &mut |complete, _| {
+                    if complete { n += 1; }
+                    Continuation::Continue
+                },
+            );
+            n
+        };
+
+        assert_eq!(
+            count(b"NAAA", true),
+            count(b"AAAA", true),
+            "prune_suboptimal must use Profile::is_match, not raw ==, to handle N-containing patterns"
+        );
     }
 }

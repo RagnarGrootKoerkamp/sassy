@@ -38,6 +38,13 @@ pub trait Profile: Clone + std::fmt::Debug + Sync {
     fn valid_seq(seq: &[u8]) -> bool;
     /// Return true if the two characters are a match according to profile
     fn is_match(char1: u8, char2: u8) -> bool;
+    /// Return true if every position in `pattern` matches the corresponding
+    /// position in `text` according to this profile (e.g. IUPAC ambiguity,
+    /// case-insensitivity).
+    fn is_match_slice(pattern: &[u8], text: &[u8]) -> bool {
+        pattern.len() == text.len()
+            && pattern.iter().zip(text).all(|(&p, &t)| Self::is_match(p, t))
+    }
     /// Reverse-complement the input string.
     fn reverse_complement(_query: &[u8]) -> Vec<u8> {
         unimplemented!(
