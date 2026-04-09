@@ -682,27 +682,35 @@ impl<P: Profile> Searcher<P> {
         k: usize,
         prune_suboptimal: bool,
     ) -> Vec<Vec<Match>> {
-        let fwd: Vec<Match> = self
-            .search_all(pattern, text, k)
-            .into_iter()
-            .filter(|m| m.strand == Strand::Fwd)
-            .collect();
+        let all_matches = self.search_all(pattern, text, k);
 
         let mut groups: Vec<Vec<Match>> = Vec::new();
-        let mut cur_end: Option<usize> = None;
+        let mut cur_fwd_end:  Option<usize> = None;
+        let mut cur_rc_start: Option<usize> = None;
 
         self.iterate_all_alignments(
             pattern,
             text,
             k,
-            &fwd,
+            &all_matches,
             false,
             prune_suboptimal,
             &mut |complete, m| {
                 if complete {
-                    if cur_end != Some(m.text_end) {
+                    let anchor_changed = match m.strand {
+                        Strand::Fwd => {
+                            let changed = cur_fwd_end != Some(m.text_end);
+                            cur_fwd_end = Some(m.text_end);
+                            changed
+                        }
+                        Strand::Rc => {
+                            let changed = cur_rc_start != Some(m.text_start);
+                            cur_rc_start = Some(m.text_start);
+                            changed
+                        }
+                    };
+                    if anchor_changed {
                         groups.push(Vec::new());
-                        cur_end = Some(m.text_end);
                     }
                     groups.last_mut().unwrap().push(m.clone());
                 }
@@ -1900,16 +1908,13 @@ mod tests {
     // --- search_all_alignments consistency tests ---
 
     /// For each end position returned by `search_all`, verify that `search_all_alignments`:
-    /// - produces exactly one group per end position
+    /// For each endpoint returned by `search_all`, verify that `search_all_alignments`:
+    /// - produces exactly one group per endpoint (Fwd grouped by text_end, RC by text_start)
     /// - yields at least one alignment per group
-    /// - all alignments in a group share the same `text_end`
-    /// - all alignments have cost ≤ k
-    /// - the first alignment matches the greedy traceback (`text_start` and CIGAR)
+    /// - all alignments share the anchor coordinate and have cost ≤ k
+    /// - the first alignment matches the greedy traceback (text_start and CIGAR)
     fn assert_consistent_with_search_all(searcher: &mut Searcher<Dna>, pattern: &[u8], text: &[u8], k: usize) {
-        let all_matches = searcher.search_all(pattern, text, k)
-            .into_iter()
-            .filter(|m| m.strand == Strand::Fwd)
-            .collect::<Vec<_>>();
+        let all_matches = searcher.search_all(pattern, text, k);
         let groups = searcher.search_all_alignments(pattern, text, k, false);
 
         // Endpoints with only leading-deletion paths produce no group, so groups.len() <= all_matches.len().
@@ -1936,7 +1941,11 @@ mod tests {
                 String::from_utf8_lossy(text),
             ));
             for m in group {
-                assert_eq!(m.text_end, expected.text_end, "all alignments in group must share text_end");
+                match expected.strand {
+                    Strand::Fwd => assert_eq!(m.text_end,   expected.text_end,   "all Fwd alignments in group must share text_end"),
+                    Strand::Rc  => assert_eq!(m.text_start, expected.text_start, "all RC alignments in group must share text_start"),
+                }
+                assert_eq!(m.strand, expected.strand, "strand must match search_all result");
                 assert!(m.cost <= k as i32, "alignment cost {} exceeds k={k}", m.cost);
             }
         }
@@ -1961,8 +1970,17 @@ mod tests {
     }
 
     #[test]
+    fn search_all_alignments_consistent_rc() {
+        let rc = Dna::reverse_complement(b"ATCGATCA");
+        let text = [b"GGGGGGGG".as_ref(), rc.as_ref(), b"GGGGGGGG"].concat();
+        let mut s = Searcher::<Dna>::new(true, None);
+        assert_consistent_with_search_all(&mut s, b"ATCGATCA", &text, 0);
+    }
+
+    #[test]
     fn search_all_alignments_consistent_fuzz() {
-        let mut searcher = Searcher::<Dna>::new(false, None);
+        let mut fwd_searcher = Searcher::<Dna>::new(false, None);
+        let mut rc_searcher  = Searcher::<Dna>::new(true,  None);
         for _ in 0..200 {
             let plen = random_range(3..20);
             let tlen = random_range(plen..plen * 4);
@@ -1974,7 +1992,8 @@ mod tests {
                 String::from_utf8_lossy(&pattern),
                 String::from_utf8_lossy(&text),
             );
-            assert_consistent_with_search_all(&mut searcher, &pattern, &text, k);
+            assert_consistent_with_search_all(&mut fwd_searcher, &pattern, &text, k);
+            assert_consistent_with_search_all(&mut rc_searcher,  &pattern, &text, k);
         }
     }
 
