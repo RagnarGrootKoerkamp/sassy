@@ -103,9 +103,9 @@ impl Searcher {
     }
 
     #[pyo3(signature = (pattern, text, k, prune_suboptimal=false))]
-    #[doc = "Enumerate all alignments at every Fwd end position with cost <= k.\n\
-             Returns a list of groups; each group is a list of Matches sharing the same text_end.\n\
-             RC matches are not included (full RC enumeration is not yet supported)."]
+    #[doc = "Enumerate all alignments at every end position with cost <= k.\n\
+             Returns a list of groups; each group is a list of Matches sharing the same anchor coordinate.\n\
+             For Fwd matches the anchor is text_end; for RC matches the anchor is text_start."]
     fn search_all_alignments(
         &mut self,
         pattern: &Bound<'_, PyBytes>,
