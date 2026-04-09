@@ -30,8 +30,10 @@ impl<F: FnMut(bool, &Match) -> Continuation> Callback for F {}
 impl<P: Profile> Searcher<P> {
     /// Iterate over _all_ alignments of cost up to `k`.
     ///
-    /// First run `search_all` to get all endpoints.
-    /// Then pass those to `all_alignments` to get an iterator over _all_ alignments.
+    /// `matches` may contain both `Strand::Fwd` and `Strand::Rc` entries.
+    /// Fwd matches are traced on the forward text; RC matches are traced on the
+    /// reversed text using the complemented pattern, then translated back to
+    /// forward-text coordinates before the callback fires.
     ///
     /// If `partial_matches` is `true`, the callback is called for *every* visited DFS state.
     ///
@@ -48,20 +50,60 @@ impl<P: Profile> Searcher<P> {
         prune_suboptimal: bool,
         callback: &mut impl Callback,
     ) {
-        let width = k + pattern.len();
+        assert_eq!(self.alpha, None, "Tracing all alignments with overhang is not yet implemented.");
 
-        // for now, assume fwd matches
-        for m in matches {
-            assert_eq!(
-                m.strand,
-                crate::Strand::Fwd,
-                "Tracing all alignments for RC matches is not yet implemented."
-            );
+        // --- Forward strand ---
+        let fwd: Vec<Match> = matches.iter().filter(|m| m.strand == Strand::Fwd).cloned().collect();
+        if !fwd.is_empty() {
+            self.iterate_one_strand(pattern, text, k, &fwd, partial_matches, prune_suboptimal, callback);
         }
-        assert_eq!(
-            self.alpha, None,
-            "Tracing all alignments with overhang is not yet implemented."
-        );
+
+        // --- Reverse-complement strand ---
+        let rc: Vec<Match> = matches.iter().filter(|m| m.strand == Strand::Rc).cloned().collect();
+        if !rc.is_empty() {
+            let fwd_len = text.len();
+            let rev_text: Vec<u8> = text.iter().rev().copied().collect();
+            let comp_pattern = P::complement(pattern);
+
+            // Translate RC matches from forward-text coords to reversed-text coords.
+            // In forward space:  text_start, text_end
+            // In reversed space: text_end_rev = fwd_len - text_start
+            //                    text_start_rev = fwd_len - text_end
+            let mut rc_rev: Vec<Match> = rc.iter().map(|m| {
+                let mut tm = m.clone();
+                tm.text_end   = fwd_len - m.text_start;
+                tm.text_start = fwd_len - m.text_end;
+                tm.strand     = Strand::Fwd; // DFS operates on reversed text as if forward
+                tm
+            }).collect();
+            rc_rev.sort_by_key(|m| m.text_end);
+
+            // Wrap callback: translate DFS results back to forward-text coords before firing.
+            let mut rc_callback = |complete: bool, m: &Match| -> Continuation {
+                let mut translated = m.clone();
+                translated.text_start = fwd_len - m.text_end;
+                translated.text_end   = fwd_len - m.text_start;
+                translated.strand     = Strand::Rc;
+                callback(complete, &translated)
+            };
+
+            self.iterate_one_strand(&comp_pattern, &rev_text, k, &rc_rev,
+                                    partial_matches, prune_suboptimal, &mut rc_callback);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn iterate_one_strand(
+        &self,
+        pattern: &[u8],
+        text: &[u8],
+        k: usize,
+        matches: &[Match],
+        partial_matches: bool,
+        prune_suboptimal: bool,
+        callback: &mut impl Callback,
+    ) {
+        let width = k + pattern.len();
 
         // 1. Group matches as long as they are close
         let mut ranges = vec![];
