@@ -61,7 +61,7 @@ impl<P: Profile> Searcher<P> {
 
         // --- Forward strand ---
         if !fwd.is_empty() {
-            self.iterate_one_strand(pattern, fwd_text, k, fwd, partial_matches, prune_suboptimal, callback);
+            self.iterate_one_strand(pattern, fwd_text, k, fwd, partial_matches, prune_suboptimal, callback, None);
         }
 
         // --- Reverse-complement strand ---
@@ -71,22 +71,7 @@ impl<P: Profile> Searcher<P> {
             let rev_text = rev_text.as_ref();
             let comp_pattern = P::complement(pattern);
 
-            // Translate RC matches in-place from forward-text coords to reversed-text coords.
-            // `search_all` returns RC matches sorted by `text_start` DESCENDING in forward coords
-            // (equivalently, sorted by `text_end` ASCENDING in reversed-text coords).
-            // After the transform:
-            //   text_end_rev   = fwd_len - text_start_fwd  (ASCENDING, since text_start_fwd is DESC)
-            //   text_start_rev = fwd_len - text_end_fwd
-            // So the result is already sorted by text_end ascending — no sort or reverse needed.
-            // Strand is left unmutated — iterate_one_strand doesn't use m.strand.
-            for m in rc.iter_mut() {
-                let old_start = m.text_start;
-                m.text_start = fwd_len - m.text_end;
-                m.text_end   = fwd_len - old_start;
-            }
-            debug_assert!(rc.is_sorted_by_key(|m| m.text_end));
-
-            // Wrap callback: translate DFS results back to forward-text coords before firing.
+            // Wrap callback: translate DFS results (rev-text coords) back to fwd-text coords.
             let mut rc_callback = |complete: bool, m: &mut Match| -> Continuation {
                 let orig_start  = m.text_start;
                 let orig_end    = m.text_end;
@@ -101,16 +86,11 @@ impl<P: Profile> Searcher<P> {
                 result
             };
 
+            // RC matches are in fwd coords; pass flip=Some(fwd_len) so iterate_one_strand
+            // derives rev-text endpoints on the fly without mutating the slice.
             self.iterate_one_strand(&comp_pattern, rev_text, k, rc,
-                                    partial_matches, prune_suboptimal, &mut rc_callback);
-
-            // Restore RC slice to original forward-text coordinates.
-            // The inverse transform is the same formula applied again.
-            for m in rc.iter_mut() {
-                let old_start = m.text_start;
-                m.text_start = fwd_len - m.text_end;
-                m.text_end   = fwd_len - old_start;
-            }
+                                    partial_matches, prune_suboptimal, &mut rc_callback,
+                                    Some(fwd_len));
         }
     }
 
@@ -124,21 +104,31 @@ impl<P: Profile> Searcher<P> {
         partial_matches: bool,
         prune_suboptimal: bool,
         callback: &mut impl Callback,
+        flip: Option<usize>,
     ) {
         let width = k + pattern.len();
+
+        // When flip=Some(fwd_len), matches are in fwd coords; derive the rev-text endpoint
+        // as fwd_len - text_start (RC matches are sorted by text_start DESC in fwd coords,
+        // so fwd_len - text_start is ascending — the order iterate_one_strand requires).
+        let eff_end = |m: &Match| match flip {
+            None          => m.text_end,
+            Some(fwd_len) => fwd_len - m.text_start,
+        };
+        debug_assert!(matches.windows(2).all(|w| eff_end(&w[0]) <= eff_end(&w[1])));
 
         // 1. Group matches as long as they are close
         let mut ranges = vec![];
         if let [fm, tail @ ..] = matches {
-            let mut first_end = fm.text_end.saturating_sub(width);
-            let mut last_end = fm.text_end;
+            let mut first_end = eff_end(fm).saturating_sub(width);
+            let mut last_end = eff_end(fm);
             for m in tail {
-                if m.text_end <= last_end + width {
-                    last_end = m.text_end;
+                if eff_end(m) <= last_end + width {
+                    last_end = eff_end(m);
                 } else {
                     ranges.push(first_end..last_end);
-                    first_end = m.text_end.saturating_sub(width);
-                    last_end = m.text_end;
+                    first_end = eff_end(m).saturating_sub(width);
+                    last_end = eff_end(m);
                 }
             }
             ranges.push(first_end..last_end);
