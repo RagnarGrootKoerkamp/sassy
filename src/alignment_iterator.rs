@@ -3,7 +3,7 @@
 use pa_types::{Cigar, CigarOp, Cost, Pos};
 
 use crate::{
-    Match, Searcher, Strand,
+    Match, RcSearchAble, Searcher, Strand,
     profiles::Profile,
     trace::{CostLookup, CostMatrix, fill},
 };
@@ -23,9 +23,9 @@ pub enum Continuation {
 }
 
 /// (match_is_complete, (partial) match) -> continuation.
-pub trait Callback: FnMut(bool, &Match) -> Continuation {}
+pub trait Callback: FnMut(bool, &mut Match) -> Continuation {}
 
-impl<F: FnMut(bool, &Match) -> Continuation> Callback for F {}
+impl<F: FnMut(bool, &mut Match) -> Continuation> Callback for F {}
 
 impl<P: Profile> Searcher<P> {
     /// Iterate over _all_ alignments of cost up to `k`.
@@ -40,55 +40,77 @@ impl<P: Profile> Searcher<P> {
     /// If `prune_suboptimal` is `true`, path for which some part can be replaced by exact matches are skipped.
     /// E.g., if `====` is an option, this will skip over `=I=D=`, and similarly, this will prefer `===...` over `=I=...`.
     #[allow(clippy::too_many_arguments)]
-    pub fn iterate_all_alignments(
+    pub fn iterate_all_alignments<I: RcSearchAble + ?Sized>(
         &self,
         pattern: &[u8],
-        text: &[u8],
+        text: &I,
         k: usize,
-        matches: &[Match],
+        matches: &mut [Match],
         partial_matches: bool,
         prune_suboptimal: bool,
         callback: &mut impl Callback,
     ) {
         assert_eq!(self.alpha, None, "Tracing all alignments with overhang is not yet implemented.");
 
+        let fwd_text = text.text();
+        let fwd_text = fwd_text.as_ref();
+
+        // `search_all` returns Fwd matches first then Rc — find the split point.
+        let split = matches.partition_point(|m| m.strand == Strand::Fwd);
+        let (fwd, rc) = matches.split_at_mut(split);
+
         // --- Forward strand ---
-        let fwd: Vec<Match> = matches.iter().filter(|m| m.strand == Strand::Fwd).cloned().collect();
         if !fwd.is_empty() {
-            self.iterate_one_strand(pattern, text, k, &fwd, partial_matches, prune_suboptimal, callback);
+            self.iterate_one_strand(pattern, fwd_text, k, fwd, partial_matches, prune_suboptimal, callback);
         }
 
         // --- Reverse-complement strand ---
-        let rc: Vec<Match> = matches.iter().filter(|m| m.strand == Strand::Rc).cloned().collect();
         if !rc.is_empty() {
-            let fwd_len = text.len();
-            let rev_text: Vec<u8> = text.iter().rev().copied().collect();
+            let fwd_len = fwd_text.len();
+            let rev_text = text.rev_text();
+            let rev_text = rev_text.as_ref();
             let comp_pattern = P::complement(pattern);
 
-            // Translate RC matches from forward-text coords to reversed-text coords.
-            // In forward space:  text_start, text_end
-            // In reversed space: text_end_rev = fwd_len - text_start
-            //                    text_start_rev = fwd_len - text_end
-            let mut rc_rev: Vec<Match> = rc.iter().map(|m| {
-                let mut tm = m.clone();
-                tm.text_end   = fwd_len - m.text_start;
-                tm.text_start = fwd_len - m.text_end;
-                tm.strand     = Strand::Fwd; // DFS operates on reversed text as if forward
-                tm
-            }).collect();
-            rc_rev.sort_by_key(|m| m.text_end);
+            // Translate RC matches in-place from forward-text coords to reversed-text coords.
+            // `search_all` returns RC matches sorted by `text_start` DESCENDING in forward coords
+            // (equivalently, sorted by `text_end` ASCENDING in reversed-text coords).
+            // After the transform:
+            //   text_end_rev   = fwd_len - text_start_fwd  (ASCENDING, since text_start_fwd is DESC)
+            //   text_start_rev = fwd_len - text_end_fwd
+            // So the result is already sorted by text_end ascending — no sort or reverse needed.
+            // Strand is left unmutated — iterate_one_strand doesn't use m.strand.
+            for m in rc.iter_mut() {
+                let old_start = m.text_start;
+                m.text_start = fwd_len - m.text_end;
+                m.text_end   = fwd_len - old_start;
+            }
+            debug_assert!(rc.is_sorted_by_key(|m| m.text_end));
 
             // Wrap callback: translate DFS results back to forward-text coords before firing.
-            let mut rc_callback = |complete: bool, m: &Match| -> Continuation {
-                let mut translated = m.clone();
-                translated.text_start = fwd_len - m.text_end;
-                translated.text_end   = fwd_len - m.text_start;
-                translated.strand     = Strand::Rc;
-                callback(complete, &translated)
+            let mut rc_callback = |complete: bool, m: &mut Match| -> Continuation {
+                let orig_start  = m.text_start;
+                let orig_end    = m.text_end;
+                let orig_strand = m.strand;
+                m.text_start = fwd_len - orig_end;
+                m.text_end   = fwd_len - orig_start;
+                m.strand     = Strand::Rc;
+                let result = callback(complete, m);
+                m.text_start = orig_start;
+                m.text_end   = orig_end;
+                m.strand     = orig_strand;
+                result
             };
 
-            self.iterate_one_strand(&comp_pattern, &rev_text, k, &rc_rev,
+            self.iterate_one_strand(&comp_pattern, rev_text, k, rc,
                                     partial_matches, prune_suboptimal, &mut rc_callback);
+
+            // Restore RC slice to original forward-text coordinates.
+            // The inverse transform is the same formula applied again.
+            for m in rc.iter_mut() {
+                let old_start = m.text_start;
+                m.text_start = fwd_len - m.text_end;
+                m.text_end   = fwd_len - old_start;
+            }
         }
     }
 
