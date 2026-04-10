@@ -102,7 +102,7 @@ impl Searcher {
         }
     }
 
-    #[pyo3(signature = (pattern, text, k, prune_suboptimal=false))]
+    #[pyo3(signature = (pattern, text, k, prune_suboptimal=false, max_n_frac=0.2))]
     #[doc = "Enumerate all alignments at every end position with cost <= k.\n\
              Returns a list of groups; each group is a list of Matches sharing the same anchor coordinate.\n\
              For Fwd matches the anchor is text_end; for RC matches the anchor is text_start."]
@@ -112,13 +112,14 @@ impl Searcher {
         text: &Bound<'_, PyBytes>,
         k: usize,
         prune_suboptimal: bool,
+        max_n_frac: f32,
     ) -> Vec<Vec<Match>> {
         let pattern = pattern.as_bytes();
         let text = text.as_bytes();
         match &mut self.searcher {
-            SearcherType::Ascii(s) => s.search_all_alignments(pattern, text, k, prune_suboptimal),
-            SearcherType::Dna(s) => s.search_all_alignments(pattern, text, k, prune_suboptimal),
-            SearcherType::Iupac(s) => s.search_all_alignments(pattern, text, k, prune_suboptimal),
+            SearcherType::Ascii(s) => s.search_all_alignments(pattern, text, k, prune_suboptimal, max_n_frac),
+            SearcherType::Dna(s) => s.search_all_alignments(pattern, text, k, prune_suboptimal, max_n_frac),
+            SearcherType::Iupac(s) => s.search_all_alignments(pattern, text, k, prune_suboptimal, max_n_frac),
         }
     }
 
