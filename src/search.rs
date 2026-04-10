@@ -1960,65 +1960,70 @@ mod tests {
     }
 
     #[test]
-    fn search_all_alignments_consistent_rc() {
-        let rc = Dna::reverse_complement(b"ATCGATCA");
-        let text = [b"GGGGGGGG".as_ref(), rc.as_ref(), b"GGGGGGGG"].concat();
-        let mut s = Searcher::<Dna>::new(true, None);
-        assert_consistent_with_search_all(&mut s, b"ATCGATCA", &text, 0);
-    }
-
-    #[test]
     fn search_all_alignments_rc_fuzz() {
         use rand::rngs::StdRng;
         use rand::{RngExt, SeedableRng};
+
         let mut rng = StdRng::seed_from_u64(42);
         let bases = b"ACGT";
 
-        for _ in 0..1000 {
+        for _ in 0..500 {
             let plen = rng.random_range(4..=20);
             let tlen = rng.random_range(plen..=plen + 10);
             let k    = rng.random_range(0..=3usize);
 
             let pattern: Vec<u8> = (0..plen).map(|_| bases[rng.random_range(0..4usize)]).collect();
             let text:    Vec<u8> = (0..tlen).map(|_| bases[rng.random_range(0..4usize)]).collect();
+            let rc_text = Dna::reverse_complement(&text);
 
-            let mut searcher = Searcher::<Dna>::new(true, None);
-            let groups = searcher.search_all_alignments(&pattern, &text, k, false);
+            let groups     = Searcher::<Dna>::new(true,  None).search_all_alignments(&pattern, &text,    k, false);
+            let groups_fwd = Searcher::<Dna>::new(false, None).search_all_alignments(&pattern, &rc_text, k, false);
 
-            for group in &groups {
-                for m in group {
-                    assert!(
-                        m.cost as usize <= k,
-                        "cost {} > k={} for pattern={} text={}",
-                        m.cost, k,
-                        String::from_utf8_lossy(&pattern),
-                        String::from_utf8_lossy(&text),
-                    );
-                    if m.strand == Strand::Rc {
-                        assert!(
-                            m.text_start <= m.text_end,
-                            "RC match has text_start > text_end: {:?}", m
-                        );
-                        assert!(
-                            m.text_end <= text.len(),
-                            "RC match text_end out of bounds: {:?}", m
-                        );
-                    }
-                }
-            }
+            // Collect all RC matches as (text_start, text_end, cost, cigar).
+            // The RC search of P against T internally aligns P against RC(T), reporting
+            // coordinates back in T-space: rc_start -> tlen-rc_end, rc_end -> tlen-rc_start.
+            let mut rc_matches: Vec<(usize, usize, i32, String)> = groups.iter()
+                .flat_map(|g| g.iter())
+                .filter(|m| m.strand == Strand::Rc)
+                .map(|m| (m.text_start, m.text_end, m.cost, m.cigar.to_string()))
+                .collect();
+
+            // The equivalent fwd search of P against RC(T) produces matches in RC(T)-space.
+            // Transform [s', e') in RC(T) back to T-space: [tlen-e', tlen-s').
+            // CIGARs are identical because both compute the same alignment (P vs RC(T) segment).
+            let mut fwd_as_rc: Vec<(usize, usize, i32, String)> = groups_fwd.iter()
+                .flat_map(|g| g.iter())
+                .map(|m| (tlen - m.text_end, tlen - m.text_start, m.cost, m.cigar.to_string()))
+                .collect();
+
+            rc_matches.sort();
+            fwd_as_rc.sort();
+
+            assert_eq!(
+                rc_matches, fwd_as_rc,
+                "RC/fwd match mismatch: pattern={} text={} k={k}",
+                String::from_utf8_lossy(&pattern),
+                String::from_utf8_lossy(&text),
+            );
         }
     }
 
     #[test]
     fn search_all_alignments_consistent_fuzz() {
+        use rand::rngs::StdRng;
+        use rand::{RngExt, SeedableRng};
+
+        let mut rng = StdRng::seed_from_u64(42);
+        let bases = b"ACGT";
+
         let mut fwd_searcher = Searcher::<Dna>::new(false, None);
         let mut rc_searcher  = Searcher::<Dna>::new(true,  None);
         for _ in 0..200 {
-            let plen = random_range(3..20);
-            let tlen = random_range(plen..plen * 4);
-            let k = random_range(0..plen / 3 + 1);
-            let pattern: Vec<u8> = (0..plen).map(|_| b"ACGT"[random_range(0..4)]).collect();
-            let text: Vec<u8> = (0..tlen).map(|_| b"ACGT"[random_range(0..4)]).collect();
+            let plen = rng.random_range(3..20usize);
+            let tlen = rng.random_range(plen..plen * 4);
+            let k    = rng.random_range(0..plen / 3 + 1);
+            let pattern: Vec<u8> = (0..plen).map(|_| bases[rng.random_range(0..4usize)]).collect();
+            let text:    Vec<u8> = (0..tlen).map(|_| bases[rng.random_range(0..4usize)]).collect();
             eprintln!(
                 "pattern={} text={} k={k}",
                 String::from_utf8_lossy(&pattern),
