@@ -682,7 +682,6 @@ impl<P: Profile> Searcher<P> {
             k,
             &mut all_matches,
             false,
-            true,
             &mut |complete, m: &mut Match| {
                 if complete {
                     flat.push(m.clone());
@@ -1756,7 +1755,7 @@ mod tests {
             .filter(|m| m.strand == Strand::Fwd)
             .collect();
         searcher.iterate_all_alignments(
-            pattern, text, k, &mut fwd, false, false,
+            pattern, text, k, &mut fwd, false,
             &mut |complete, _m| {
                 assert!(complete, "callback fired for incomplete match with partial_matches=false");
                 Continuation::Continue
@@ -1776,7 +1775,7 @@ mod tests {
             .filter(|m| m.strand == Strand::Fwd)
             .collect();
         let mut saw_partial = false;
-        searcher.iterate_all_alignments(pattern, text, k, &mut fwd, true, false, &mut |complete, m| {
+        searcher.iterate_all_alignments(pattern, text, k, &mut fwd, true, &mut |complete, m| {
             if !complete {
                 saw_partial = true;
                 assert!(m.pattern_start > 0, "incomplete match should have pattern_start > 0");
@@ -1791,7 +1790,7 @@ mod tests {
         let searcher = Searcher::<Dna>::new(false, None);
         let mut called = false;
         searcher.iterate_all_alignments(
-            b"ACGT", b"ACGT", 1, &mut [], false, false,
+            b"ACGT", b"ACGT", 1, &mut [], false,
             &mut |_complete, _m| {
                 called = true;
                 Continuation::Continue
@@ -3448,12 +3447,12 @@ mod tests {
         let text = b"AAAAAAA";
         let k = 2;
 
-        let count = |pattern: &[u8], prune: bool| -> usize {
+        let count = |pattern: &[u8]| -> usize {
             let mut searcher = Searcher::<Iupac>::new(false, None);
             let mut matches = searcher.search_all(pattern, text, k);
             let mut n = 0;
             searcher.iterate_all_alignments(
-                pattern, text, k, &mut matches, false, prune,
+                pattern, text, k, &mut matches, false,
                 &mut |complete, _| {
                     if complete { n += 1; }
                     Continuation::Continue
@@ -3463,9 +3462,9 @@ mod tests {
         };
 
         assert_eq!(
-            count(b"NAAA", true),
-            count(b"AAAA", true),
-            "prune_suboptimal must use Profile::is_match, not raw ==, to handle N-containing patterns"
+            count(b"NAAA"),
+            count(b"AAAA"),
+            "must use Profile::is_match, not raw ==, to handle N-containing patterns"
         );
     }
 }
