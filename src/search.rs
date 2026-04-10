@@ -1940,8 +1940,8 @@ mod tests {
             let text:    Vec<u8> = (0..tlen).map(|_| bases[rng.random_range(0..4usize)]).collect();
             let rc_text = Dna::reverse_complement(&text);
 
-            let groups     = Searcher::<Dna>::new(true,  None).search_all_alignments(&pattern, &text,    k, false);
-            let groups_fwd = Searcher::<Dna>::new(false, None).search_all_alignments(&pattern, &rc_text, k, false);
+            let groups     = Searcher::<Dna>::new(true,  None).search_all_alignments(&pattern, &text,    k, 1.0);
+            let groups_fwd = Searcher::<Dna>::new(false, None).search_all_alignments(&pattern, &rc_text, k, 1.0);
 
             // Collect all RC matches as (text_start, text_end, cost, cigar).
             // The RC search of P against T internally aligns P against RC(T), reporting
