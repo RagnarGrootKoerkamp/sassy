@@ -1897,7 +1897,6 @@ mod tests {
 
     // --- search_all_alignments consistency tests ---
 
-    /// For each end position returned by `search_all`, verify that `search_all_alignments`:
     /// For each endpoint returned by `search_all`, verify that `search_all_alignments`:
     /// - produces exactly one group per endpoint (Fwd grouped by text_end, RC by text_start)
     /// - yields at least one alignment per group
