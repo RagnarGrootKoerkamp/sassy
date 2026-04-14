@@ -22,6 +22,19 @@ pub enum Continuation {
     Break,
 }
 
+fn net_insertions_since_last_match(cigar: &Cigar) -> i32 {
+    let mut net = 0i32;
+    for elem in cigar.ops.iter().rev() {
+        match elem.op {
+            CigarOp::Match => break,
+            CigarOp::Ins   => net += elem.cnt,
+            CigarOp::Del   => net -= elem.cnt,
+            CigarOp::Sub   => {} // ignore
+        }
+    }
+    net
+}
+
 /// (match_is_complete, (partial) match) -> continuation.
 pub trait Callback: FnMut(bool, &mut Match) -> Continuation {}
 
@@ -36,10 +49,6 @@ impl<P: Profile> Searcher<P> {
     /// forward-text coordinates before the callback fires.
     ///
     /// If `partial_matches` is `true`, the callback is called for *every* visited DFS state.
-    ///
-    /// If `prune_suboptimal` is `true`, path for which some part can be replaced by exact matches are skipped.
-    /// E.g., if `====` is an option, this will skip over `=I=D=`, and similarly, this will prefer `===...` over `=I=...`.
-    #[allow(clippy::too_many_arguments)]
     pub fn iterate_all_alignments<I: RcSearchAble + ?Sized>(
         &self,
         pattern: &[u8],
@@ -47,7 +56,6 @@ impl<P: Profile> Searcher<P> {
         k: usize,
         matches: &mut [Match],
         partial_matches: bool,
-        prune_suboptimal: bool,
         callback: &mut impl Callback,
     ) {
         assert_eq!(self.alpha, None, "Tracing all alignments with overhang is not yet implemented.");
@@ -61,7 +69,7 @@ impl<P: Profile> Searcher<P> {
 
         // --- Forward strand ---
         if !fwd.is_empty() {
-            self.iterate_one_strand(pattern, fwd_text, k, fwd, partial_matches, prune_suboptimal, callback, None);
+            self.iterate_one_strand(pattern, fwd_text, k, fwd, partial_matches, callback, None);
         }
 
         // --- Reverse-complement strand ---
@@ -89,12 +97,11 @@ impl<P: Profile> Searcher<P> {
             // RC matches are in fwd coords; pass flip=Some(fwd_len) so iterate_one_strand
             // derives rev-text endpoints on the fly without mutating the slice.
             self.iterate_one_strand(&comp_pattern, rev_text, k, rc,
-                                    partial_matches, prune_suboptimal, &mut rc_callback,
+                                    partial_matches, &mut rc_callback,
                                     Some(fwd_len));
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn iterate_one_strand(
         &self,
         pattern: &[u8],
@@ -102,7 +109,6 @@ impl<P: Profile> Searcher<P> {
         k: usize,
         matches: &[Match],
         partial_matches: bool,
-        prune_suboptimal: bool,
         callback: &mut impl Callback,
         flip: Option<usize>,
     ) {
@@ -191,7 +197,6 @@ impl<P: Profile> Searcher<P> {
                     m,
                     k,
                     partial_matches,
-                    prune_suboptimal,
                     callback,
                     last_row_in_diagonal,
                 };
@@ -209,7 +214,6 @@ struct Context<'s, C: Callback> {
     m: &'s mut Match,
     k: usize,
     partial_matches: bool,
-    prune_suboptimal: bool,
     callback: &'s mut C,
     last_row_in_diagonal: &'s mut Vec<pa_types::I>,
 }
@@ -260,35 +264,40 @@ impl<'s, C: Callback> Context<'s, C> {
                 continue;
             }
 
-            if self.prune_suboptimal {
-                // We may not *leave* a diagonal if it can be extended by exact matches to the top of the matrix.
-                if op == CigarOp::Ins || op == CigarOp::Del {
-                    let pat_slice = &self.pattern[..pos.1 as usize];
-                    let text_slice = &self.text[(pos.0 - pos.1).max(0) as usize..pos.0 as usize];
+            // We may not *leave* a diagonal if it can be extended by exact matches to the top of the matrix.
+            if op == CigarOp::Ins || op == CigarOp::Del {
+                let pat_slice = &self.pattern[..pos.1 as usize];
+                let text_slice = &self.text[(pos.0 - pos.1).max(0) as usize..pos.0 as usize];
+                if P::is_match_slice(pat_slice, text_slice) {
+                    continue;
+                }
+            }
+
+            // We may not *enter* a diagonal if it was reachable by exact matches from either:
+            // - the bottom of the matrix, or
+            // - the last time we were in this diagonal.
+            if op == CigarOp::Ins || op == CigarOp::Del {
+                // The last (most recent) row we visited in the `new_pos` diagonal.
+                // Defaults to `pattern.len()` for bottom of the matrix.
+                let last_in_diag = self.last_row_in_diagonal[new_pos.0 as usize
+                    + self.pattern.len()
+                    - self.range_start
+                    - new_pos.1 as usize];
+                let pat_slice = &self.pattern[new_pos.1 as usize..last_in_diag as usize];
+                let text_end = new_pos.0 as usize + pat_slice.len();
+                if text_end <= self.text.len() {
+                    let text_slice = &self.text[new_pos.0 as usize..text_end];
                     if P::is_match_slice(pat_slice, text_slice) {
                         continue;
                     }
                 }
+            }
 
-                // We may not *enter* a diagonal if it was reachable by exact matches from either:
-                // - the bottom of the matrix, or
-                // - the last time we were in this diagonal.
-                if op == CigarOp::Ins || op == CigarOp::Del {
-                    // The last (most recent) row we visited in the `new_pos` diagonal.
-                    // Defaults to `pattern.len()` for bottom of the matrix.
-                    let last_in_diag = self.last_row_in_diagonal[new_pos.0 as usize
-                        + self.pattern.len()
-                        - self.range_start
-                        - new_pos.1 as usize];
-                    let pat_slice = &self.pattern[new_pos.1 as usize..last_in_diag as usize];
-                    let text_end = new_pos.0 as usize + pat_slice.len();
-                    if text_end <= self.text.len() {
-                        let text_slice = &self.text[new_pos.0 as usize..text_end];
-                        if P::is_match_slice(pat_slice, text_slice) {
-                            continue;
-                        }
-                    }
-                }
+            // We may not have both inserted and deleted bases since the last match
+            // NB: This forces taking a diagonal path (subs) wherever possible
+            let net_ins = net_insertions_since_last_match(&self.m.cigar);
+            if (op == CigarOp::Ins && net_ins < 0) || (op == CigarOp::Del && net_ins > 0)  {
+                continue;
             }
 
             edges.push((op, total_cost));
@@ -296,6 +305,7 @@ impl<'s, C: Callback> Context<'s, C> {
 
         // Stable sort edges by total cost, preferring match/sub in case of ties.
         edges.sort_by_key(|(_, cost)| *cost);
+
 
         for (op, _cost) in edges {
             let delta = op.delta();
@@ -331,5 +341,46 @@ impl<'s, C: Callback> Context<'s, C> {
         }
 
         Continuation::Continue
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::net_insertions_since_last_match;
+    use pa_types::{Cigar, CigarOp};
+    use CigarOp::{Del as D, Ins as I, Match as M, Sub as X};
+
+    fn cigar(ops: &[pa_types::CigarOp]) -> Cigar {
+        let mut c = Cigar::default();
+        for &op in ops {
+            c.push(op);
+        }
+        c
+    }
+
+    #[test]
+    fn net_insertions_since_last_match_cases() {
+        let cases: &[(&[pa_types::CigarOp], i32)] = &[
+            (&[],                  0),  // empty cigar
+            (&[M],                 0),  // match resets immediately
+            (&[I, I, I],           3),  // all insertions, no anchor
+            (&[D, D],             -2),  // all deletions, no anchor
+            (&[M, I, I],           2),  // two I's after match
+            (&[M, D, D],          -2),  // two D's after match
+            (&[M, I, I, D],        1),  // net 2I − 1D
+            (&[M, I, I, D, D],     0),  // balanced
+            (&[I, X, D],           0),  // X is transparent: +1 − 1
+            (&[M, I, X, D],        0),  // X between I and D, after anchor
+            (&[M, X, X, I],        1),  // X's skipped, only I counted
+            (&[I, I, M, D, D],    -2),  // stop at M, only trailing DD visible
+            (&[M, D, M, I, I],     2),  // stop at second M, see II
+        ];
+        for &(ops, expected) in cases {
+            assert_eq!(
+                net_insertions_since_last_match(&cigar(ops)),
+                expected,
+                "ops = {ops:?}"
+            );
+        }
     }
 }

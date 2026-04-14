@@ -680,7 +680,7 @@ impl<P: Profile> Searcher<P> {
         pattern: &[u8],
         text: &I,
         k: usize,
-        prune_suboptimal: bool,
+        max_n_frac: f32,
     ) -> Vec<Vec<Match>> {
         let mut all_matches = self.search_all(pattern, text, k);
 
@@ -691,7 +691,6 @@ impl<P: Profile> Searcher<P> {
             k,
             &mut all_matches,
             false,
-            prune_suboptimal,
             &mut |complete, m: &mut Match| {
                 if complete {
                     flat.push(m.clone());
@@ -699,6 +698,14 @@ impl<P: Profile> Searcher<P> {
                 Continuation::Continue
             },
         );
+
+        let fwd_text = text.text();
+        let fwd_text = fwd_text.as_ref();
+        flat.retain(|m| {
+            let slice = &fwd_text[m.text_start..m.text_end];
+            let n_count = slice.iter().filter(|&&c| c.to_ascii_uppercase() == b'N').count() as f32;
+            n_count / slice.len() as f32 <= max_n_frac
+        });
 
         let anchor_key = |m: &Match| -> (Strand, usize) {
             match m.strand {
@@ -1671,7 +1678,7 @@ mod tests {
 
     #[test]
     fn exact_match() {
-        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(b"ACGT", b"ACGT", 0, false);
+        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(b"ACGT", b"ACGT", 0, 1.0);
         assert_eq!(groups.len(), 1);
         let m = &groups[0][0];
         assert_eq!(m.cost, 0);
@@ -1684,13 +1691,13 @@ mod tests {
 
     #[test]
     fn no_match() {
-        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(b"ACGT", b"TTTT", 2, false);
+        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(b"ACGT", b"TTTT", 2, 1.0);
         assert_eq!(groups.len(), 0);
     }
 
     #[test]
     fn multiple_alignments_one_end() {
-        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(b"AT", b"ACT", 1, false);
+        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(b"AT", b"ACT", 1, 1.0);
         let multi: Vec<_> = groups.iter().filter(|g| g.len() > 1).collect();
         assert_eq!(multi.len(), 1, "expected exactly one end position with >1 alignment");
         let aligns = multi[0];
@@ -1707,7 +1714,7 @@ mod tests {
 
     #[test]
     fn multiple_end_positions() {
-        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(b"AA", b"AAAA", 0, false);
+        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(b"AA", b"AAAA", 0, 1.0);
         assert_eq!(groups.len(), 3, "expected three end positions, got {}", groups.len());
         for group in &groups {
             assert_eq!(group.len(), 1);
@@ -1721,7 +1728,7 @@ mod tests {
     #[test]
     fn complete_matches_span_full_pattern() {
         let pattern = b"ACGT";
-        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(pattern, b"AACGTT", 2, false);
+        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(pattern, b"AACGTT", 2, 1.0);
         assert!(!groups.is_empty());
         for group in &groups {
             for m in group {
@@ -1737,7 +1744,7 @@ mod tests {
         let k = 3usize;
         let pattern = vec![b'A'; t + k];
         let text = vec![b'A'; t];
-        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(&pattern, &text, k, false);
+        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(&pattern, &text, k, 1.0);
         let total: usize = groups.iter().map(|g| g.len()).sum();
         // C(8, 3) = 56
         assert_eq!(total, 56, "expected C(8,3)=56 alignments, got {total}");
@@ -1755,7 +1762,7 @@ mod tests {
             .filter(|m| m.strand == Strand::Fwd)
             .collect();
         searcher.iterate_all_alignments(
-            pattern, text, k, &mut fwd, false, false,
+            pattern, text, k, &mut fwd, false,
             &mut |complete, _m| {
                 assert!(complete, "callback fired for incomplete match with partial_matches=false");
                 Continuation::Continue
@@ -1775,7 +1782,7 @@ mod tests {
             .filter(|m| m.strand == Strand::Fwd)
             .collect();
         let mut saw_partial = false;
-        searcher.iterate_all_alignments(pattern, text, k, &mut fwd, true, false, &mut |complete, m| {
+        searcher.iterate_all_alignments(pattern, text, k, &mut fwd, true, &mut |complete, m| {
             if !complete {
                 saw_partial = true;
                 assert!(m.pattern_start > 0, "incomplete match should have pattern_start > 0");
@@ -1790,7 +1797,7 @@ mod tests {
         let searcher = Searcher::<Dna>::new(false, None);
         let mut called = false;
         searcher.iterate_all_alignments(
-            b"ACGT", b"ACGT", 1, &mut [], false, false,
+            b"ACGT", b"ACGT", 1, &mut [], false,
             &mut |_complete, _m| {
                 called = true;
                 Continuation::Continue
@@ -1804,19 +1811,13 @@ mod tests {
         let pattern = b"AAAA";
         let text = b"AAAAAA";
         let k = 2;
-        let full = Searcher::<Dna>::new(false, None).search_all_alignments(pattern, text, k, false);
-        let pruned = Searcher::<Dna>::new(false, None).search_all_alignments(pattern, text, k, true);
-        let full_total: usize = full.iter().map(|g| g.len()).sum();
-        let pruned_total: usize = pruned.iter().map(|g| g.len()).sum();
-        // Exact counts: 97 unpruned (leading- and trailing-deletion paths excluded); 3 pruned (one per end at text_end=4,5,6).
-        assert_eq!(full_total, 97, "unexpected full alignment count");
-        assert_eq!(pruned_total, 3, "unexpected pruned alignment count");
-        for group in &pruned {
-            assert_eq!(group.len(), 1, "expected exactly 1 alignment per text_end with prune=true, got {}", group.len());
-        }
-        for group in &pruned {
+        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(pattern, text, k, 1.0);
+        // One group per end position (text_end=4,5,6), each with exactly one exact-match alignment.
+        assert_eq!(groups.iter().map(|g| g.len()).sum::<usize>(), 3, "unexpected alignment count");
+        for group in &groups {
+            assert_eq!(group.len(), 1, "expected exactly 1 alignment per text_end, got {}", group.len());
             let m = &group[0];
-            assert_eq!(m.cost, 0, "expected cost 0 for pruned homopolymer alignment, got {}", m.cost);
+            assert_eq!(m.cost, 0, "expected cost 0 for homopolymer alignment, got {}", m.cost);
             assert_eq!(
                 m.text_end - m.text_start,
                 m.pattern_end - m.pattern_start,
@@ -1838,7 +1839,7 @@ mod tests {
         let text = b"XACGTX";
         let k = 1;
         for &rc in &[false, true] {
-            let groups = Searcher::<Dna>::new(rc, None).search_all_alignments(pattern, text, k, false);
+            let groups = Searcher::<Dna>::new(rc, None).search_all_alignments(pattern, text, k, 1.0);
             for group in &groups {
                 for m in group {
                     let cigar = m.cigar.to_string();
@@ -1859,42 +1860,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn pruned_is_subset_of_full() {
-        use std::collections::HashSet;
-        let cases: &[(&[u8], &[u8], usize)] = &[
-            (b"AAAA", b"AAAAAA", 2),
-            (b"TTTT", b"AAAAAA", 2),
-            (b"ACGT", b"AACGTT", 2),
-            (b"AT", b"ACT", 1),
-            (b"AA", b"AAAA", 1),
-        ];
-        for &(pattern, text, k) in cases {
-            let full = Searcher::<Dna>::new(false, None).search_all_alignments(pattern, text, k, false);
-            let pruned = Searcher::<Dna>::new(false, None).search_all_alignments(pattern, text, k, true);
-            for pruned_group in &pruned {
-                let end = pruned_group[0].text_end;
-                let full_group = full
-                    .iter()
-                    .find(|g| g[0].text_end == end)
-                    .unwrap_or_else(|| panic!("pruned group at text_end={end} has no corresponding full group"));
-                let full_keys: HashSet<(usize, String)> = full_group
-                    .iter()
-                    .map(|m| (m.text_start, m.cigar.to_string()))
-                    .collect();
-                for m in pruned_group {
-                    assert!(
-                        full_keys.contains(&(m.text_start, m.cigar.to_string())),
-                        "pruned alignment not found in full set: pattern={} text={} k={k} text_end={end} cigar={}",
-                        std::str::from_utf8(pattern).unwrap(),
-                        std::str::from_utf8(text).unwrap(),
-                        m.cigar.to_string()
-                    );
-                }
-            }
-        }
-    }
-
     // --- search_all_alignments consistency tests ---
 
     /// For each endpoint returned by `search_all`, verify that `search_all_alignments`:
@@ -1904,7 +1869,7 @@ mod tests {
     /// - the first alignment matches the greedy traceback (text_start and CIGAR)
     fn assert_consistent_with_search_all(searcher: &mut Searcher<Dna>, pattern: &[u8], text: &[u8], k: usize) {
         let all_matches = searcher.search_all(pattern, text, k);
-        let groups = searcher.search_all_alignments(pattern, text, k, false);
+        let groups = searcher.search_all_alignments(pattern, text, k, 1.0);
 
         // Endpoints with only leading-deletion paths produce no group, so groups.len() <= all_matches.len().
         assert!(
@@ -1975,8 +1940,8 @@ mod tests {
             let text:    Vec<u8> = (0..tlen).map(|_| bases[rng.random_range(0..4usize)]).collect();
             let rc_text = Dna::reverse_complement(&text);
 
-            let groups     = Searcher::<Dna>::new(true,  None).search_all_alignments(&pattern, &text,    k, false);
-            let groups_fwd = Searcher::<Dna>::new(false, None).search_all_alignments(&pattern, &rc_text, k, false);
+            let groups     = Searcher::<Dna>::new(true,  None).search_all_alignments(&pattern, &text,    k, 1.0);
+            let groups_fwd = Searcher::<Dna>::new(false, None).search_all_alignments(&pattern, &rc_text, k, 1.0);
 
             // Collect all RC matches as (text_start, text_end, cost, cigar).
             // The RC search of P against T internally aligns P against RC(T), reporting
@@ -2031,6 +1996,20 @@ mod tests {
             assert_consistent_with_search_all(&mut fwd_searcher, &pattern, &text, k);
             assert_consistent_with_search_all(&mut rc_searcher,  &pattern, &text, k);
         }
+    }
+
+    #[test]
+    fn n_frac_filtering() {
+        // Iupac profile handles N bases in the aligned region.
+        // max_n_frac=0.0: all-N aligned region must be rejected.
+        let groups = Searcher::<Iupac>::new(false, None)
+            .search_all_alignments(b"ACGT", b"NNNN", 4, 0.0);
+        assert!(groups.is_empty(), "expected no groups when all bases are N and max_n_frac=0.0");
+
+        // max_n_frac=1.0: same query should produce matches.
+        let groups = Searcher::<Iupac>::new(false, None)
+            .search_all_alignments(b"ACGT", b"NNNN", 4, 1.0);
+        assert!(!groups.is_empty(), "expected groups when N filtering is disabled (max_n_frac=1.0)");
     }
 
     #[test]
@@ -3475,12 +3454,12 @@ mod tests {
         let text = b"AAAAAAA";
         let k = 2;
 
-        let count = |pattern: &[u8], prune: bool| -> usize {
+        let count = |pattern: &[u8]| -> usize {
             let mut searcher = Searcher::<Iupac>::new(false, None);
             let mut matches = searcher.search_all(pattern, text, k);
             let mut n = 0;
             searcher.iterate_all_alignments(
-                pattern, text, k, &mut matches, false, prune,
+                pattern, text, k, &mut matches, false,
                 &mut |complete, _| {
                     if complete { n += 1; }
                     Continuation::Continue
@@ -3490,9 +3469,9 @@ mod tests {
         };
 
         assert_eq!(
-            count(b"NAAA", true),
-            count(b"AAAA", true),
-            "prune_suboptimal must use Profile::is_match, not raw ==, to handle N-containing patterns"
+            count(b"NAAA"),
+            count(b"AAAA"),
+            "must use Profile::is_match, not raw ==, to handle N-containing patterns"
         );
     }
 }
