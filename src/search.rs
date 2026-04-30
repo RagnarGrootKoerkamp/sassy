@@ -293,23 +293,14 @@ impl<'t> MultiPattern<'t> {
 }
 
 #[derive(Clone, Copy)]
-enum MultiRcText<'x, I: RcSearchAble + ?Sized> {
+enum MultiRcText<'x, I: RcSearchAble + ?Sized, Is: RcSearchAble> {
     One(&'x I),
-    Multi(&'x [&'x I]),
+    Multi(&'x [Is]),
 }
 
-impl<'x, I: RcSearchAble + ?Sized> MultiRcText<'x, I> {
+impl<'x, I: RcSearchAble + ?Sized> MultiRcText<'x, I, &[u8]> {
     fn one(t: &'x I) -> Self {
         MultiRcText::One(t)
-    }
-}
-
-impl<'x, I: RcSearchAble + ?Sized> MultiRcText<'x, I> {
-    fn get_lane(&self, lane: usize) -> Option<&I> {
-        match self {
-            MultiRcText::One(t) => Some(t),
-            MultiRcText::Multi(ts) => ts.as_ref().get(lane).copied(),
-        }
     }
 }
 
@@ -505,10 +496,10 @@ impl<P: Profile> Searcher<P> {
     /// Search each given pattern in each given text, using the algorithms given by `mode` (see [`SearchMode`]).
     ///
     /// Does multithreading using `rayon`.
-    pub fn search_many<PAT: AsRef<[u8]> + Sync, I: RcSearchAble + ?Sized + Sync>(
+    pub fn search_many<PAT: AsRef<[u8]> + Sync, I: RcSearchAble + Sync>(
         &mut self,
         patterns: &[PAT],
-        texts: &[&I],
+        texts: &[I],
         k: usize,
         num_threads: usize,
         mode: SearchMode,
@@ -523,7 +514,7 @@ impl<P: Profile> Searcher<P> {
                     texts,
                     self,
                     |searcher, pattern, text, pi, ti| {
-                        let mut matches = searcher.search(pattern.as_ref(), *text, k);
+                        let mut matches = searcher.search(pattern.as_ref(), text, k);
                         matches.iter_mut().for_each(move |m| {
                             m.pattern_idx = pi;
                             m.text_idx = ti;
@@ -539,7 +530,7 @@ impl<P: Profile> Searcher<P> {
                         texts,
                         self,
                         |searcher, pattern_batch, text, pbi, ti| {
-                            let mut matches = searcher.search_patterns(pattern_batch, *text, k);
+                            let mut matches = searcher.search_patterns(pattern_batch, text, k);
                             matches.iter_mut().for_each(move |m| {
                                 m.pattern_idx += pbi * LANES;
                                 m.text_idx = ti;
@@ -550,7 +541,7 @@ impl<P: Profile> Searcher<P> {
                 }
 
                 SearchMode::BatchTexts => {
-                    let text_batches: Vec<&[&I]> = texts.chunks(LANES).collect();
+                    let text_batches: Vec<&[I]> = texts.chunks(LANES).collect();
 
                     map_collect_cartesian_product(
                         patterns,
@@ -582,17 +573,17 @@ impl<P: Profile> Searcher<P> {
     /// Returns a vector of (text index, match).
     ///
     /// Use `early_break_below` to return the best values as soon as a match is at least that good.
-    pub fn search_texts<I: RcSearchAble + ?Sized>(
+    pub fn search_texts<I: RcSearchAble>(
         &mut self,
         pattern: &[u8],
-        texts: &[&I],
+        texts: &[I],
         k: usize,
     ) -> Vec<Match> {
         self.matches.clear();
         for (i, chunk) in texts.chunks(LANES).enumerate() {
             let chunk_matches = self.search_handle_rc(
                 MultiPattern::one(pattern),
-                MultiRcText::Multi(chunk),
+                MultiRcText::<I, I>::Multi(chunk),
                 k,
                 false,
                 None::<fn(&[u8], &[u8], Strand) -> bool>,
@@ -634,7 +625,7 @@ impl<P: Profile> Searcher<P> {
                 std::array::from_fn(|lane| chunk.get(lane).map(|p| p.as_ref()).unwrap_or(&[]));
             let chunk_matches = self.search_handle_rc(
                 MultiPattern::Multi(&slice_chunk[..chunk.len()]),
-                MultiRcText::One(text),
+                MultiRcText::one(text),
                 k,
                 false,
                 None::<fn(&[u8], &[u8], Strand) -> bool>,
@@ -700,10 +691,10 @@ impl<P: Profile> Searcher<P> {
     }
 
     /// Appends results to `self.idx_matches`.
-    fn search_handle_rc<I: RcSearchAble + ?Sized>(
+    fn search_handle_rc<'a, I: RcSearchAble + ?Sized, Is: RcSearchAble>(
         &mut self,
         pattern: MultiPattern,
-        text: MultiRcText<I>,
+        text: MultiRcText<'a, I, Is>,
         k: usize,
         all_minima: bool,
         filter_fn: Option<impl Fn(&[u8], &[u8], Strand) -> bool>,
@@ -777,8 +768,10 @@ impl<P: Profile> Searcher<P> {
                 // Also adjust start and end positions to original text orientation
                 let rc_start = m.text_start;
                 let rc_end = m.text_end;
-                let t = text.get_lane(m.text_idx).unwrap();
-                let len = t.text().as_ref().len();
+                let len = match text {
+                    MultiRcText::One(t) => t.text().as_ref().len(),
+                    MultiRcText::Multi(ts) => ts[m.text_idx].text().as_ref().len(),
+                };
                 m.text_start = len - rc_end;
                 if without_trace {
                     m.text_end = usize::MAX;
@@ -2959,7 +2952,7 @@ mod tests {
                         .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>();
-            let texts = texts.iter().map(|t| t.as_slice()).collect_vec();
+
             // for text in &texts {
             //     eprintln!("Text: {:?}", String::from_utf8_lossy(text));
             // }
