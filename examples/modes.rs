@@ -43,7 +43,6 @@ fn main() {
     let texts: Vec<Vec<u8>> = (0..t)
         .map(|_| (0..n).map(|_| b"ACGT"[rng.random_range(0..4)]).collect())
         .collect();
-    let texts: Vec<&[u8]> = texts.iter().map(|t| t.as_slice()).collect();
     let patterns: Vec<Vec<u8>> = (0..p)
         .map(|_| (0..m).map(|_| b"ACGT"[rng.random_range(0..4)]).collect())
         .collect();

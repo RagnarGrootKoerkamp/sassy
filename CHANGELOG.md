@@ -3,6 +3,10 @@
 <!-- next-header -->
 
 ## git
+- `search_many` and `search_texts` now accept any slice of where the elements
+  implement `RcSearchable`, not just a slice of references to a type implementing
+  `RcSearchable`. This means that in some cases there is no need to create a
+  temporary Vec just to hold texts references.
 
 ## 0.2.2
 - Build GitHub x86-64 binaries for both AVX2 and AVX-512 using [`cargo multivers`](https://github.com/ronnychevalier/cargo-multivers).

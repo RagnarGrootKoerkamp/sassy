@@ -78,9 +78,7 @@ impl Searcher {
         threads: usize,
         mode: &Bound<'_, PyString>,
     ) -> Vec<Match> {
-        let patterns: Vec<&[u8]> = patterns.iter().map(|p| p.as_bytes()).collect();
-        let texts: Vec<&[u8]> = texts.iter().map(|t| t.as_bytes()).collect();
-        // We don't let control go back to Python while we hold the slices.
+        // We don't let control go back to Python while we hold patterns and texts.
         let mode = match mode.to_string_lossy().as_ref() {
             "single" => search::SearchMode::Single,
             "batch_patterns" => search::SearchMode::BatchPatterns,
