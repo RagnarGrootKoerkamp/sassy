@@ -30,7 +30,8 @@ Feature highlights:
 - Support for (case-insensitive) ASCII, DNA (`ACGT`), and
   [IUPAC](https://www.bioinformatics.org/sms/iupac.html) (=`ACGT+NYR...`) alphabets.
 - Rust library (`cargo add sassy`), binary (`cargo install sassy`, see details below), Python
-  bindings (`pip install sassy-rs`), and C bindings (see below).
+  bindings (`pip install sassy-rs`), R bindings ([`Rsassy`](https://github.com/sounkou-bioinfo/Rsassy)),
+  and C bindings (see below).
 
 See **the papers**, [detailed docs on docs.rs](https://docs.rs/sassy/latest/sassy/), and corresponding evals in [evals/](evals/):
 
@@ -87,7 +88,7 @@ Sassy requires Rust 1.91 or newer. Get it via `rustup update`. (Switch to
 
 ## Usage
 
-Sassy can be used via the CLI, or as Rust, Python, or C library.
+Sassy can be used via the CLI, or as Rust, Python, R, or C library.
 
 ### 0. Rust library
 
@@ -310,7 +311,12 @@ for m in matches:
 
 See [python/README.md](python/README.md) for more details.
 
-### 3. C library
+### 3. R bindings
+
+R bindings are maintained separately in [`Rsassy`](https://github.com/sounkou-bioinfo/Rsassy).
+See the [Rsassy package site](https://sounkou-bioinfo.github.io/Rsassy/) for installation and examples.
+
+### 4. C library
 
 See [c/README.md](c/README.md) for details. Quick example:
 
