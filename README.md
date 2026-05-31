@@ -313,7 +313,7 @@ See [python/README.md](python/README.md) for more details.
 
 ### 3. R bindings
 
-R bindings are maintained separately in [`Rsassy`](https://github.com/sounkou-bioinfo/Rsassy).
+Third-party R bindings can be found at [`Rsassy`](https://github.com/sounkou-bioinfo/Rsassy).
 See the [Rsassy package site](https://sounkou-bioinfo.github.io/Rsassy/) for installation and examples.
 
 ### 4. C library
