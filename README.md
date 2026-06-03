@@ -33,19 +33,20 @@ Feature highlights:
   bindings (`pip install sassy-rs`), R bindings ([`Rsassy`](https://github.com/sounkou-bioinfo/Rsassy)),
   and C bindings (see below).
 
-See **the papers**, [detailed docs on docs.rs](https://docs.rs/sassy/latest/sassy/), and corresponding evals in [evals/](evals/):
+See [the detailed docs on docs.rs](https://docs.rs/sassy/latest/sassy/),
+corresponding evals in [evals/](evals/), and the **papers**:
+
+> Rick Beeloo and Ragnar Groot Koerkamp.  
+> Sassy: fuzzy Searching DNA Sequences using SIMD  
+> Bioinformatics, May 2026.  
+> https://doi.org/10.1093/bioinformatics/btag244 
+
+and
 
 > Rick Beeloo and Ragnar Groot Koerkamp.  
 > Sassy2: Batch Searching of Short DNA Patterns  
 > bioRxiv, March 2026.  
 > https://doi.org/10.64898/2026.03.10.710811
-
-and
-
-> Rick Beeloo and Ragnar Groot Koerkamp.  
-> Sassy: Fuzzy Searching DNA Sequences using SIMD  
-> bioRxiv, July 2025.  
-> https://doi.org/10.1101/2025.07.22.666207
 
 ## Installation
 
