@@ -148,6 +148,7 @@ pub use pattern_tiling::general::EncodedPatterns;
 pub use search::CachedRev;
 pub use search::Match;
 pub use search::RcSearchAble;
+pub use search::SearchMode;
 pub use search::Searcher;
 pub use search::Strand;
 
