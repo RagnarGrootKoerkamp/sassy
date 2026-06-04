@@ -396,7 +396,7 @@ impl<P: Profile> Searcher<P> {
         self.pattern_tiling_searcher.encode(patterns, self.rc)
     }
 
-    /// Returns a match for each *rightmost local pattern_tilingmum* end position with score <=k.
+    /// Returns a match for each *rightmost local minimum* end position with score <=k.
     ///
     /// This avoids reporting matches that completely overlap apart from a few characters at the ends.
     ///
