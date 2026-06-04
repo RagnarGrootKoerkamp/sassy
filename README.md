@@ -303,7 +303,7 @@ import sassy
 pattern = b"ACTG"
 text    = b"ACGGCTACGCAGCATCATCAGCAT"
 
-searcher = sassy.Searcher("dna") # ascii / dna / iupac
+searcher = sassy.Searcher("iupac") # ascii / dna / iupac
 matches  = searcher.search(pattern, text, k=1)
 
 for m in matches:
