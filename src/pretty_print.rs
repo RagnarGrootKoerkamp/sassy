@@ -74,6 +74,7 @@ pub enum PrettyPrintDirection {
 pub enum PrettyPrintStyle {
     Compact,
     Full,
+    Line,
 }
 
 impl Match {
@@ -83,8 +84,8 @@ impl Match {
     pub fn pretty_print(
         &self,
         pattern_id: Option<&str>,
-        mut _pattern: &[u8],
-        mut _text: &[u8],
+        pattern: &[u8],
+        text: &[u8],
         dir: PrettyPrintDirection,
         context: usize,
         style: PrettyPrintStyle,
@@ -93,8 +94,9 @@ impl Match {
         let mut m = self.clone();
         let rc_pat;
         let rc_text;
-        let mut pattern = _pattern;
-        let mut text = _text;
+        // Required to make the borrow checker happy.
+        let mut text = text;
+        let mut pattern = pattern;
         match (self.strand, dir) {
             (Strand::Rc, PrettyPrintDirection::Pattern) => {
                 rc_text = Iupac::reverse_complement(text);
@@ -192,6 +194,37 @@ impl Match {
                 match_string,
                 String::from_utf8_lossy(suffix),
             ),
+            PrettyPrintStyle::Line => {
+                // Find the start of the line containing the match.
+                let mut line_start = m.text_start + 1;
+                for _ in 0..context + 1 {
+                    if let Some(pos) = memchr::memrchr(b'\n', &text[..line_start - 1]) {
+                        line_start = pos + 1;
+                    } else {
+                        line_start = 0;
+                        break;
+                    }
+                }
+
+                let mut line_end = m.text_end - 1;
+                for _ in 0..context + 1 {
+                    if let Some(pos) = memchr::memchr(b'\n', &text[line_end + 1..]) {
+                        line_end += pos + 1;
+                    } else {
+                        line_end = text.len() - 1;
+                        break;
+                    }
+                }
+
+                let line_prefix = &text[line_start..m.text_start];
+                let line_suffix = &text[m.text_end..line_end];
+                format!(
+                    "{}{}{}",
+                    String::from_utf8_lossy(line_prefix),
+                    match_string,
+                    String::from_utf8_lossy(line_suffix),
+                )
+            }
         }
     }
 }

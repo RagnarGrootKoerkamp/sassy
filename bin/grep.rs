@@ -1,19 +1,18 @@
 use std::{
     collections::VecDeque,
     fs::File,
-    io::{BufRead, Write},
+    io::{BufRead, Read, Write},
     path::{Path, PathBuf},
     sync::Mutex,
 };
 
 use colored::Colorize;
-use either::Either;
 use needletail::parse_fastx_file;
 use pa_types::Cigar;
 use sassy::{
     Match, Searcher, Strand,
     pretty_print::{PrettyPrintDirection, PrettyPrintStyle},
-    profiles::{Dna, Iupac, Profile},
+    profiles::{Ascii, Dna, Iupac, Profile},
 };
 
 use crate::{
@@ -69,7 +68,7 @@ pub struct BaseArgs {
 
     /// The alphabet to use. DNA=ACTG, or default IUPAC=ACTG+NYR....
     ///
-    /// ASCII is not yet supported.
+    /// Use `agrep` for ascii.
     #[arg(
         long,
         short = 'a',
@@ -120,7 +119,7 @@ pub struct GrepArgs {
     #[command(flatten)]
     base: BaseArgs,
 
-    /// Number of characters (or lines, for ASCII) to print before/after each match.
+    /// Number of characters to print before/after each match.
     #[arg(short = 'C', long, default_value_t = 20)]
     context: usize,
 
@@ -131,6 +130,23 @@ pub struct GrepArgs {
     /// Filtered output file. Empty or "-" for stdout.
     #[arg(long, default_missing_value = "-", num_args(0..=1))]
     filter: Option<PathBuf>,
+}
+
+/// Thin mirror of `GrepArgs` for lightweight `agrep` subcommand.
+#[derive(clap::Parser, Clone)]
+pub struct AGrepArgs {
+    /// The pattern to search for.
+    pattern: String,
+
+    /// Report matches up to (and including) this distance threshold.
+    k: usize,
+
+    /// Number of lines to print before/after each match.
+    #[arg(short = 'C', long, default_value_t = 0)]
+    context: usize,
+
+    /// Input files. Empty or "-" for stdin.
+    paths: Vec<PathBuf>,
 }
 
 #[derive(clap::Parser, Clone)]
@@ -179,6 +195,132 @@ impl GrepArgs {
             filter,
         }
         .run()
+    }
+}
+
+impl AGrepArgs {
+    pub fn run(self) {
+        let pattern = self.pattern.as_bytes();
+
+        let num_threads = num_cpus::get();
+
+        let output = Mutex::new((
+            0,
+            VecDeque::<Option<Vec<(&PathBuf, Vec<u8>, Vec<Match>)>>>::new(),
+        ));
+        let global_histogram = Mutex::new(vec![0usize; self.k + 1]);
+
+        // Grep writer is stderr
+        // Ensure colours are always used.
+        colored::control::set_override(true);
+
+        let path_iter = &Mutex::new(self.paths.iter().enumerate());
+
+        std::thread::scope(|s| {
+            for _ in 0..num_threads {
+                let output = &output;
+                let global_histogram = &global_histogram;
+                s.spawn(move || {
+                    // Each thread has own searcher here
+                    let mut searcher = Searcher::<Ascii>::new_fwd();
+
+                    let mut results = vec![];
+                    let mut local_histogram = vec![0usize; self.k + 1];
+
+                    while let Some((path_id, path)) = path_iter.lock().unwrap().next() {
+                        let mut text = Vec::new();
+                        if path.to_str() == Some("-") || path.to_str() == Some("") {
+                            std::io::stdin().read_to_end(&mut text).unwrap();
+                        } else {
+                            File::open(path)
+                                .unwrap()
+                                .read_to_end(&mut text)
+                                .expect("valid input file");
+                        };
+
+                        let matches = searcher.search(pattern, &text, self.k);
+
+                        if matches.is_empty() {
+                            continue;
+                        }
+                        results.push((path, text, matches));
+
+                        for (_path, _text, matches) in &results {
+                            for m in matches {
+                                local_histogram[m.cost as usize] += 1;
+                            }
+                        }
+
+                        let (next_path_id, output_buf) = &mut *output.lock().unwrap();
+
+                        // Push to buffer.
+                        let idx = path_id - *next_path_id;
+                        if output_buf.len() <= idx {
+                            output_buf.resize_with(idx + 1, || None);
+                        }
+                        assert!(output_buf[idx].is_none());
+                        output_buf[idx] = Some(results);
+                        results = vec![];
+
+                        // Print pending results once ready.
+                        while let Some(front) = output_buf.front()
+                            && front.is_some()
+                        {
+                            *next_path_id += 1;
+                            let front_results = output_buf.pop_front().unwrap().unwrap();
+                            for (path, text, mut matches) in front_results {
+                                // Write the matches.
+                                matches.sort_by_key(|m| m.text_start);
+                                // Print matches for path.
+                                eprintln!(
+                                    "{}",
+                                    format!("{}:", path.display().to_string().cyan().bold(),)
+                                        .bold()
+                                );
+                                for m in matches {
+                                    let s = m.pretty_print(
+                                        Some(""),
+                                        pattern,
+                                        &text,
+                                        PrettyPrintDirection::Text,
+                                        self.context,
+                                        PrettyPrintStyle::Line,
+                                    );
+                                    eprintln!("{s}");
+                                    if self.context > 0 {
+                                        eprintln!("{}", "---".cyan());
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Merge local histogram into global histogram.
+                    let mut global_hist = global_histogram.lock().unwrap();
+                    for dist in 0..=self.k {
+                        global_hist[dist] += local_histogram[dist];
+                    }
+                });
+            }
+        });
+
+        let global_hist = global_histogram.into_inner().unwrap();
+        eprint!(
+            "\nStatistics: total {}, ",
+            global_hist.iter().sum::<usize>().to_string().bold()
+        );
+        for (dist, &count) in global_hist.iter().enumerate() {
+            if count > 0 {
+                eprint!(
+                    "dist {} => {}, ",
+                    dist.to_string().bold(),
+                    count.to_string().bold()
+                );
+            }
+        }
+        eprintln!();
+
+        assert!(output.into_inner().unwrap().1.is_empty());
     }
 }
 
@@ -337,11 +479,18 @@ impl Args {
                 let filter_writer = filter_writer.as_ref();
                 let match_writer = match_writer.as_ref();
                 s.spawn(move || {
+                    enum SearcherType {
+                        Dna(Searcher<Dna>),
+                        Iupac(Searcher<Iupac>),
+                    }
+
                     // Each thread has own searcher here
                     let mut searcher = match &args.base.alphabet {
-                        Alphabet::Dna => Either::Left(Searcher::<Dna>::new(rc, args.base.overhang)),
+                        Alphabet::Dna => {
+                            SearcherType::Dna(Searcher::<Dna>::new(rc, args.base.overhang))
+                        }
                         Alphabet::Iupac => {
-                            Either::Right(Searcher::<Iupac>::new(rc, args.base.overhang))
+                            SearcherType::Iupac(Searcher::<Iupac>::new(rc, args.base.overhang))
                         }
                     };
 
@@ -353,7 +502,7 @@ impl Args {
 
                         if args.base.v2 {
                             match &mut searcher {
-                                Either::Left(s) => run_batch_v2(
+                                SearcherType::Dna(s) => run_batch_v2(
                                     s,
                                     &mut results,
                                     path,
@@ -362,7 +511,7 @@ impl Args {
                                     k,
                                     args.base.max_n_frac,
                                 ),
-                                Either::Right(s) => run_batch_v2(
+                                SearcherType::Iupac(s) => run_batch_v2(
                                     s,
                                     &mut results,
                                     path,
@@ -377,8 +526,12 @@ impl Args {
                                 let mut batch_matches = vec![];
                                 for pattern in batch.1 {
                                     let record_matches = match &mut searcher {
-                                        Either::Left(s) => s.search(&pattern.seq, &text.seq, k),
-                                        Either::Right(s) => s.search(&pattern.seq, &text.seq, k),
+                                        SearcherType::Dna(s) => {
+                                            s.search(&pattern.seq, &text.seq, k)
+                                        }
+                                        SearcherType::Iupac(s) => {
+                                            s.search(&pattern.seq, &text.seq, k)
+                                        }
                                     };
                                     batch_matches.extend(
                                         record_matches

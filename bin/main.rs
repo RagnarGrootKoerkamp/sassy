@@ -12,6 +12,8 @@ enum Args {
     ///
     /// Fasta/Fastq record based for DNA/IUPAC, line-based for ASCII.
     Grep(grep::GrepArgs),
+    /// ASCII variant of grep.
+    Agrep(grep::AGrepArgs),
     /// Like Grep, but output a .tsv with locations of matches.
     Search(grep::SearchArgs),
     /// Like Grep, but records containing a match.
@@ -32,6 +34,7 @@ fn main() {
 
     match args {
         Args::Grep(args) => args.run(),
+        Args::Agrep(args) => args.run(),
         Args::Search(args) => args.run(),
         Args::Filter(args) => args.run(),
         Args::Crispr(crispr_args) => crispr(&crispr_args),
