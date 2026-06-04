@@ -3,6 +3,8 @@
 <!-- next-header -->
 
 ## git
+
+## 0.2.3
 - Add grep-like `sassy agrep` for searching plain-text files.
 - `search_many` and `search_texts` now accept any slice where the elements
   implement `RcSearchable`, not just a slice of references to a type implementing
