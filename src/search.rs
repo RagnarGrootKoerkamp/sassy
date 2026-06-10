@@ -675,6 +675,20 @@ impl<P: Profile> Searcher<P> {
     ) -> Vec<Vec<Match>> {
         let mut all_matches = self.search_all(pattern, text, k);
 
+        // NB: this pre-filtering allows skipping matches in N-dense regions where it is impossible for
+        // the alignment to satisfy the `max_n_frac` restriction.
+        let fwd_text = text.text();
+        let fwd_text = fwd_text.as_ref();
+        if max_n_frac < 1.0 {
+            let ns_prefix_sum: Vec<u32> = std::iter::once(0u32)
+                .chain(fwd_text.iter().map(|&c| c.eq_ignore_ascii_case(&b'N') as u32))
+                .scan(0u32, |acc, x| { *acc += x; Some(*acc) })
+                .collect();
+            all_matches.retain(|m| {
+                match_may_satisfy_n_frac(m, &ns_prefix_sum, fwd_text.len(), pattern.len(), k, max_n_frac)
+            });
+        }
+
         let mut flat: Vec<Match> = Vec::new();
         self.iterate_all_alignments(
             pattern,
@@ -690,11 +704,10 @@ impl<P: Profile> Searcher<P> {
             },
         );
 
-        let fwd_text = text.text();
-        let fwd_text = fwd_text.as_ref();
+        // Safety net: catches boundary alignments the pre-filter can't rule out via the mandatory suffix alone.
         flat.retain(|m| {
             let slice = &fwd_text[m.text_start..m.text_end];
-            let n_count = slice.iter().filter(|&&c| c.to_ascii_uppercase() == b'N').count() as f32;
+            let n_count = slice.iter().filter(|&&c| c.eq_ignore_ascii_case(&b'N')).count() as f32;
             n_count / slice.len() as f32 <= max_n_frac
         });
 
@@ -1659,6 +1672,32 @@ pub(crate) fn init_deltas_for_overshoot_all_lanes(
     }
 }
 
+/// Returns `true` if `m` could possibly produce an alignment satisfying `max_n_frac`.
+///
+/// Uses the mandatory-suffix lower bound: any alignment of cost <= k must cover at least
+/// `mandatory_suffix = text[end - pattern_length + k: end]`, so the N-fraction is
+/// bounded below by `count_ns(mandatory_suffix) / (pattern_len + k)``.
+fn match_may_satisfy_n_frac(
+    m: &Match,
+    ns_prefix_sum: &[u32],
+    text_len: usize,
+    pattern_len: usize,
+    k: usize,
+    max_n_frac: f32,
+) -> bool {
+    let (start, end) = match m.strand {
+        Strand::Fwd => {
+            let end = m.text_end;
+            (end.saturating_sub(pattern_len.saturating_sub(k)), end)
+        }
+        Strand::Rc => {
+            let start = m.text_start;
+            (start, (start + pattern_len.saturating_sub(k)).min(text_len))
+        }
+    };
+    (ns_prefix_sum[end] - ns_prefix_sum[start]) as f32 <= max_n_frac * (pattern_len + k) as f32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2003,6 +2042,95 @@ mod tests {
         let groups = Searcher::<Iupac>::new(false, None)
             .search_all_alignments(b"ACGT", b"NNNN", 4, 1.0);
         assert!(!groups.is_empty(), "expected groups when N filtering is disabled (max_n_frac=1.0)");
+    }
+
+    #[test]
+    fn n_frac_prefilter_dense_n_skipped_fwd() {
+        // pattern_len=10, k=2 → mandatory suffix len = 10-2 = 8
+        // all-N text: 8 Ns in suffix → N/(10+2) = 8/12 ≈ 0.667 > max_n_frac=0.5
+        // Pre-filter should eliminate all endpoints → empty result.
+        let groups = Searcher::<Iupac>::new(false, None)
+            .search_all_alignments(b"ACGTACGTAC", b"NNNNNNNNNN", 2, 0.5);
+        assert!(groups.is_empty(), "expected no groups for all-N text (fwd, max_n_frac=0.5)");
+    }
+
+    #[test]
+    fn n_frac_prefilter_real_sequence_passthrough() {
+        // No N bases in text: pre-filter should pass all endpoints through.
+        // Results with max_n_frac=0.5 must equal results with max_n_frac=1.0.
+        let pattern = b"ACGTACGT";
+        let text = b"AACGTACGTTT";
+        let k = 1;
+        let groups_filtered = Searcher::<Dna>::new(false, None)
+            .search_all_alignments(pattern, text, k, 0.5);
+        let groups_unfiltered = Searcher::<Dna>::new(false, None)
+            .search_all_alignments(pattern, text, k, 1.0);
+        assert_eq!(
+            groups_filtered.len(),
+            groups_unfiltered.len(),
+            "pre-filter should not drop matches from N-free text"
+        );
+        for (a, b) in groups_filtered.iter().zip(groups_unfiltered.iter()) {
+            assert_eq!(a.len(), b.len());
+        }
+    }
+
+    #[test]
+    fn n_frac_prefilter_real_match_after_n_run_not_discarded() {
+        // Text: 8 Ns then "ACGTACGT" (pattern len=8, k=1).
+        // Endpoint at text_end=16 (after the real match): mandatory suffix = [9,16], N count=0 → passes.
+        // Endpoints within the N-run: mandatory suffix contains ≥7 Ns → N/(8+1)≈0.78 > max_n_frac=0.4 → filtered.
+        let pattern = b"ACGTACGT";
+        let text = b"NNNNNNNNACGTACGT";
+        let k = 1;
+        let groups = Searcher::<Iupac>::new(false, None)
+            .search_all_alignments(pattern, text, k, 0.4);
+        assert!(
+            !groups.is_empty(),
+            "real match after N-run must not be discarded by pre-filter"
+        );
+        for group in &groups {
+            for m in group {
+                assert!(
+                    m.text_start >= 8,
+                    "match must not overlap the N-run: text_start={}", m.text_start
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn n_frac_prefilter_dense_n_skipped_rc() {
+        // RC mode: all-N text → pre-filter rejects all RC endpoints too.
+        let groups = Searcher::<Iupac>::new(true, None)
+            .search_all_alignments(b"ACGTACGTAC", b"NNNNNNNNNN", 2, 0.5);
+        assert!(groups.is_empty(), "expected no groups for all-N text (RC mode, max_n_frac=0.5)");
+    }
+
+    #[test]
+    fn n_frac_prefilter_rc_real_match_not_discarded() {
+        // RC mode: text = "ACGTACGTNNNNNNNN"
+        // RC of text = "NNNNNNNNACGTACGT"
+        // RC match of pattern "ACGTACGT" lies at fwd coords text_start=0, text_end=8 (the ACGT region).
+        // Pre-filter for RC match: suffix=[0, (0+7).min(16)=7], N count in fwd_text[0..7]=0 → passes.
+        // RC matches sourced from the N-run region (fwd text_start>=8) have all-N suffix → filtered.
+        let pattern = b"ACGTACGT";
+        let text = b"ACGTACGTNNNNNNNN";
+        let k = 1;
+        let groups = Searcher::<Iupac>::new(true, None)
+            .search_all_alignments(pattern, text, k, 0.4);
+        assert!(
+            !groups.is_empty(),
+            "RC match in real sequence region must not be discarded"
+        );
+        for group in &groups {
+            for m in group {
+                assert!(
+                    m.text_start < 8,
+                    "RC match must come from real-sequence region, not N-run: text_start={}", m.text_start
+                );
+            }
+        }
     }
 
     #[test]
