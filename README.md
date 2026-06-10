@@ -15,7 +15,8 @@ a problem that goes by many names:
 The motivating application is searching short (length 20 to 100) DNA sequences
 in a human genome or e.g. in a set of reads.
 Sassy generally works well for patterns/queries up to length 1000,
-and supports DNA, and IUPAC.
+and supports ASCII, DNA, and IUPAC.
+See [this blog post](https://curiouscoding.nl/posts/sassy/) for some background.
 
 It has a `grep`-like mode for quick human inspection, as well as `search` to
 report locations of matches, and `filter` to only output (non)-matching records.
