@@ -196,30 +196,30 @@ impl Match {
             ),
             PrettyPrintStyle::Line => {
                 // Find the start of the line containing the match.
-                let mut line_start = m.text_start + 1;
-                for _ in 0..context + 1 {
-                    if let Some(pos) = memchr::memrchr(b'\n', &text[..line_start - 1]) {
-                        line_start = pos + 1;
-                    } else {
-                        line_start = 0;
-                        break;
-                    }
+                const MAX_PADDING: usize = 50;
+                let mut line_start = m.text_start;
+                while line_start > 0
+                    && m.text_start - line_start < MAX_PADDING
+                    && text[line_start - 1] != b'\n'
+                {
+                    line_start -= 1;
                 }
 
-                let mut line_end = m.text_end - 1;
-                for _ in 0..context + 1 {
-                    if let Some(pos) = memchr::memchr(b'\n', &text[line_end + 1..]) {
-                        line_end += pos + 1;
-                    } else {
-                        line_end = text.len() - 1;
-                        break;
-                    }
+                let mut line_end = m.text_end;
+                while line_end < text.len() - 1
+                    && line_end - m.text_end < MAX_PADDING
+                    && text[line_end + 1] != b'\n'
+                {
+                    line_end += 1;
                 }
 
                 let line_prefix = &text[line_start..m.text_start];
                 let line_suffix = &text[m.text_end..line_end];
+                let len = text.len().ilog10() as usize + 1;
                 format!(
-                    "{}{}{}",
+                    "{}: {} | {}{}{}",
+                    format!("{:<len$}", m.text_start).dimmed(),
+                    format!("{:>2}", m.cost).bold(),
                     String::from_utf8_lossy(line_prefix),
                     match_string,
                     String::from_utf8_lossy(line_suffix),
