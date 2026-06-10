@@ -304,24 +304,30 @@ impl AGrepArgs {
             }
         });
 
-        let global_hist = global_histogram.into_inner().unwrap();
-        eprint!(
-            "\nStatistics: total {}, ",
-            global_hist.iter().sum::<usize>().to_string().bold()
-        );
-        for (dist, &count) in global_hist.iter().enumerate() {
-            if count > 0 {
-                eprint!(
-                    "dist {} => {}, ",
-                    dist.to_string().bold(),
-                    count.to_string().bold()
-                );
-            }
-        }
-        eprintln!();
-
+        print_statistics(&global_histogram.into_inner().unwrap());
         assert!(output.into_inner().unwrap().1.is_empty());
     }
+}
+
+fn print_statistics(hist: &[usize]) {
+    eprintln!(
+        "\nStatistics: total {}",
+        hist.iter().sum::<usize>().to_string().bold()
+    );
+
+    let max_cnt = hist.iter().max().unwrap_or(&0);
+    let digits = max_cnt.to_string().len();
+
+    eprint!("dist: ");
+    for i in 0..hist.len() {
+        eprint!("{:>digits$} ", i.to_string().bold());
+    }
+    eprintln!();
+    eprint!("cnt:  ");
+    for count in hist {
+        eprint!("{:>digits$} ", count.to_string().bold());
+    }
+    eprintln!();
 }
 
 impl SearchArgs {
@@ -599,22 +605,7 @@ impl Args {
             }
         });
 
-        let global_hist = global_histogram.into_inner().unwrap();
-        eprint!(
-            "\nStatistics: total {}, ",
-            global_hist.iter().sum::<usize>().to_string().bold()
-        );
-        for (dist, &count) in global_hist.iter().enumerate() {
-            if count > 0 {
-                eprint!(
-                    "dist {} => {}, ",
-                    dist.to_string().bold(),
-                    count.to_string().bold()
-                );
-            }
-        }
-        eprintln!();
-
+        print_statistics(&global_histogram.into_inner().unwrap());
         assert!(output.into_inner().unwrap().1.is_empty());
     }
 
