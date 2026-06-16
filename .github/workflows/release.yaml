@@ -31,7 +31,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-multivers
         if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: cargo install cargo-multivers
+        run: cargo install --version '>=0.12.0' cargo-multivers
       - name: Build & test & rename
         run: |
           mv .cargo/config-portable.toml .cargo/config.toml

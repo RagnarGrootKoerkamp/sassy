@@ -6,7 +6,7 @@ use clap::Parser;
 use crispr::{CrisprArgs, crispr};
 
 #[derive(clap::Parser)]
-#[command(author, version, about)]
+#[command(author, version, about, bin_name = "sassy")]
 enum Args {
     /// Search and print matches of a pattern.
     ///

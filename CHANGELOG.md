@@ -3,6 +3,8 @@
 <!-- next-header -->
 
 ## git
+- Bump `cargo-multivers` to 0.12.0 to fix running x86 emulation on macbooks (#64).
+- Fix name of binary in `cargo help` (#64)
 
 ## 0.2.3
 - Add grep-like `sassy agrep` for searching plain-text files.
