@@ -3,15 +3,20 @@
 <!-- next-header -->
 
 ## git
+- Add `Searcher::search_all_alignments` that returns a list of _all possible
+  alignments_ of cost up to `k` for each matching end position.  of cost up to `k` (#46, #55, #56, #57, #63).
+  Thanks to @theJasonFan and @TimD1!
 - Bump `cargo-multivers` to 0.12.0 to fix running x86 emulation on macbooks (#64).
-- Fix name of binary in `cargo help` (#64)
+- Fix name of binary in `cargo help` (#64).
+- Improved layout of statistics on number of matches.
+- Improved rendering in ASCII mode.
 
 ## 0.2.3
 - Add grep-like `sassy agrep` for searching plain-text files.
 - `search_many` and `search_texts` now accept any slice where the elements
   implement `RcSearchable`, not just a slice of references to a type implementing
   `RcSearchable`. This means that in some cases there is no need to create a
-  temporary Vec just to hold texts references.
+  temporary Vec just to hold texts references (#60).
 - Fix `SearchMode` not being public, making `search_many` useless outside the
   Python bindings.
 

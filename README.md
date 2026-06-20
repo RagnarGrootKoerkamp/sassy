@@ -137,6 +137,8 @@ assert_eq!(matches[0].text_start, 4);  // ATG
 assert_eq!(matches[1].text_start, 11); // TTT
 ```
 
+Sassy also supports iterating over _all (sufficiently distinct) possible alignments_ with cost up to `k`
+via `Searcher::search_all_alignments`.
 
 ### 1. Command-line interface (CLI)
 
