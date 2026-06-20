@@ -661,11 +661,12 @@ impl<P: Profile> Searcher<P> {
         std::mem::take(&mut self.matches)
     }
 
-    /// Enumerate all alignments at every forward-strand end position with cost ≤ k.
+    /// Enumerate all alignments at every end position with cost ≤ k.
     ///
-    /// Returns groups sorted by `text_end`; each group contains every distinct alignment
-    /// (different CIGAR or `text_start`) ending at that position.
-    /// RC matches are not included.
+    /// Returns groups sorted by `text_end`; each group contains "every" distinct alignment
+    /// ending at that position.
+    /// Some light filtering is done to avoid "clearly inefficient" matches:
+    /// For example, a substitution is never replaced by an insertion-deletion pair.
     pub fn search_all_alignments<I: RcSearchAble + ?Sized>(
         &mut self,
         pattern: &[u8],
@@ -675,14 +676,12 @@ impl<P: Profile> Searcher<P> {
     ) -> Vec<Vec<Match>> {
         let mut all_matches = self.search_all(pattern, text, k);
 
-        // NB: this pre-filtering allows skipping matches in N-dense regions where it is impossible for
-        // the alignment to satisfy the `max_n_frac` restriction.
+        // Skip end-locations where matches must have > `max_n_frac` fraction of N's.
         let fwd_text = text.text();
         let fwd_text = fwd_text.as_ref();
         if max_n_frac < 1.0 {
-            all_matches.retain(|m| {
-                match_may_satisfy_n_frac(m, fwd_text, pattern.len(), k, max_n_frac)
-            });
+            all_matches
+                .retain(|m| match_may_satisfy_n_frac(m, fwd_text, pattern.len(), k, max_n_frac));
         }
 
         let mut flat: Vec<Match> = Vec::new();
@@ -700,17 +699,20 @@ impl<P: Profile> Searcher<P> {
             },
         );
 
-        // Safety net: catches boundary alignments the pre-filter can't rule out via the mandatory suffix alone.
+        // Drop alignments with too many Ns.
         flat.retain(|m| {
             let slice = &fwd_text[m.text_start..m.text_end];
-            let n_count = slice.iter().filter(|&&c| c.eq_ignore_ascii_case(&b'N')).count() as f32;
+            let n_count = slice
+                .iter()
+                .filter(|&&c| c.eq_ignore_ascii_case(&b'N'))
+                .count() as f32;
             n_count / slice.len() as f32 <= max_n_frac
         });
 
         let anchor_key = |m: &Match| -> (Strand, usize) {
             match m.strand {
                 Strand::Fwd => (Strand::Fwd, m.text_end),
-                Strand::Rc  => (Strand::Rc,  m.text_start),
+                Strand::Rc => (Strand::Rc, m.text_start),
             }
         };
         flat.chunk_by(|a, b| anchor_key(a) == anchor_key(b))
@@ -1687,10 +1689,16 @@ fn match_may_satisfy_n_frac(
         }
         Strand::Rc => {
             let start = m.text_start;
-            (start, (start + pattern_len.saturating_sub(k)).min(text.len()))
+            (
+                start,
+                (start + pattern_len.saturating_sub(k)).min(text.len()),
+            )
         }
     };
-    let n_count = text[start..end].iter().filter(|&&c| c.eq_ignore_ascii_case(&b'N')).count();
+    let n_count = text[start..end]
+        .iter()
+        .filter(|&&c| c.eq_ignore_ascii_case(&b'N'))
+        .count();
     n_count as f32 <= max_n_frac * (pattern_len + k) as f32
 }
 
@@ -1706,7 +1714,8 @@ mod tests {
 
     #[test]
     fn exact_match() {
-        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(b"ACGT", b"ACGT", 0, 1.0);
+        let groups =
+            Searcher::<Dna>::new(false, None).search_all_alignments(b"ACGT", b"ACGT", 0, 1.0);
         assert_eq!(groups.len(), 1);
         let m = &groups[0][0];
         assert_eq!(m.cost, 0);
@@ -1719,7 +1728,8 @@ mod tests {
 
     #[test]
     fn no_match() {
-        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(b"ACGT", b"TTTT", 2, 1.0);
+        let groups =
+            Searcher::<Dna>::new(false, None).search_all_alignments(b"ACGT", b"TTTT", 2, 1.0);
         assert_eq!(groups.len(), 0);
     }
 
@@ -1727,7 +1737,11 @@ mod tests {
     fn multiple_alignments_one_end() {
         let groups = Searcher::<Dna>::new(false, None).search_all_alignments(b"AT", b"ACT", 1, 1.0);
         let multi: Vec<_> = groups.iter().filter(|g| g.len() > 1).collect();
-        assert_eq!(multi.len(), 1, "expected exactly one end position with >1 alignment");
+        assert_eq!(
+            multi.len(),
+            1,
+            "expected exactly one end position with >1 alignment"
+        );
         let aligns = multi[0];
         assert_eq!(aligns.len(), 3);
         for m in aligns {
@@ -1742,8 +1756,14 @@ mod tests {
 
     #[test]
     fn multiple_end_positions() {
-        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(b"AA", b"AAAA", 0, 1.0);
-        assert_eq!(groups.len(), 3, "expected three end positions, got {}", groups.len());
+        let groups =
+            Searcher::<Dna>::new(false, None).search_all_alignments(b"AA", b"AAAA", 0, 1.0);
+        assert_eq!(
+            groups.len(),
+            3,
+            "expected three end positions, got {}",
+            groups.len()
+        );
         for group in &groups {
             assert_eq!(group.len(), 1);
             assert_eq!(group[0].cost, 0);
@@ -1756,7 +1776,8 @@ mod tests {
     #[test]
     fn complete_matches_span_full_pattern() {
         let pattern = b"ACGT";
-        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(pattern, b"AACGTT", 2, 1.0);
+        let groups =
+            Searcher::<Dna>::new(false, None).search_all_alignments(pattern, b"AACGTT", 2, 1.0);
         assert!(!groups.is_empty());
         for group in &groups {
             for m in group {
@@ -1772,7 +1793,8 @@ mod tests {
         let k = 3usize;
         let pattern = vec![b'A'; t + k];
         let text = vec![b'A'; t];
-        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(&pattern, &text, k, 1.0);
+        let groups =
+            Searcher::<Dna>::new(false, None).search_all_alignments(&pattern, &text, k, 1.0);
         let total: usize = groups.iter().map(|g| g.len()).sum();
         // C(8, 3) = 56
         assert_eq!(total, 56, "expected C(8,3)=56 alignments, got {total}");
@@ -1789,13 +1811,13 @@ mod tests {
             .into_iter()
             .filter(|m| m.strand == Strand::Fwd)
             .collect();
-        searcher.iterate_all_alignments(
-            pattern, text, k, &mut fwd, false,
-            &mut |complete, _m| {
-                assert!(complete, "callback fired for incomplete match with partial_matches=false");
-                Continuation::Continue
-            },
-        );
+        searcher.iterate_all_alignments(pattern, text, k, &mut fwd, false, &mut |complete, _m| {
+            assert!(
+                complete,
+                "callback fired for incomplete match with partial_matches=false"
+            );
+            Continuation::Continue
+        });
     }
 
     #[test]
@@ -1813,11 +1835,17 @@ mod tests {
         searcher.iterate_all_alignments(pattern, text, k, &mut fwd, true, &mut |complete, m| {
             if !complete {
                 saw_partial = true;
-                assert!(m.pattern_start > 0, "incomplete match should have pattern_start > 0");
+                assert!(
+                    m.pattern_start > 0,
+                    "incomplete match should have pattern_start > 0"
+                );
             }
             Continuation::Continue
         });
-        assert!(saw_partial, "expected at least one partial callback with partial_matches=true");
+        assert!(
+            saw_partial,
+            "expected at least one partial callback with partial_matches=true"
+        );
     }
 
     #[test]
@@ -1825,13 +1853,20 @@ mod tests {
         let searcher = Searcher::<Dna>::new(false, None);
         let mut called = false;
         searcher.iterate_all_alignments(
-            b"ACGT", b"ACGT", 1, &mut [], false,
+            b"ACGT",
+            b"ACGT",
+            1,
+            &mut [],
+            false,
             &mut |_complete, _m| {
                 called = true;
                 Continuation::Continue
             },
         );
-        assert!(!called, "callback should not fire when matches slice is empty");
+        assert!(
+            !called,
+            "callback should not fire when matches slice is empty"
+        );
     }
 
     #[test]
@@ -1841,11 +1876,24 @@ mod tests {
         let k = 2;
         let groups = Searcher::<Dna>::new(false, None).search_all_alignments(pattern, text, k, 1.0);
         // One group per end position (text_end=4,5,6), each with exactly one exact-match alignment.
-        assert_eq!(groups.iter().map(|g| g.len()).sum::<usize>(), 3, "unexpected alignment count");
+        assert_eq!(
+            groups.iter().map(|g| g.len()).sum::<usize>(),
+            3,
+            "unexpected alignment count"
+        );
         for group in &groups {
-            assert_eq!(group.len(), 1, "expected exactly 1 alignment per text_end, got {}", group.len());
+            assert_eq!(
+                group.len(),
+                1,
+                "expected exactly 1 alignment per text_end, got {}",
+                group.len()
+            );
             let m = &group[0];
-            assert_eq!(m.cost, 0, "expected cost 0 for homopolymer alignment, got {}", m.cost);
+            assert_eq!(
+                m.cost, 0,
+                "expected cost 0 for homopolymer alignment, got {}",
+                m.cost
+            );
             assert_eq!(
                 m.text_end - m.text_start,
                 m.pattern_end - m.pattern_start,
@@ -1853,8 +1901,10 @@ mod tests {
             );
             let expected_cigar = format!("{}=", pattern.len());
             assert_eq!(
-                m.cigar.to_string(), expected_cigar,
-                "expected pure-match CIGAR {expected_cigar}, got {}", m.cigar.to_string()
+                m.cigar.to_string(),
+                expected_cigar,
+                "expected pure-match CIGAR {expected_cigar}, got {}",
+                m.cigar.to_string()
             );
         }
     }
@@ -1867,7 +1917,8 @@ mod tests {
         let text = b"XACGTX";
         let k = 1;
         for &rc in &[false, true] {
-            let groups = Searcher::<Dna>::new(rc, None).search_all_alignments(pattern, text, k, 1.0);
+            let groups =
+                Searcher::<Dna>::new(rc, None).search_all_alignments(pattern, text, k, 1.0);
             for group in &groups {
                 for m in group {
                     let cigar = m.cigar.to_string();
@@ -1895,7 +1946,12 @@ mod tests {
     /// - yields at least one alignment per group
     /// - all alignments share the anchor coordinate and have cost ≤ k
     /// - the first alignment matches the greedy traceback (text_start and CIGAR)
-    fn assert_consistent_with_search_all(searcher: &mut Searcher<Dna>, pattern: &[u8], text: &[u8], k: usize) {
+    fn assert_consistent_with_search_all(
+        searcher: &mut Searcher<Dna>,
+        pattern: &[u8],
+        text: &[u8],
+        k: usize,
+    ) {
         let all_matches = searcher.search_all(pattern, text, k);
         let groups = searcher.search_all_alignments(pattern, text, k, 1.0);
 
@@ -1911,24 +1967,47 @@ mod tests {
         );
 
         for group in &groups {
-            assert!(!group.is_empty(), "each group must yield at least one alignment");
+            assert!(
+                !group.is_empty(),
+                "each group must yield at least one alignment"
+            );
             let anchor = &group[0];
             // Match each group to its search_all endpoint by anchor coordinate.
             let expected = match anchor.strand {
-                Strand::Fwd => all_matches.iter().find(|m| m.strand == Strand::Fwd && m.text_end == anchor.text_end),
-                Strand::Rc  => all_matches.iter().find(|m| m.strand == Strand::Rc  && m.text_start == anchor.text_start),
-            }.unwrap_or_else(|| panic!(
-                "group anchor not found in search_all results (pattern={} text={} k={k})",
-                String::from_utf8_lossy(pattern),
-                String::from_utf8_lossy(text),
-            ));
+                Strand::Fwd => all_matches
+                    .iter()
+                    .find(|m| m.strand == Strand::Fwd && m.text_end == anchor.text_end),
+                Strand::Rc => all_matches
+                    .iter()
+                    .find(|m| m.strand == Strand::Rc && m.text_start == anchor.text_start),
+            }
+            .unwrap_or_else(|| {
+                panic!(
+                    "group anchor not found in search_all results (pattern={} text={} k={k})",
+                    String::from_utf8_lossy(pattern),
+                    String::from_utf8_lossy(text),
+                )
+            });
             for m in group {
                 match expected.strand {
-                    Strand::Fwd => assert_eq!(m.text_end,   expected.text_end,   "all Fwd alignments in group must share text_end"),
-                    Strand::Rc  => assert_eq!(m.text_start, expected.text_start, "all RC alignments in group must share text_start"),
+                    Strand::Fwd => assert_eq!(
+                        m.text_end, expected.text_end,
+                        "all Fwd alignments in group must share text_end"
+                    ),
+                    Strand::Rc => assert_eq!(
+                        m.text_start, expected.text_start,
+                        "all RC alignments in group must share text_start"
+                    ),
                 }
-                assert_eq!(m.strand, expected.strand, "strand must match search_all result");
-                assert!(m.cost <= k as i32, "alignment cost {} exceeds k={k}", m.cost);
+                assert_eq!(
+                    m.strand, expected.strand,
+                    "strand must match search_all result"
+                );
+                assert!(
+                    m.cost <= k as i32,
+                    "alignment cost {} exceeds k={k}",
+                    m.cost
+                );
             }
         }
     }
@@ -1962,19 +2041,26 @@ mod tests {
         for _ in 0..500 {
             let plen = rng.random_range(4..=20);
             let tlen = rng.random_range(plen..=plen + 10);
-            let k    = rng.random_range(0..=3usize);
+            let k = rng.random_range(0..=3usize);
 
-            let pattern: Vec<u8> = (0..plen).map(|_| bases[rng.random_range(0..4usize)]).collect();
-            let text:    Vec<u8> = (0..tlen).map(|_| bases[rng.random_range(0..4usize)]).collect();
+            let pattern: Vec<u8> = (0..plen)
+                .map(|_| bases[rng.random_range(0..4usize)])
+                .collect();
+            let text: Vec<u8> = (0..tlen)
+                .map(|_| bases[rng.random_range(0..4usize)])
+                .collect();
             let rc_text = Dna::reverse_complement(&text);
 
-            let groups     = Searcher::<Dna>::new(true,  None).search_all_alignments(&pattern, &text,    k, 1.0);
-            let groups_fwd = Searcher::<Dna>::new(false, None).search_all_alignments(&pattern, &rc_text, k, 1.0);
+            let groups =
+                Searcher::<Dna>::new(true, None).search_all_alignments(&pattern, &text, k, 1.0);
+            let groups_fwd =
+                Searcher::<Dna>::new(false, None).search_all_alignments(&pattern, &rc_text, k, 1.0);
 
             // Collect all RC matches as (text_start, text_end, cost, cigar).
             // The RC search of P against T internally aligns P against RC(T), reporting
             // coordinates back in T-space: rc_start -> tlen-rc_end, rc_end -> tlen-rc_start.
-            let mut rc_matches: Vec<(usize, usize, i32, String)> = groups.iter()
+            let mut rc_matches: Vec<(usize, usize, i32, String)> = groups
+                .iter()
                 .flat_map(|g| g.iter())
                 .filter(|m| m.strand == Strand::Rc)
                 .map(|m| (m.text_start, m.text_end, m.cost, m.cigar.to_string()))
@@ -1983,16 +2069,25 @@ mod tests {
             // The equivalent fwd search of P against RC(T) produces matches in RC(T)-space.
             // Transform [s', e') in RC(T) back to T-space: [tlen-e', tlen-s').
             // CIGARs are identical because both compute the same alignment (P vs RC(T) segment).
-            let mut fwd_as_rc: Vec<(usize, usize, i32, String)> = groups_fwd.iter()
+            let mut fwd_as_rc: Vec<(usize, usize, i32, String)> = groups_fwd
+                .iter()
                 .flat_map(|g| g.iter())
-                .map(|m| (tlen - m.text_end, tlen - m.text_start, m.cost, m.cigar.to_string()))
+                .map(|m| {
+                    (
+                        tlen - m.text_end,
+                        tlen - m.text_start,
+                        m.cost,
+                        m.cigar.to_string(),
+                    )
+                })
                 .collect();
 
             rc_matches.sort();
             fwd_as_rc.sort();
 
             assert_eq!(
-                rc_matches, fwd_as_rc,
+                rc_matches,
+                fwd_as_rc,
                 "RC/fwd match mismatch: pattern={} text={} k={k}",
                 String::from_utf8_lossy(&pattern),
                 String::from_utf8_lossy(&text),
@@ -2009,20 +2104,24 @@ mod tests {
         let bases = b"ACGT";
 
         let mut fwd_searcher = Searcher::<Dna>::new(false, None);
-        let mut rc_searcher  = Searcher::<Dna>::new(true,  None);
+        let mut rc_searcher = Searcher::<Dna>::new(true, None);
         for _ in 0..200 {
             let plen = rng.random_range(3..20usize);
             let tlen = rng.random_range(plen..plen * 4);
-            let k    = rng.random_range(0..plen / 3 + 1);
-            let pattern: Vec<u8> = (0..plen).map(|_| bases[rng.random_range(0..4usize)]).collect();
-            let text:    Vec<u8> = (0..tlen).map(|_| bases[rng.random_range(0..4usize)]).collect();
+            let k = rng.random_range(0..plen / 3 + 1);
+            let pattern: Vec<u8> = (0..plen)
+                .map(|_| bases[rng.random_range(0..4usize)])
+                .collect();
+            let text: Vec<u8> = (0..tlen)
+                .map(|_| bases[rng.random_range(0..4usize)])
+                .collect();
             eprintln!(
                 "pattern={} text={} k={k}",
                 String::from_utf8_lossy(&pattern),
                 String::from_utf8_lossy(&text),
             );
             assert_consistent_with_search_all(&mut fwd_searcher, &pattern, &text, k);
-            assert_consistent_with_search_all(&mut rc_searcher,  &pattern, &text, k);
+            assert_consistent_with_search_all(&mut rc_searcher, &pattern, &text, k);
         }
     }
 
@@ -2030,14 +2129,20 @@ mod tests {
     fn n_frac_filtering() {
         // Iupac profile handles N bases in the aligned region.
         // max_n_frac=0.0: all-N aligned region must be rejected.
-        let groups = Searcher::<Iupac>::new(false, None)
-            .search_all_alignments(b"ACGT", b"NNNN", 4, 0.0);
-        assert!(groups.is_empty(), "expected no groups when all bases are N and max_n_frac=0.0");
+        let groups =
+            Searcher::<Iupac>::new(false, None).search_all_alignments(b"ACGT", b"NNNN", 4, 0.0);
+        assert!(
+            groups.is_empty(),
+            "expected no groups when all bases are N and max_n_frac=0.0"
+        );
 
         // max_n_frac=1.0: same query should produce matches.
-        let groups = Searcher::<Iupac>::new(false, None)
-            .search_all_alignments(b"ACGT", b"NNNN", 4, 1.0);
-        assert!(!groups.is_empty(), "expected groups when N filtering is disabled (max_n_frac=1.0)");
+        let groups =
+            Searcher::<Iupac>::new(false, None).search_all_alignments(b"ACGT", b"NNNN", 4, 1.0);
+        assert!(
+            !groups.is_empty(),
+            "expected groups when N filtering is disabled (max_n_frac=1.0)"
+        );
     }
 
     #[test]
@@ -2045,9 +2150,16 @@ mod tests {
         // pattern_len=10, k=2 → mandatory suffix len = 10-2 = 8
         // all-N text: 8 Ns in suffix → N/(10+2) = 8/12 ≈ 0.667 > max_n_frac=0.5
         // Pre-filter should eliminate all endpoints → empty result.
-        let groups = Searcher::<Iupac>::new(false, None)
-            .search_all_alignments(b"ACGTACGTAC", b"NNNNNNNNNN", 2, 0.5);
-        assert!(groups.is_empty(), "expected no groups for all-N text (fwd, max_n_frac=0.5)");
+        let groups = Searcher::<Iupac>::new(false, None).search_all_alignments(
+            b"ACGTACGTAC",
+            b"NNNNNNNNNN",
+            2,
+            0.5,
+        );
+        assert!(
+            groups.is_empty(),
+            "expected no groups for all-N text (fwd, max_n_frac=0.5)"
+        );
     }
 
     #[test]
@@ -2057,10 +2169,10 @@ mod tests {
         let pattern = b"ACGTACGT";
         let text = b"AACGTACGTTT";
         let k = 1;
-        let groups_filtered = Searcher::<Dna>::new(false, None)
-            .search_all_alignments(pattern, text, k, 0.5);
-        let groups_unfiltered = Searcher::<Dna>::new(false, None)
-            .search_all_alignments(pattern, text, k, 1.0);
+        let groups_filtered =
+            Searcher::<Dna>::new(false, None).search_all_alignments(pattern, text, k, 0.5);
+        let groups_unfiltered =
+            Searcher::<Dna>::new(false, None).search_all_alignments(pattern, text, k, 1.0);
         assert_eq!(
             groups_filtered.len(),
             groups_unfiltered.len(),
@@ -2079,8 +2191,8 @@ mod tests {
         let pattern = b"ACGTACGT";
         let text = b"NNNNNNNNACGTACGT";
         let k = 1;
-        let groups = Searcher::<Iupac>::new(false, None)
-            .search_all_alignments(pattern, text, k, 0.4);
+        let groups =
+            Searcher::<Iupac>::new(false, None).search_all_alignments(pattern, text, k, 0.4);
         assert!(
             !groups.is_empty(),
             "real match after N-run must not be discarded by pre-filter"
@@ -2089,7 +2201,8 @@ mod tests {
             for m in group {
                 assert!(
                     m.text_start >= 8,
-                    "match must not overlap the N-run: text_start={}", m.text_start
+                    "match must not overlap the N-run: text_start={}",
+                    m.text_start
                 );
             }
         }
@@ -2098,9 +2211,16 @@ mod tests {
     #[test]
     fn n_frac_prefilter_dense_n_skipped_rc() {
         // RC mode: all-N text → pre-filter rejects all RC endpoints too.
-        let groups = Searcher::<Iupac>::new(true, None)
-            .search_all_alignments(b"ACGTACGTAC", b"NNNNNNNNNN", 2, 0.5);
-        assert!(groups.is_empty(), "expected no groups for all-N text (RC mode, max_n_frac=0.5)");
+        let groups = Searcher::<Iupac>::new(true, None).search_all_alignments(
+            b"ACGTACGTAC",
+            b"NNNNNNNNNN",
+            2,
+            0.5,
+        );
+        assert!(
+            groups.is_empty(),
+            "expected no groups for all-N text (RC mode, max_n_frac=0.5)"
+        );
     }
 
     #[test]
@@ -2113,8 +2233,8 @@ mod tests {
         let pattern = b"ACGTACGT";
         let text = b"ACGTACGTNNNNNNNN";
         let k = 1;
-        let groups = Searcher::<Iupac>::new(true, None)
-            .search_all_alignments(pattern, text, k, 0.4);
+        let groups =
+            Searcher::<Iupac>::new(true, None).search_all_alignments(pattern, text, k, 0.4);
         assert!(
             !groups.is_empty(),
             "RC match in real sequence region must not be discarded"
@@ -2123,7 +2243,8 @@ mod tests {
             for m in group {
                 assert!(
                     m.text_start < 8,
-                    "RC match must come from real-sequence region, not N-run: text_start={}", m.text_start
+                    "RC match must come from real-sequence region, not N-run: text_start={}",
+                    m.text_start
                 );
             }
         }
@@ -3576,9 +3697,15 @@ mod tests {
             let mut matches = searcher.search_all(pattern, text, k);
             let mut n = 0;
             searcher.iterate_all_alignments(
-                pattern, text, k, &mut matches, false,
+                pattern,
+                text,
+                k,
+                &mut matches,
+                false,
                 &mut |complete, _| {
-                    if complete { n += 1; }
+                    if complete {
+                        n += 1;
+                    }
                     Continuation::Continue
                 },
             );

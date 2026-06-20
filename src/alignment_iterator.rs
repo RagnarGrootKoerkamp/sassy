@@ -27,9 +27,9 @@ fn net_insertions_since_last_match(cigar: &Cigar) -> i32 {
     for elem in cigar.ops.iter().rev() {
         match elem.op {
             CigarOp::Match => break,
-            CigarOp::Ins   => net += elem.cnt,
-            CigarOp::Del   => net -= elem.cnt,
-            CigarOp::Sub   => {} // ignore
+            CigarOp::Ins => net += elem.cnt,
+            CigarOp::Del => net -= elem.cnt,
+            CigarOp::Sub => {} // ignore
         }
     }
     net
@@ -41,7 +41,7 @@ pub trait Callback: FnMut(bool, &mut Match) -> Continuation {}
 impl<F: FnMut(bool, &mut Match) -> Continuation> Callback for F {}
 
 impl<P: Profile> Searcher<P> {
-    /// Iterate over _all_ alignments of cost up to `k`.
+    /// Iterate over _all_ alignments of cost up to `k` for all end positions of the given matches.
     ///
     /// `matches` may contain both `Strand::Fwd` and `Strand::Rc` entries.
     /// Fwd matches are traced on the forward text; RC matches are traced on the
@@ -58,7 +58,10 @@ impl<P: Profile> Searcher<P> {
         partial_matches: bool,
         callback: &mut impl Callback,
     ) {
-        assert_eq!(self.alpha, None, "Tracing all alignments with overhang is not yet implemented.");
+        assert_eq!(
+            self.alpha, None,
+            "Tracing all alignments with overhang is not yet implemented."
+        );
 
         let fwd_text = text.text();
         let fwd_text = fwd_text.as_ref();
@@ -69,7 +72,15 @@ impl<P: Profile> Searcher<P> {
 
         // --- Forward strand ---
         if !fwd.is_empty() {
-            self.iterate_one_strand(pattern, fwd_text, k, fwd, partial_matches, callback, None);
+            self.iterate_all_alignments_one_strand(
+                pattern,
+                fwd_text,
+                k,
+                fwd,
+                partial_matches,
+                callback,
+                None,
+            );
         }
 
         // --- Reverse-complement strand ---
@@ -81,28 +92,34 @@ impl<P: Profile> Searcher<P> {
 
             // Wrap callback: translate DFS results (rev-text coords) back to fwd-text coords.
             let mut rc_callback = |complete: bool, m: &mut Match| -> Continuation {
-                let orig_start  = m.text_start;
-                let orig_end    = m.text_end;
+                let orig_start = m.text_start;
+                let orig_end = m.text_end;
                 let orig_strand = m.strand;
                 m.text_start = fwd_len - orig_end;
-                m.text_end   = fwd_len - orig_start;
-                m.strand     = Strand::Rc;
+                m.text_end = fwd_len - orig_start;
+                m.strand = Strand::Rc;
                 let result = callback(complete, m);
                 m.text_start = orig_start;
-                m.text_end   = orig_end;
-                m.strand     = orig_strand;
+                m.text_end = orig_end;
+                m.strand = orig_strand;
                 result
             };
 
             // RC matches are in fwd coords; pass flip=Some(fwd_len) so iterate_one_strand
             // derives rev-text endpoints on the fly without mutating the slice.
-            self.iterate_one_strand(&comp_pattern, rev_text, k, rc,
-                                    partial_matches, &mut rc_callback,
-                                    Some(fwd_len));
+            self.iterate_all_alignments_one_strand(
+                &comp_pattern,
+                rev_text,
+                k,
+                rc,
+                partial_matches,
+                &mut rc_callback,
+                Some(fwd_len),
+            );
         }
     }
 
-    fn iterate_one_strand(
+    fn iterate_all_alignments_one_strand(
         &self,
         pattern: &[u8],
         text: &[u8],
@@ -118,7 +135,7 @@ impl<P: Profile> Searcher<P> {
         // as fwd_len - text_start (RC matches are sorted by text_start DESC in fwd coords,
         // so fwd_len - text_start is ascending — the order iterate_one_strand requires).
         let eff_end = |m: &Match| match flip {
-            None          => m.text_end,
+            None => m.text_end,
             Some(fwd_len) => fwd_len - m.text_start,
         };
         debug_assert!(matches.windows(2).all(|w| eff_end(&w[0]) <= eff_end(&w[1])));
@@ -239,7 +256,9 @@ impl<'s, C: Callback> Context<'s, C> {
 
         for mut op in [CigarOp::Match, CigarOp::Del, CigarOp::Ins] {
             // Don't allow leading or trailing deletions
-            if op == CigarOp::Del && (self.m.pattern_start == 0 || self.m.pattern_start == self.pattern.len()) {
+            if op == CigarOp::Del
+                && (self.m.pattern_start == 0 || self.m.pattern_start == self.pattern.len())
+            {
                 continue;
             }
             // Filter in-range edges.
@@ -249,7 +268,11 @@ impl<'s, C: Callback> Context<'s, C> {
                 continue;
             }
             // Replate Match by Sub if needed
-            if op == CigarOp::Match && !P::is_match(self.text[new_pos.0 as usize], self.pattern[new_pos.1 as usize])
+            if op == CigarOp::Match
+                && !P::is_match(
+                    self.text[new_pos.0 as usize],
+                    self.pattern[new_pos.1 as usize],
+                )
             {
                 op = CigarOp::Sub;
             }
@@ -296,7 +319,7 @@ impl<'s, C: Callback> Context<'s, C> {
             // We may not have both inserted and deleted bases since the last match
             // NB: This forces taking a diagonal path (subs) wherever possible
             let net_ins = net_insertions_since_last_match(&self.m.cigar);
-            if (op == CigarOp::Ins && net_ins < 0) || (op == CigarOp::Del && net_ins > 0)  {
+            if (op == CigarOp::Ins && net_ins < 0) || (op == CigarOp::Del && net_ins > 0) {
                 continue;
             }
 
@@ -305,7 +328,6 @@ impl<'s, C: Callback> Context<'s, C> {
 
         // Stable sort edges by total cost, preferring match/sub in case of ties.
         edges.sort_by_key(|(_, cost)| *cost);
-
 
         for (op, _cost) in edges {
             let delta = op.delta();
@@ -347,8 +369,8 @@ impl<'s, C: Callback> Context<'s, C> {
 #[cfg(test)]
 mod tests {
     use super::net_insertions_since_last_match;
-    use pa_types::{Cigar, CigarOp};
     use CigarOp::{Del as D, Ins as I, Match as M, Sub as X};
+    use pa_types::{Cigar, CigarOp};
 
     fn cigar(ops: &[pa_types::CigarOp]) -> Cigar {
         let mut c = Cigar::default();
@@ -361,19 +383,19 @@ mod tests {
     #[test]
     fn net_insertions_since_last_match_cases() {
         let cases: &[(&[pa_types::CigarOp], i32)] = &[
-            (&[],                  0),  // empty cigar
-            (&[M],                 0),  // match resets immediately
-            (&[I, I, I],           3),  // all insertions, no anchor
-            (&[D, D],             -2),  // all deletions, no anchor
-            (&[M, I, I],           2),  // two I's after match
-            (&[M, D, D],          -2),  // two D's after match
-            (&[M, I, I, D],        1),  // net 2I − 1D
-            (&[M, I, I, D, D],     0),  // balanced
-            (&[I, X, D],           0),  // X is transparent: +1 − 1
-            (&[M, I, X, D],        0),  // X between I and D, after anchor
-            (&[M, X, X, I],        1),  // X's skipped, only I counted
-            (&[I, I, M, D, D],    -2),  // stop at M, only trailing DD visible
-            (&[M, D, M, I, I],     2),  // stop at second M, see II
+            (&[], 0),               // empty cigar
+            (&[M], 0),              // match resets immediately
+            (&[I, I, I], 3),        // all insertions, no anchor
+            (&[D, D], -2),          // all deletions, no anchor
+            (&[M, I, I], 2),        // two I's after match
+            (&[M, D, D], -2),       // two D's after match
+            (&[M, I, I, D], 1),     // net 2I − 1D
+            (&[M, I, I, D, D], 0),  // balanced
+            (&[I, X, D], 0),        // X is transparent: +1 − 1
+            (&[M, I, X, D], 0),     // X between I and D, after anchor
+            (&[M, X, X, I], 1),     // X's skipped, only I counted
+            (&[I, I, M, D, D], -2), // stop at M, only trailing DD visible
+            (&[M, D, M, I, I], 2),  // stop at second M, see II
         ];
         for &(ops, expected) in cases {
             assert_eq!(
