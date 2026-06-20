@@ -4,10 +4,15 @@
 
 ## git
 - Add `Searcher::search_all_alignments` that returns a list of _all possible
-  alignments_ of cost up to `k` for each matching end position.  of cost up to `k` (#46, #55, #56, #57, #63).
+  alignments_ of cost up to `k` for each matching end position.  of cost up to
+  `k` ([#46](https://github.com/RagnarGrootKoerkamp/sassy/pull/46),
+[#55](https://github.com/RagnarGrootKoerkamp/sassy/pull/55),
+[#56](https://github.com/RagnarGrootKoerkamp/sassy/pull/56),
+[#57](https://github.com/RagnarGrootKoerkamp/sassy/pull/57),
+[#63](https://github.com/RagnarGrootKoerkamp/sassy/pull/63)).
   Thanks to @theJasonFan and @TimD1!
-- Bump `cargo-multivers` to 0.12.0 to fix running x86 emulation on macbooks (#64).
-- Fix name of binary in `cargo help` (#64).
+- Bump `cargo-multivers` to 0.12.0 to fix running x86 emulation on macbooks ([#64](https://github.com/RagnarGrootKoerkamp/sassy/pull/64)).
+- Fix name of binary in `cargo help` ([#64](https://github.com/RagnarGrootKoerkamp/sassy/pull/64)).
 - Improved layout of statistics on number of matches.
 - Improved rendering in ASCII mode.
 
