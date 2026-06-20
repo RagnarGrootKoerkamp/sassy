@@ -3,6 +3,8 @@
 <!-- next-header -->
 
 ## git
+
+## 0.2.4
 - Add `Searcher::search_all_alignments` that returns a list of _all possible
   alignments_ of cost up to `k` for each matching end position.  of cost up to
   `k` ([#46](https://github.com/RagnarGrootKoerkamp/sassy/pull/46),
