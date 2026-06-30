@@ -23,6 +23,9 @@
 //! character. If we have `k=1`, `search_all` will return 3 matches with `AB` (cost 1), `ABC` (cost 0), and `ABCX` (cost 1).
 //! [`Searcher::search`] only returns a match at the _rightmost_ position of each local minimum, which in this case is only `ABC`.
 //!
+//! In case your input data has long `NNNNNN` regions, consider disabling tracebacks with [`Searcher::without_trace`].
+//! Otherwise, a traceback will be done from every position in stretches of `N`.
+//!
 //! See the paper (linked on [GitHub](https://github.com/RagnarGrootKoerkamp/sassy)) for details.
 //!
 //! ## Reverse complements

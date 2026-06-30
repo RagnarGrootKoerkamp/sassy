@@ -674,7 +674,13 @@ impl<P: Profile> Searcher<P> {
         k: usize,
         max_n_frac: f32,
     ) -> Vec<Vec<Match>> {
-        let mut all_matches = self.search_all(pattern, text, k);
+        let mut all_matches;
+        {
+            let had_trace = self.without_trace;
+            self.without_trace = true;
+            all_matches = self.search_all(pattern, text, k);
+            self.without_trace = had_trace;
+        }
 
         // Skip end-locations where matches must have > `max_n_frac` fraction of N's.
         let fwd_text = text.text();
@@ -1393,34 +1399,49 @@ impl<P: Profile> Searcher<P> {
             }
         } else {
             for lane in 0..LANES {
-                // FIXME: Fix pattern_idx & text_idx
                 let Some(t) = text.get_lane(lane) else {
                     break;
                 };
                 for &(end_pos, cost) in &self.lanes[lane].matches {
-                    let offset = end_pos.saturating_sub(fill_len);
-                    let slice = &t[offset..end_pos.min(t.len())];
+                    let pattern_idx = if multi_pattern { lane } else { 0 };
+                    let text_idx = if multi_text { lane } else { 0 };
+                    if self.without_trace {
+                        self.matches.push(Match {
+                            pattern_idx,
+                            text_idx,
+                            text_start: usize::MAX,
+                            text_end: end_pos.min(t.len()),
+                            pattern_start: usize::MAX,
+                            pattern_end: pattern.len() - end_pos.saturating_sub(t.len()),
+                            cost,
+                            strand: Strand::Fwd,
+                            cigar: Cigar::default(),
+                        });
+                    } else {
+                        let offset = end_pos.saturating_sub(fill_len);
+                        let slice = &t[offset..end_pos.min(t.len())];
 
-                    batch.add(
-                        if multi_pattern { lane } else { 0 },
-                        if multi_text { lane } else { 0 },
-                        pattern.get_lane(lane).unwrap(), // guaranteed?
-                        slice,
-                        offset,
-                        end_pos,
-                        cost,
-                    );
-
-                    if batch.is_full() {
-                        batch.process::<P>(
-                            fill_len,
-                            &mut self.cost_matrices,
-                            self.alpha,
-                            self.max_overhang,
-                            k,
-                            &mut self.matches,
+                        batch.add(
+                            pattern_idx,
+                            text_idx,
+                            pattern.get_lane(lane).unwrap(), // guaranteed?
+                            slice,
+                            offset,
+                            end_pos,
+                            cost,
                         );
-                        batch.clear();
+
+                        if batch.is_full() {
+                            batch.process::<P>(
+                                fill_len,
+                                &mut self.cost_matrices,
+                                self.alpha,
+                                self.max_overhang,
+                                k,
+                                &mut self.matches,
+                            );
+                            batch.clear();
+                        }
                     }
                 }
             }
