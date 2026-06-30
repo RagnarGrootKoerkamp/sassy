@@ -3,6 +3,8 @@
 <!-- next-header -->
 
 ## git
+
+## 0.2.5
 - Fix that `Searcher::without_trace` was ignored. Specifically this made `search_all` and
   `search_all_alignments` unnecessarily slow. ([#65](https://github.com/RagnarGrootKoerkamp/sassy/pull/65))
 
