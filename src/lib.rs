@@ -138,6 +138,7 @@
 mod bitpacking;
 mod delta_encoding;
 mod minima;
+mod n_filter;
 #[cfg(feature = "cli")]
 pub mod pretty_print;
 mod search;
