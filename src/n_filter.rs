@@ -21,18 +21,10 @@ fn untraced_satisfy_n_frac(
     k: usize,
     max_n_frac: f32,
 ) -> bool {
+    let suffix_len = pattern_len.saturating_sub(k);
     let (start, end) = match m.strand {
-        Strand::Fwd => {
-            let end = m.text_end;
-            (end.saturating_sub(pattern_len.saturating_sub(k)), end)
-        }
-        Strand::Rc => {
-            let start = m.text_start;
-            (
-                start,
-                (start + pattern_len.saturating_sub(k)).min(text.len()),
-            )
-        }
+        Strand::Fwd => (m.text_end.saturating_sub(suffix_len), m.text_end),
+        Strand::Rc => (m.text_start, (m.text_start + suffix_len).min(text.len())),
     };
     let n_count = count_ns(&text[start..end]);
     n_count as f32 <= max_n_frac * (pattern_len + k) as f32
