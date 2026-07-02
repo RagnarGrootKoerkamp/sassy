@@ -707,13 +707,8 @@ impl<P: Profile> Searcher<P> {
             self.without_trace = had_trace;
         }
 
-        // Skip end-locations where matches must have > `max_n_frac` fraction of N's.
         let fwd_text = text.text();
         let fwd_text = fwd_text.as_ref();
-        if let Some(max_n_frac) = self.max_n_frac {
-            all_matches
-                .retain(|m| untraced_satisfy_n_frac(m, fwd_text, pattern.len(), k, max_n_frac));
-        }
 
         let mut flat: Vec<Match> = Vec::new();
         self.iterate_all_alignments(
@@ -869,6 +864,30 @@ impl<P: Profile> Searcher<P> {
                 // m.cigar.ops.reverse();
             });
         }
+
+        // Filter out matches with too many Ns, for both strands at once.
+        // `without_trace` matches only have one valid endpoint (`text_end` for Fwd,
+        // `text_start` for Rc; the other is a `usize::MAX` placeholder), so we use
+        // the cheaper mandatory-suffix lower bound instead of the exact traced check.
+        if let Some(max_n_frac) = self.max_n_frac {
+            let mut tail = self.matches.split_off(old_len);
+            let get_text = |idx: usize| -> &[u8] {
+                match fwd_input {
+                    MultiText::One(t) => t,
+                    MultiText::Multi(ts) => ts[idx],
+                }
+            };
+            if self.without_trace {
+                let pattern_len = pattern.len();
+                tail.retain(|m| {
+                    untraced_satisfy_n_frac(m, get_text(m.text_idx), pattern_len, k, max_n_frac)
+                });
+            } else {
+                tail.retain(|m| traced_satisfy_n_frac(m, get_text(m.text_idx), max_n_frac));
+            }
+            self.matches.extend(tail);
+        }
+
         &mut self.matches[old_len..]
     }
 
