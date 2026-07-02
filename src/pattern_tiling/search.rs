@@ -670,7 +670,7 @@ mod tests {
     #[allow(dead_code)]
     fn random_dna_seq(l: usize) -> Vec<u8> {
         use rand::random_range;
-        const DNA: &[u8; 4] = b"ACGT";
+        const DNA: &[u8; 5] = b"ACGTN";
         let mut dna = Vec::with_capacity(l);
         for _ in 0..l {
             let idx = random_range(0..4);
