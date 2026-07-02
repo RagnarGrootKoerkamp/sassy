@@ -1,6 +1,14 @@
 use crate::Match;
 use crate::Strand;
 
+#[inline(always)]
+fn count_ns(slice: &[u8]) -> usize {
+    slice
+        .iter()
+        .filter(|&&c| c.eq_ignore_ascii_case(&b'N'))
+        .count()
+}
+
 /// Returns `true` if `m` could possibly produce an alignment satisfying `max_n_frac`.
 ///
 /// Uses the mandatory-suffix lower bound: any alignment of cost <= k must cover at least
@@ -26,10 +34,7 @@ fn untraced_satisfy_n_frac(
             )
         }
     };
-    let n_count = text[start..end]
-        .iter()
-        .filter(|&&c| c.eq_ignore_ascii_case(&b'N'))
-        .count();
+    let n_count = count_ns(&text[start..end]);
     n_count as f32 <= max_n_frac * (pattern_len + k) as f32
 }
 
@@ -39,9 +44,6 @@ fn untraced_satisfy_n_frac(
 /// and check if the N-fraction is less than or equal to `max_n_frac`.
 fn traced_satisfy_n_frac(m: &Match, text: &[u8], max_n_frac: f32) -> bool {
     let slice = &text[m.text_start..m.text_end];
-    let n_count = slice
-        .iter()
-        .filter(|&&c| c.eq_ignore_ascii_case(&b'N'))
-        .count() as f32;
+    let n_count = count_ns(slice) as f32;
     n_count / slice.len() as f32 <= max_n_frac
 }
