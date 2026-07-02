@@ -868,7 +868,7 @@ mod tests {
     }
 
     #[test]
-    // #[ignore = "Just profiling"]
+    // #[ignore]
     fn v2_random_big_search() {
         let mut total_matches = 0;
         for _ in 0..1 {
@@ -884,28 +884,24 @@ mod tests {
     }
 
     #[test]
-    //#[ignore = "Fuzz test"]
     fn fuzz_against_sassy_all() {
         // This is just sassy search all in pattern_tiling
         fuzz_against_sassy_batch(Some(0.5), true, true, false);
     }
 
     #[test]
-    //#[ignore = "Fuzz test"]
     fn fuzz_against_sassy_general_local() {
         // This is sassy search in pattern_tiling
         fuzz_against_sassy_batch(Some(0.5), true, true, true);
     }
 
     #[test]
-    //#[ignore = "Fuzz test"]
     fn fuzz_against_sassy_general_local_no_alpha() {
         // This is sassy search in pattern_tiling (no overhang)
         fuzz_against_sassy_batch(None, true, true, true);
     }
 
     #[test]
-    //#[ignore = "Fuzz test"]
     fn fuzz_against_sassy_general_local_no_alpha_no_rc() {
         // This is sassy search in pattern_tiling (no overhang)
         fuzz_against_sassy_batch(None, false, true, true);

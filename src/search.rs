@@ -3604,7 +3604,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Fuzz test"]
     fn search_many_fuzz() {
         #[cfg(feature = "cli")]
         env_logger::init();
