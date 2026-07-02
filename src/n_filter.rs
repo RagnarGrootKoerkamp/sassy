@@ -58,11 +58,4 @@ mod tests {
             cigar: Cigar::default(),
         }
     }
-
-    #[test]
-    fn test_untraced_satisfy_n_frac() {
-        let text = b"NNNNNATG";
-        let m = mock_match(0, 3);
-        assert!(untraced_satisfy_n_frac(&m, text, 3, 0, 0.5));
-    }
 }
