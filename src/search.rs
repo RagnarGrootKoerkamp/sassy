@@ -2297,13 +2297,23 @@ mod tests {
         // 6bp prefix of pattern + N's
         let text = b"ACGTACNNNNNN";
         let k = 0;
-        let mut searcher = Searcher::<Iupac>::new(false, None);
+        let mut searcher = Searcher::<Iupac>::new_fwd();
         searcher.set_max_n_frac(0.49);
         let matches_49 = searcher.search_all_alignments(pattern, text, k);
         assert!(matches_49.is_empty());
         searcher.set_max_n_frac(0.5);
         let matches_50 = searcher.search_all_alignments(pattern, text, k);
         assert_eq!(matches_50.len(), 1);
+    }
+
+    #[test]
+    fn test_n_frac_builder_init() {
+        let mut searcher = Searcher::<Iupac>::new_fwd().with_max_n_frac(0.5);
+        let pattern = b"ACGTACGTACGT";
+        // 6bp prefix of pattern + N's
+        let text = b"ACGTACNNNNNN";
+        let matches = searcher.search_all_alignments(pattern, text, 0);
+        assert_eq!(matches.len(), 1);
     }
 
     #[test]
