@@ -1,3 +1,4 @@
+use crate::n_filter::{traced_satisfy_n_frac, untraced_satisfy_n_frac};
 use std::cmp::Reverse;
 use std::fmt::Debug;
 use std::hint::assert_unchecked;
@@ -236,6 +237,9 @@ pub struct Searcher<P: Profile> {
     // pattern_tiling searcher
     pattern_tiling_searcher: PatterntilingSearcher<P>,
 
+    /// Maximum n-fraction is output matches
+    max_n_frac: Option<f32>,
+
     // Internal caches
     cost_matrices: [CostMatrix; LANES],
     hp: Vec<S>,
@@ -442,6 +446,23 @@ impl<P: Profile> Searcher<P> {
         self
     }
 
+    /// Enable max N-fraction filtering
+    pub fn with_max_n_frac(mut self, max_n_frac: f32) -> Self {
+        self.max_n_frac = Some(max_n_frac);
+        self
+    }
+
+    /// Disable max N-fraction filtering
+    pub fn without_max_n_frac(mut self) -> Self {
+        self.max_n_frac = None;
+        self
+    }
+
+    /// Set max N-fraction filtering
+    pub fn set_max_n_frac(&mut self, max_n_frac: Option<f32>) {
+        self.max_n_frac = max_n_frac;
+    }
+
     /// Default: return matches with trace.
     ///
     /// Only here to negate `without_trace`.
@@ -457,6 +478,7 @@ impl<P: Profile> Searcher<P> {
     pub fn new(rc: bool, alpha: Option<f32>) -> Self {
         let pattern_tiling_searcher = PatterntilingSearcher::new(alpha);
         Self {
+            max_n_frac: None,
             pattern_tiling_searcher,
             alpha,
             rc,
@@ -672,7 +694,6 @@ impl<P: Profile> Searcher<P> {
         pattern: &[u8],
         text: &I,
         k: usize,
-        max_n_frac: f32,
     ) -> Vec<Vec<Match>> {
         let mut all_matches;
         {
@@ -685,9 +706,9 @@ impl<P: Profile> Searcher<P> {
         // Skip end-locations where matches must have > `max_n_frac` fraction of N's.
         let fwd_text = text.text();
         let fwd_text = fwd_text.as_ref();
-        if max_n_frac < 1.0 {
+        if let Some(max_n_frac) = self.max_n_frac {
             all_matches
-                .retain(|m| match_may_satisfy_n_frac(m, fwd_text, pattern.len(), k, max_n_frac));
+                .retain(|m| untraced_satisfy_n_frac(m, fwd_text, pattern.len(), k, max_n_frac));
         }
 
         let mut flat: Vec<Match> = Vec::new();
@@ -706,14 +727,9 @@ impl<P: Profile> Searcher<P> {
         );
 
         // Drop alignments with too many Ns.
-        flat.retain(|m| {
-            let slice = &fwd_text[m.text_start..m.text_end];
-            let n_count = slice
-                .iter()
-                .filter(|&&c| c.eq_ignore_ascii_case(&b'N'))
-                .count() as f32;
-            n_count / slice.len() as f32 <= max_n_frac
-        });
+        if let Some(max_n_frac) = self.max_n_frac {
+            flat.retain(|m| traced_satisfy_n_frac(m, fwd_text, max_n_frac));
+        }
 
         let anchor_key = |m: &Match| -> (Strand, usize) {
             match m.strand {
@@ -1691,38 +1707,6 @@ pub(crate) fn init_deltas_for_overshoot_all_lanes(
     }
 }
 
-/// Returns `true` if `m` could possibly produce an alignment satisfying `max_n_frac`.
-///
-/// Uses the mandatory-suffix lower bound: any alignment of cost <= k must cover at least
-/// `mandatory_suffix = text[end - pattern_length + k: end]`, so the N-fraction is
-/// bounded below by `count_ns(mandatory_suffix) / (pattern_len + k)``.
-fn match_may_satisfy_n_frac(
-    m: &Match,
-    text: &[u8],
-    pattern_len: usize,
-    k: usize,
-    max_n_frac: f32,
-) -> bool {
-    let (start, end) = match m.strand {
-        Strand::Fwd => {
-            let end = m.text_end;
-            (end.saturating_sub(pattern_len.saturating_sub(k)), end)
-        }
-        Strand::Rc => {
-            let start = m.text_start;
-            (
-                start,
-                (start + pattern_len.saturating_sub(k)).min(text.len()),
-            )
-        }
-    };
-    let n_count = text[start..end]
-        .iter()
-        .filter(|&&c| c.eq_ignore_ascii_case(&b'N'))
-        .count();
-    n_count as f32 <= max_n_frac * (pattern_len + k) as f32
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1735,8 +1719,9 @@ mod tests {
 
     #[test]
     fn exact_match() {
-        let groups =
-            Searcher::<Dna>::new(false, None).search_all_alignments(b"ACGT", b"ACGT", 0, 1.0);
+        let groups = Searcher::<Dna>::new(false, None)
+            .with_max_n_frac(1.0)
+            .search_all_alignments(b"ACGT", b"ACGT", 0);
         assert_eq!(groups.len(), 1);
         let m = &groups[0][0];
         assert_eq!(m.cost, 0);
@@ -1749,14 +1734,17 @@ mod tests {
 
     #[test]
     fn no_match() {
-        let groups =
-            Searcher::<Dna>::new(false, None).search_all_alignments(b"ACGT", b"TTTT", 2, 1.0);
+        let groups = Searcher::<Dna>::new(false, None)
+            .with_max_n_frac(1.0)
+            .search_all_alignments(b"ACGT", b"TTTT", 2);
         assert_eq!(groups.len(), 0);
     }
 
     #[test]
     fn multiple_alignments_one_end() {
-        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(b"AT", b"ACT", 1, 1.0);
+        let groups = Searcher::<Dna>::new(false, None)
+            .with_max_n_frac(1.0)
+            .search_all_alignments(b"AT", b"ACT", 1);
         let multi: Vec<_> = groups.iter().filter(|g| g.len() > 1).collect();
         assert_eq!(
             multi.len(),
@@ -1777,8 +1765,9 @@ mod tests {
 
     #[test]
     fn multiple_end_positions() {
-        let groups =
-            Searcher::<Dna>::new(false, None).search_all_alignments(b"AA", b"AAAA", 0, 1.0);
+        let groups = Searcher::<Dna>::new(false, None)
+            .with_max_n_frac(1.0)
+            .search_all_alignments(b"AA", b"AAAA", 0);
         assert_eq!(
             groups.len(),
             3,
@@ -1797,8 +1786,9 @@ mod tests {
     #[test]
     fn complete_matches_span_full_pattern() {
         let pattern = b"ACGT";
-        let groups =
-            Searcher::<Dna>::new(false, None).search_all_alignments(pattern, b"AACGTT", 2, 1.0);
+        let groups = Searcher::<Dna>::new(false, None)
+            .with_max_n_frac(1.0)
+            .search_all_alignments(pattern, b"AACGTT", 2);
         assert!(!groups.is_empty());
         for group in &groups {
             for m in group {
@@ -1814,8 +1804,9 @@ mod tests {
         let k = 3usize;
         let pattern = vec![b'A'; t + k];
         let text = vec![b'A'; t];
-        let groups =
-            Searcher::<Dna>::new(false, None).search_all_alignments(&pattern, &text, k, 1.0);
+        let groups = Searcher::<Dna>::new(false, None)
+            .with_max_n_frac(1.0)
+            .search_all_alignments(&pattern, &text, k);
         let total: usize = groups.iter().map(|g| g.len()).sum();
         // C(8, 3) = 56
         assert_eq!(total, 56, "expected C(8,3)=56 alignments, got {total}");
@@ -1895,7 +1886,9 @@ mod tests {
         let pattern = b"AAAA";
         let text = b"AAAAAA";
         let k = 2;
-        let groups = Searcher::<Dna>::new(false, None).search_all_alignments(pattern, text, k, 1.0);
+        let groups = Searcher::<Dna>::new(false, None)
+            .with_max_n_frac(1.0)
+            .search_all_alignments(pattern, text, k);
         // One group per end position (text_end=4,5,6), each with exactly one exact-match alignment.
         assert_eq!(
             groups.iter().map(|g| g.len()).sum::<usize>(),
@@ -1938,8 +1931,9 @@ mod tests {
         let text = b"XACGTX";
         let k = 1;
         for &rc in &[false, true] {
-            let groups =
-                Searcher::<Dna>::new(rc, None).search_all_alignments(pattern, text, k, 1.0);
+            let groups = Searcher::<Dna>::new(rc, None)
+                .with_max_n_frac(1.0)
+                .search_all_alignments(pattern, text, k);
             for group in &groups {
                 for m in group {
                     let cigar = m.cigar.to_string();
@@ -1974,7 +1968,8 @@ mod tests {
         k: usize,
     ) {
         let all_matches = searcher.search_all(pattern, text, k);
-        let groups = searcher.search_all_alignments(pattern, text, k, 1.0);
+        searcher.set_max_n_frac(Some(1.0));
+        let groups = searcher.search_all_alignments(pattern, text, k);
 
         // Endpoints with only leading-deletion paths produce no group, so groups.len() <= all_matches.len().
         assert!(
@@ -2072,10 +2067,12 @@ mod tests {
                 .collect();
             let rc_text = Dna::reverse_complement(&text);
 
-            let groups =
-                Searcher::<Dna>::new(true, None).search_all_alignments(&pattern, &text, k, 1.0);
-            let groups_fwd =
-                Searcher::<Dna>::new(false, None).search_all_alignments(&pattern, &rc_text, k, 1.0);
+            let groups = Searcher::<Dna>::new(true, None)
+                .with_max_n_frac(1.0)
+                .search_all_alignments(&pattern, &text, k);
+            let groups_fwd = Searcher::<Dna>::new(false, None)
+                .with_max_n_frac(1.0)
+                .search_all_alignments(&pattern, &rc_text, k);
 
             // Collect all RC matches as (text_start, text_end, cost, cigar).
             // The RC search of P against T internally aligns P against RC(T), reporting
@@ -2150,16 +2147,18 @@ mod tests {
     fn n_frac_filtering() {
         // Iupac profile handles N bases in the aligned region.
         // max_n_frac=0.0: all-N aligned region must be rejected.
-        let groups =
-            Searcher::<Iupac>::new(false, None).search_all_alignments(b"ACGT", b"NNNN", 4, 0.0);
+        let groups = Searcher::<Iupac>::new(false, None)
+            .with_max_n_frac(0.0)
+            .search_all_alignments(b"ACGT", b"NNNN", 4);
         assert!(
             groups.is_empty(),
             "expected no groups when all bases are N and max_n_frac=0.0"
         );
 
         // max_n_frac=1.0: same query should produce matches.
-        let groups =
-            Searcher::<Iupac>::new(false, None).search_all_alignments(b"ACGT", b"NNNN", 4, 1.0);
+        let groups = Searcher::<Iupac>::new(false, None)
+            .with_max_n_frac(1.0)
+            .search_all_alignments(b"ACGT", b"NNNN", 4);
         assert!(
             !groups.is_empty(),
             "expected groups when N filtering is disabled (max_n_frac=1.0)"
@@ -2171,12 +2170,9 @@ mod tests {
         // pattern_len=10, k=2 → mandatory suffix len = 10-2 = 8
         // all-N text: 8 Ns in suffix → N/(10+2) = 8/12 ≈ 0.667 > max_n_frac=0.5
         // Pre-filter should eliminate all endpoints → empty result.
-        let groups = Searcher::<Iupac>::new(false, None).search_all_alignments(
-            b"ACGTACGTAC",
-            b"NNNNNNNNNN",
-            2,
-            0.5,
-        );
+        let groups = Searcher::<Iupac>::new(false, None)
+            .with_max_n_frac(0.5)
+            .search_all_alignments(b"ACGTACGTAC", b"NNNNNNNNNN", 2);
         assert!(
             groups.is_empty(),
             "expected no groups for all-N text (fwd, max_n_frac=0.5)"
@@ -2190,10 +2186,12 @@ mod tests {
         let pattern = b"ACGTACGT";
         let text = b"AACGTACGTTT";
         let k = 1;
-        let groups_filtered =
-            Searcher::<Dna>::new(false, None).search_all_alignments(pattern, text, k, 0.5);
-        let groups_unfiltered =
-            Searcher::<Dna>::new(false, None).search_all_alignments(pattern, text, k, 1.0);
+        let groups_filtered = Searcher::<Dna>::new(false, None)
+            .with_max_n_frac(0.5)
+            .search_all_alignments(pattern, text, k);
+        let groups_unfiltered = Searcher::<Dna>::new(false, None)
+            .with_max_n_frac(1.0)
+            .search_all_alignments(pattern, text, k);
         assert_eq!(
             groups_filtered.len(),
             groups_unfiltered.len(),
@@ -2212,8 +2210,9 @@ mod tests {
         let pattern = b"ACGTACGT";
         let text = b"NNNNNNNNACGTACGT";
         let k = 1;
-        let groups =
-            Searcher::<Iupac>::new(false, None).search_all_alignments(pattern, text, k, 0.4);
+        let groups = Searcher::<Iupac>::new(false, None)
+            .with_max_n_frac(0.4)
+            .search_all_alignments(pattern, text, k);
         assert!(
             !groups.is_empty(),
             "real match after N-run must not be discarded by pre-filter"
@@ -2232,12 +2231,9 @@ mod tests {
     #[test]
     fn n_frac_prefilter_dense_n_skipped_rc() {
         // RC mode: all-N text → pre-filter rejects all RC endpoints too.
-        let groups = Searcher::<Iupac>::new(true, None).search_all_alignments(
-            b"ACGTACGTAC",
-            b"NNNNNNNNNN",
-            2,
-            0.5,
-        );
+        let groups = Searcher::<Iupac>::new(true, None)
+            .with_max_n_frac(0.5)
+            .search_all_alignments(b"ACGTACGTAC", b"NNNNNNNNNN", 2);
         assert!(
             groups.is_empty(),
             "expected no groups for all-N text (RC mode, max_n_frac=0.5)"
@@ -2254,8 +2250,9 @@ mod tests {
         let pattern = b"ACGTACGT";
         let text = b"ACGTACGTNNNNNNNN";
         let k = 1;
-        let groups =
-            Searcher::<Iupac>::new(true, None).search_all_alignments(pattern, text, k, 0.4);
+        let groups = Searcher::<Iupac>::new(true, None)
+            .with_max_n_frac(0.4)
+            .search_all_alignments(pattern, text, k);
         assert!(
             !groups.is_empty(),
             "RC match in real sequence region must not be discarded"
