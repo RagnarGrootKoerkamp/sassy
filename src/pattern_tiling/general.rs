@@ -1,3 +1,4 @@
+use crate::n_filter::traced_satisfy_n_frac;
 use crate::pattern_tiling::backend::SimdBackend;
 use crate::pattern_tiling::minima::TracePostProcess;
 use crate::pattern_tiling::search::{HitRange, Myers};
@@ -355,6 +356,7 @@ impl<P: Profile> Searcher<P> {
         encoded_queries: &EncodedPatterns<P>,
         text: &[u8],
         k: u32,
+        max_n_frac: Option<f32>,
     ) -> &[Match] {
         self.search_with_options(
             encoded_queries,
@@ -362,6 +364,7 @@ impl<P: Profile> Searcher<P> {
             k,
             Some(true),
             TracePostProcess::LocalMinima,
+            max_n_frac,
         )
     }
 
@@ -370,8 +373,16 @@ impl<P: Profile> Searcher<P> {
         encoded_queries: &EncodedPatterns<P>,
         text: &[u8],
         k: u32,
+        max_n_frac: Option<f32>,
     ) -> &[Match] {
-        self.search_with_options(encoded_queries, text, k, Some(true), TracePostProcess::All)
+        self.search_with_options(
+            encoded_queries,
+            text,
+            k,
+            Some(true),
+            TracePostProcess::All,
+            max_n_frac,
+        )
     }
 
     pub fn search_with_options(
@@ -381,6 +392,7 @@ impl<P: Profile> Searcher<P> {
         k: u32,
         use_hierarchical: Option<bool>,
         post: TracePostProcess,
+        max_n_frac: Option<f32>,
     ) -> &[Match] {
         if let Some(prefilter) = Self::should_use_hierarchical(encoded_queries, k, use_hierarchical)
         {
@@ -401,6 +413,11 @@ impl<P: Profile> Searcher<P> {
                     &mut self.alignments_buf,
                     &mut self.trace_buffer,
                 );
+                // Filter buffer based on max N-fraction
+                if let Some(max_n_frac) = max_n_frac {
+                    self.alignments_buf
+                        .retain(|m| traced_satisfy_n_frac(m, text, max_n_frac));
+                }
                 self.alignments_buf.as_slice()
             })
         }

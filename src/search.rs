@@ -415,7 +415,7 @@ impl<P: Profile> Searcher<P> {
         k: usize,
     ) -> &[Match] {
         self.pattern_tiling_searcher
-            .search(encoded_queries, text, k as u32)
+            .search(encoded_queries, text, k as u32, self.max_n_frac)
     }
 
     pub fn search_all_encoded_patterns(
@@ -425,7 +425,7 @@ impl<P: Profile> Searcher<P> {
         k: usize,
     ) -> &[Match] {
         self.pattern_tiling_searcher
-            .search_all(encoded_queries, text, k as u32)
+            .search_all(encoded_queries, text, k as u32, self.max_n_frac)
     }
 
     /// Set overhang cost `0<=alpha<=1`.
