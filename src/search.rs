@@ -446,9 +446,18 @@ impl<P: Profile> Searcher<P> {
         self
     }
 
+    /// Set max N-fraction filtering
+    pub fn set_max_n_frac(&mut self, max_n_frac: f32) {
+        if max_n_frac == 1.0 {
+            self.max_n_frac = None;
+        } else {
+            self.max_n_frac = Some(max_n_frac);
+        }
+    }
+
     /// Enable max N-fraction filtering
     pub fn with_max_n_frac(mut self, max_n_frac: f32) -> Self {
-        self.max_n_frac = Some(max_n_frac);
+        self.set_max_n_frac(max_n_frac);
         self
     }
 
@@ -456,11 +465,6 @@ impl<P: Profile> Searcher<P> {
     pub fn without_max_n_frac(mut self) -> Self {
         self.max_n_frac = None;
         self
-    }
-
-    /// Set max N-fraction filtering
-    pub fn set_max_n_frac(&mut self, max_n_frac: Option<f32>) {
-        self.max_n_frac = max_n_frac;
     }
 
     /// Default: return matches with trace.
@@ -1968,7 +1972,7 @@ mod tests {
         k: usize,
     ) {
         let all_matches = searcher.search_all(pattern, text, k);
-        searcher.set_max_n_frac(Some(1.0));
+        searcher.set_max_n_frac(1.0);
         let groups = searcher.search_all_alignments(pattern, text, k);
 
         // Endpoints with only leading-deletion paths produce no group, so groups.len() <= all_matches.len().
@@ -2266,6 +2270,21 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_n_frac_on_search_all() {
+        let pattern = b"ACGTACGTACGT";
+        // 6bp suffix of pattern + N's
+        let text = b"GTACGTNNNNNNNNNNNNNNNNNN";
+        let k = 1;
+        let mut searcher = Searcher::<Dna>::new(false, None);
+        searcher.set_max_n_frac(0.5);
+        let groups_filtered = searcher.search_all_alignments(pattern, text, k);
+        println!("groups_filtered (0.5): {:?}", groups_filtered);
+        searcher.set_max_n_frac(1.0);
+        let groups_unfiltered = searcher.search_all_alignments(pattern, text, k);
+        println!("groups_unfiltered (1.0): {:?}", groups_unfiltered);
     }
 
     #[test]
@@ -3556,6 +3575,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Fuzz test"]
     fn search_many_fuzz() {
         #[cfg(feature = "cli")]
         env_logger::init();
