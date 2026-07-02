@@ -679,6 +679,14 @@ mod tests {
         dna
     }
 
+    fn random_max_n_frac() -> Option<f32> {
+        if random_range(0..100) < 50 {
+            None
+        } else {
+            Some(random_range(0.0..1.0))
+        }
+    }
+
     fn fuzz_against_sassy_batch(
         alpha: Option<f32>,
         include_rc: bool,
@@ -690,6 +698,15 @@ mod tests {
         } else {
             SassySearcher::<Iupac>::new_fwd()
         };
+
+        // Set max n-frac
+        let max_n_frac = random_max_n_frac();
+
+        if let Some(max_n_frac) = max_n_frac {
+            sassy_searcher.set_max_n_frac(max_n_frac);
+        }
+
+        //let max_n_frac = None;
         let mut pattern_tiling_searcher = Searcher::<Iupac>::new(alpha);
 
         for _ in 0..ITER {
@@ -725,6 +742,7 @@ mod tests {
                     } else {
                         crate::pattern_tiling::minima::TracePostProcess::All
                     },
+                    max_n_frac,
                 )
                 .to_vec();
             pattern_tiling_matches.sort_unstable_by_key(|m| {
@@ -786,6 +804,10 @@ mod tests {
                     text.len(),
                     queries.len()
                 );
+                eprintln!("Max n frac: {:?}", max_n_frac);
+                for pattern in &queries {
+                    eprintln!("Pattern: {:?}", String::from_utf8_lossy(pattern));
+                }
                 eprintln!();
 
                 eprintln!("Sassy matches ({}):", sassy_matches.len());
@@ -855,7 +877,7 @@ mod tests {
             let text = random_dna_seq(10_000_000);
             let mut searcher = Searcher::<Iupac>::new(Some(0.5));
             let encoded = searcher.encode(&[pattern], false);
-            let matches = searcher.search(&encoded, &text, k);
+            let matches = searcher.search(&encoded, &text, k, None);
             total_matches += matches.len();
         }
         println!("total matches: {total_matches}");
@@ -966,6 +988,7 @@ mod tests {
             k as u32,
             Some(true),
             crate::pattern_tiling::minima::TracePostProcess::LocalMinima,
+            None,
         );
         for m in pattern_tiling_matches.iter() {
             println!(
@@ -997,6 +1020,7 @@ mod tests {
             k,
             Some(true),
             crate::pattern_tiling::minima::TracePostProcess::All,
+            None,
         );
 
         // Just verify we got some results (or none, both are valid)
@@ -1020,6 +1044,7 @@ mod tests {
             k,
             Some(true),
             crate::pattern_tiling::minima::TracePostProcess::All,
+            None,
         );
 
         println!(
@@ -1078,6 +1103,7 @@ mod tests {
             k as u32,
             Some(false),
             crate::pattern_tiling::minima::TracePostProcess::All,
+            None,
         );
 
         // Sort the pattern_tiling matches by start, end, edits
@@ -1119,6 +1145,7 @@ mod tests {
             k as u32,
             Some(true),
             crate::pattern_tiling::minima::TracePostProcess::All,
+            None,
         );
         for m in matches {
             println!(
@@ -1160,6 +1187,7 @@ mod tests {
             k as u32,
             Some(true),
             crate::pattern_tiling::minima::TracePostProcess::All,
+            None,
         );
         let mut sorted_matches = matches.to_vec();
         sorted_matches

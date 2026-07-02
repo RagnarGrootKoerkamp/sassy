@@ -36,6 +36,10 @@ pub(crate) fn untraced_satisfy_n_frac(
 /// and check if the N-fraction is less than or equal to `max_n_frac`.
 pub(crate) fn traced_satisfy_n_frac(m: &Match, text: &[u8], max_n_frac: f32) -> bool {
     let slice = &text[m.text_start..m.text_end];
+    // Can happen in full overhang cases
+    if slice.is_empty() {
+        return true;
+    }
     let n_count = count_ns(slice) as f32;
     n_count / slice.len() as f32 <= max_n_frac
 }
