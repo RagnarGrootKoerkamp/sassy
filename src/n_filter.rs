@@ -39,3 +39,30 @@ pub(crate) fn traced_satisfy_n_frac(m: &Match, text: &[u8], max_n_frac: f32) -> 
     let n_count = count_ns(slice) as f32;
     n_count / slice.len() as f32 <= max_n_frac
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pa_types::Cigar;
+
+    fn mock_match(start: usize, end: usize) -> Match {
+        Match {
+            text_start: start,
+            text_end: end,
+            pattern_start: 0,
+            pattern_end: 0,
+            strand: Strand::Fwd,
+            pattern_idx: 0,
+            text_idx: 0,
+            cost: 0,
+            cigar: Cigar::default(),
+        }
+    }
+
+    #[test]
+    fn test_untraced_satisfy_n_frac() {
+        let text = b"NNNNNATG";
+        let m = mock_match(0, 3);
+        assert!(untraced_satisfy_n_frac(&m, text, 3, 0, 0.5));
+    }
+}
