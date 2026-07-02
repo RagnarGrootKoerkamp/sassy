@@ -2308,12 +2308,12 @@ mod tests {
 
     #[test]
     fn test_n_frac_builder_init() {
-        let mut searcher = Searcher::<Iupac>::new_fwd().with_max_n_frac(0.5);
+        let mut searcher = Searcher::<Iupac>::new_fwd().with_max_n_frac(0.49);
         let pattern = b"ACGTACGTACGT";
         // 6bp prefix of pattern + N's
         let text = b"ACGTACNNNNNN";
         let matches = searcher.search_all_alignments(pattern, text, 0);
-        assert_eq!(matches.len(), 1);
+        assert_eq!(matches.len(), 0);
     }
 
     #[test]
