@@ -2294,16 +2294,16 @@ mod tests {
     #[test]
     fn test_n_frac_on_search_all() {
         let pattern = b"ACGTACGTACGT";
-        // 6bp suffix of pattern + N's
-        let text = b"GTACGTNNNNNNNNNNNNNNNNNN";
-        let k = 1;
-        let mut searcher = Searcher::<Dna>::new(false, None);
+        // 6bp prefix of pattern + N's
+        let text = b"ACGTACNNNNNN";
+        let k = 0;
+        let mut searcher = Searcher::<Iupac>::new(false, None);
+        searcher.set_max_n_frac(0.49);
+        let matches_49 = searcher.search_all_alignments(pattern, text, k);
+        assert!(matches_49.is_empty());
         searcher.set_max_n_frac(0.5);
-        let groups_filtered = searcher.search_all_alignments(pattern, text, k);
-        println!("groups_filtered (0.5): {:?}", groups_filtered);
-        searcher.set_max_n_frac(1.0);
-        let groups_unfiltered = searcher.search_all_alignments(pattern, text, k);
-        println!("groups_unfiltered (1.0): {:?}", groups_unfiltered);
+        let matches_50 = searcher.search_all_alignments(pattern, text, k);
+        assert_eq!(matches_50.len(), 1);
     }
 
     #[test]
