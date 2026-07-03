@@ -1,4 +1,4 @@
-use crate::n_filter::{traced_satisfy_n_frac, untraced_satisfy_n_frac};
+use crate::n_filter::{satisfy_n_endpoint_filter, traced_satisfy_n_frac};
 use std::cmp::Reverse;
 use std::fmt::Debug;
 use std::hint::assert_unchecked;
@@ -865,29 +865,6 @@ impl<P: Profile> Searcher<P> {
             });
         }
 
-        // Filter out matches with too many Ns, for both strands at once.
-        // `without_trace` matches only have one valid endpoint (`text_end` for Fwd,
-        // `text_start` for Rc; the other is a `usize::MAX` placeholder), so we use
-        // the cheaper mandatory-suffix lower bound instead of the exact traced check.
-        if let Some(max_n_frac) = self.max_n_frac {
-            let mut tail = self.matches.split_off(old_len);
-            let get_text = |idx: usize| -> &[u8] {
-                match fwd_input {
-                    MultiText::One(t) => t,
-                    MultiText::Multi(ts) => ts[idx],
-                }
-            };
-            if self.without_trace {
-                let pattern_len = pattern.len();
-                tail.retain(|m| {
-                    untraced_satisfy_n_frac(m, get_text(m.text_idx), pattern_len, k, max_n_frac)
-                });
-            } else {
-                tail.retain(|m| traced_satisfy_n_frac(m, get_text(m.text_idx), max_n_frac));
-            }
-            self.matches.extend(tail);
-        }
-
         &mut self.matches[old_len..]
     }
 
@@ -916,7 +893,34 @@ impl<P: Profile> Searcher<P> {
                 }
             }
         }
-        self.process_matches(pattern, text, k as Cost)
+
+        // In any case, we filter end positions based on N pre trace filter
+        if let Some(max_n_frac) = self.max_n_frac {
+            for (l, lane) in self.lanes.iter_mut().enumerate() {
+                let Some(t) = text.get_lane(l) else {
+                    break;
+                };
+                lane.matches.retain(|(end_pos, _)| {
+                    satisfy_n_endpoint_filter(*end_pos, t, pattern.len(), k, max_n_frac)
+                });
+            }
+        }
+
+        let tail_start = self.matches.len();
+        self.process_matches(pattern, text, k as Cost);
+
+        // If tracing was enabled we can now do another more precise pass
+        if let Some(max_n_frac) = self.max_n_frac
+            && !self.without_trace
+        {
+            // this does temp alloc, we can avoid it with custom tail filter function if we want
+            let mut tail = self.matches.split_off(tail_start);
+            tail.retain(|m| {
+                traced_satisfy_n_frac(m, text.get_lane(m.text_idx).unwrap(), max_n_frac)
+            });
+            self.matches.extend(tail);
+        }
+        &mut self.matches[tail_start..]
     }
 
     /// Check if any value in the lane is <= k.
