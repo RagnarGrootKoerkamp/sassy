@@ -1,5 +1,4 @@
 use crate::Match;
-use crate::Strand;
 
 #[inline(always)]
 fn count_ns(slice: &[u8]) -> usize {
@@ -9,24 +8,16 @@ fn count_ns(slice: &[u8]) -> usize {
         .count()
 }
 
-/// Returns `true` if `m` could possibly produce an alignment satisfying `max_n_frac`.
-///
-/// Uses the mandatory-suffix lower bound: any alignment of cost <= k must cover at least
-/// `mandatory_suffix = text[end - pattern_length + k: end]`, so the N-fraction is
-/// bounded below by `count_ns(mandatory_suffix) / (pattern_len + k)``.
-pub(crate) fn untraced_satisfy_n_frac(
-    m: &Match,
+pub(crate) fn satisfy_n_endpoint_filter(
+    end_pos: usize,
     text: &[u8],
     pattern_len: usize,
     k: usize,
     max_n_frac: f32,
 ) -> bool {
     let suffix_len = pattern_len.saturating_sub(k);
-    let (start, end) = match m.strand {
-        Strand::Fwd => (m.text_end.saturating_sub(suffix_len), m.text_end),
-        Strand::Rc => (m.text_start, (m.text_start + suffix_len).min(text.len())),
-    };
-    let n_count = count_ns(&text[start..end]);
+    let suffix = &text[end_pos.saturating_sub(suffix_len)..end_pos];
+    let n_count = count_ns(suffix);
     n_count as f32 <= max_n_frac * (pattern_len + k) as f32
 }
 
