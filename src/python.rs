@@ -24,19 +24,33 @@ fn features() {
 #[pymethods]
 impl Searcher {
     #[new]
-    #[pyo3(signature = (alphabet, rc=true, alpha=None))]
-    fn new(alphabet: &str, rc: bool, alpha: Option<f64>) -> PyResult<Self> {
+    #[pyo3(signature = (alphabet, rc=true, alpha=None, max_n_frac=None))]
+    fn new(
+        alphabet: &str,
+        rc: bool,
+        alpha: Option<f64>,
+        max_n_frac: Option<f64>,
+    ) -> PyResult<Self> {
         let searcher = match alphabet.to_lowercase().as_str() {
             "ascii" => {
-                let s = search::Searcher::<Ascii>::new(false, alpha.map(|a| a as f32));
+                let mut s = search::Searcher::<Ascii>::new(false, alpha.map(|a| a as f32));
+                if let Some(max_n_frac) = max_n_frac {
+                    s.set_max_n_frac(max_n_frac as f32);
+                }
                 SearcherType::Ascii(s)
             }
             "dna" => {
-                let s = search::Searcher::<Dna>::new(rc, alpha.map(|a| a as f32));
+                let mut s = search::Searcher::<Dna>::new(rc, alpha.map(|a| a as f32));
+                if let Some(max_n_frac) = max_n_frac {
+                    s.set_max_n_frac(max_n_frac as f32);
+                }
                 SearcherType::Dna(s)
             }
             "iupac" => {
-                let s = search::Searcher::<Iupac>::new(rc, alpha.map(|a| a as f32));
+                let mut s = search::Searcher::<Iupac>::new(rc, alpha.map(|a| a as f32));
+                if let Some(max_n_frac) = max_n_frac {
+                    s.set_max_n_frac(max_n_frac as f32);
+                }
                 SearcherType::Iupac(s)
             }
             _ => {
@@ -102,7 +116,7 @@ impl Searcher {
         }
     }
 
-    #[pyo3(signature = (pattern, text, k, max_n_frac=0.2))]
+    #[pyo3(signature = (pattern, text, k))]
     #[doc = "Enumerate all alignments at every end position with cost <= k.\n\
              Returns a list of groups; each group is a list of Matches sharing the same anchor coordinate.\n\
              For Fwd matches the anchor is text_end; for RC matches the anchor is text_start."]
@@ -111,14 +125,13 @@ impl Searcher {
         pattern: &Bound<'_, PyBytes>,
         text: &Bound<'_, PyBytes>,
         k: usize,
-        max_n_frac: f32,
     ) -> Vec<Vec<Match>> {
         let pattern = pattern.as_bytes();
         let text = text.as_bytes();
         match &mut self.searcher {
-            SearcherType::Ascii(s) => s.search_all_alignments(pattern, text, k, max_n_frac),
-            SearcherType::Dna(s) => s.search_all_alignments(pattern, text, k, max_n_frac),
-            SearcherType::Iupac(s) => s.search_all_alignments(pattern, text, k, max_n_frac),
+            SearcherType::Ascii(s) => s.search_all_alignments(pattern, text, k),
+            SearcherType::Dna(s) => s.search_all_alignments(pattern, text, k),
+            SearcherType::Iupac(s) => s.search_all_alignments(pattern, text, k),
         }
     }
 
