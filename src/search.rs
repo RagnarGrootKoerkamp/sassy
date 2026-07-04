@@ -894,18 +894,6 @@ impl<P: Profile> Searcher<P> {
             }
         }
 
-        println!(
-            "Endpoints before N filter: {:?}",
-            self.lanes
-                .iter()
-                .map(|lane| lane
-                    .matches
-                    .iter()
-                    .map(|(end_pos, _)| *end_pos)
-                    .collect::<Vec<_>>())
-                .collect::<Vec<_>>()
-        );
-
         // In any case, we filter end positions based on N pre trace filter
         if let Some(max_n_frac) = self.max_n_frac {
             for (l, lane) in self.lanes.iter_mut().enumerate() {
@@ -918,22 +906,8 @@ impl<P: Profile> Searcher<P> {
             }
         }
 
-        println!(
-            "Endpoints after N filter: {:?}",
-            self.lanes
-                .iter()
-                .map(|lane| lane
-                    .matches
-                    .iter()
-                    .map(|(end_pos, _)| *end_pos)
-                    .collect::<Vec<_>>())
-                .collect::<Vec<_>>()
-        );
-
         let tail_start = self.matches.len();
         self.process_matches(pattern, text, k as Cost);
-
-        println!("Matches before trace N filter: {:?}", self.matches.len());
 
         // If tracing was enabled we can now do another more precise pass
         if let Some(max_n_frac) = self.max_n_frac
@@ -946,8 +920,6 @@ impl<P: Profile> Searcher<P> {
             });
             self.matches.extend(tail);
         }
-
-        println!("Matches after trace N filter: {:?}", self.matches.len());
 
         &mut self.matches[tail_start..]
     }

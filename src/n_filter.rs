@@ -31,11 +31,9 @@ pub(crate) fn satisfy_n_endpoint_filter(
     k: usize,
     max_n_frac: f32,
 ) -> bool {
-    let suffix_len = pattern_len.saturating_sub(k);
-    let start_pos = end_pos.saturating_sub(suffix_len);
     let end_pos = end_pos.min(text.len());
-    // Original code uses pattern_len + k as denominator, but in case of overhang
-    // this is invalid since the actual aligned slice *can* be shorter than that.
+    let max_len = pattern_len + k;
+    let start_pos = end_pos.saturating_sub(max_len);
     count_ns(text, start_pos, end_pos, max_n_frac)
 }
 
