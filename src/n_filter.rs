@@ -88,7 +88,7 @@ mod tests {
           ACGTACGTACGT  13              ACGTACGTACGT (43, e=1)
            ACGTACGTACGT 14
 
-        of these, only 43
+        of these, only 44 passes the n filter
         */
         let k = 1;
         let mut searcher = Searcher::<Iupac>::new_fwd();
