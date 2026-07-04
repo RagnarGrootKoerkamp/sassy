@@ -120,6 +120,14 @@ assert_eq!(matches[0].strand, Strand::Fwd);
 assert_eq!(matches[0].cigar.to_string(), "2=1X1=");
 ```
 
+When searching IUPAC text with many `N`s, you can drop N-heavy hits with
+`with_max_n_frac(...)`. The value is the maximum allowed fraction of `N`s in the aligned
+region, in `[0, 1]`:
+
+```rust
+let mut searcher = Searcher::<Iupac>::new_fwd().with_max_n_frac(0.5);
+```
+
 When searching __multiple equally long (<=64bp) patterns__ you can pre-encode the patterns. This is around 10-20x faster for short texts (<=200bp), and 2-3x faster for longer texts.
 
 ```rust
