@@ -129,30 +129,19 @@ mod tests {
             let text: Vec<u8> = (0..tlen)
                 .map(|_| bases[rng.random_range(0..4usize)])
                 .collect();
-            eprintln!("Pattern: {}", String::from_utf8_lossy(&pattern));
-            eprintln!("Text: {}", String::from_utf8_lossy(&text));
+            eprintln!("p: {}", String::from_utf8_lossy(&pattern));
+            eprintln!("t: {}", String::from_utf8_lossy(&text));
             eprintln!("k: {}", k);
-            eprintln!("max N Fraction: {}", max_n_frac);
+            eprintln!("n frac: {}", max_n_frac);
             eprintln!("--------------------------------");
             let mut searcher =
                 Searcher::<Iupac>::new_rc_with_overhang(alpha).with_max_n_frac(max_n_frac);
-            let matches_v1 = std::hint::black_box(searcher.search_all(&pattern, &text, k));
+            let _matches_v1 = std::hint::black_box(searcher.search_all(&pattern, &text, k));
 
-            // This is also handled in other fuzz test already
+            // Also make sure we don't crash for v2 post filter
             let encoded = searcher.encode_patterns(&[pattern.clone()]);
-            let matches_v2 =
+            let _matches_v2 =
                 std::hint::black_box(searcher.search_all_encoded_patterns(&encoded, &text, k));
-
-            eprintln!("matches v1");
-            for m in matches_v1.iter() {
-                eprintln!("Match: {:?}", m);
-            }
-            eprintln!("matches v2");
-            for m in matches_v2.iter() {
-                eprintln!("Match: {:?}", m);
-            }
-
-            assert_eq!(matches_v1.len(), matches_v2.len());
         }
     }
 }

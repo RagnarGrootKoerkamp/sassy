@@ -3789,17 +3789,4 @@ mod tests {
             "must use Profile::is_match, not raw ==, to handle N-containing patterns"
         );
     }
-
-    #[test]
-    fn naom_example() {
-        let needle = b"ACGTACGTACGT";
-        let haystack = b"NNNNNNNNNNNNNGGGGGGGGGGGGGGGGGNNNNNNNGTACGT";
-        let k = 1;
-        let mut searcher = Searcher::<Iupac>::new_fwd().with_max_n_frac(0.5);
-        let matches = searcher.search_all(needle, haystack, k);
-        // assert!(matches.is_empty());
-        // searcher.set_max_n_frac(1.0);
-        // let matches = searcher.search(needle, haystack, k);
-        // assert_eq!(matches.len(), 1);
-    }
 }
