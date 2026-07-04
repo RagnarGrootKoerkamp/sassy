@@ -12,7 +12,9 @@ enum SearcherType {
 #[pyclass(module = "sassy")]
 #[doc = "A reusable searcher object for fast sequence search."]
 pub struct Searcher {
-    searcher: SearcherType,
+    // Boxed so Rust's allocator provides the 32-byte alignment required by SIMD
+    // fields inside `search::Searcher` as Python only guarantees 16-byte alignment.
+    searcher: Box<SearcherType>,
 }
 
 #[pyfunction]
@@ -61,7 +63,9 @@ impl Searcher {
             }
         };
 
-        Ok(Searcher { searcher })
+        Ok(Searcher {
+            searcher: Box::new(searcher),
+        })
     }
 
     #[pyo3(signature = (pattern, text, k))]
@@ -75,7 +79,7 @@ impl Searcher {
         // We don't let control go back to Python while we hold the slices.
         let pattern = pattern.as_bytes();
         let text = text.as_bytes();
-        match &mut self.searcher {
+        match self.searcher.as_mut() {
             SearcherType::Ascii(searcher) => searcher.search(&pattern, &text, k),
             SearcherType::Dna(searcher) => searcher.search(&pattern, &text, k),
             SearcherType::Iupac(searcher) => searcher.search(&pattern, &text, k),
@@ -103,7 +107,7 @@ impl Searcher {
                 "Unsupported search mode. Must be one of 'single', 'batch_patterns', or 'batch_texts'"
             ),
         };
-        match &mut self.searcher {
+        match self.searcher.as_mut() {
             SearcherType::Ascii(searcher) => {
                 searcher.search_many(&patterns, &texts, k, threads, mode)
             }
@@ -128,7 +132,7 @@ impl Searcher {
     ) -> Vec<Vec<Match>> {
         let pattern = pattern.as_bytes();
         let text = text.as_bytes();
-        match &mut self.searcher {
+        match self.searcher.as_mut() {
             SearcherType::Ascii(s) => s.search_all_alignments(pattern, text, k),
             SearcherType::Dna(s) => s.search_all_alignments(pattern, text, k),
             SearcherType::Iupac(s) => s.search_all_alignments(pattern, text, k),
@@ -146,7 +150,7 @@ impl Searcher {
         // We don't let control go back to Python while we hold the slices.
         let pattern = pattern.as_bytes();
         let text = text.as_bytes();
-        match &mut self.searcher {
+        match self.searcher.as_mut() {
             SearcherType::Ascii(searcher) => searcher.search_all(&pattern, &text, k),
             SearcherType::Dna(searcher) => searcher.search_all(&pattern, &text, k),
             SearcherType::Iupac(searcher) => searcher.search_all(&pattern, &text, k),
