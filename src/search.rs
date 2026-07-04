@@ -894,6 +894,18 @@ impl<P: Profile> Searcher<P> {
             }
         }
 
+        println!(
+            "Endpoints before N filter: {:?}",
+            self.lanes
+                .iter()
+                .map(|lane| lane
+                    .matches
+                    .iter()
+                    .map(|(end_pos, _)| *end_pos)
+                    .collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        );
+
         // In any case, we filter end positions based on N pre trace filter
         if let Some(max_n_frac) = self.max_n_frac {
             for (l, lane) in self.lanes.iter_mut().enumerate() {
@@ -906,8 +918,22 @@ impl<P: Profile> Searcher<P> {
             }
         }
 
+        println!(
+            "Endpoints after N filter: {:?}",
+            self.lanes
+                .iter()
+                .map(|lane| lane
+                    .matches
+                    .iter()
+                    .map(|(end_pos, _)| *end_pos)
+                    .collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        );
+
         let tail_start = self.matches.len();
         self.process_matches(pattern, text, k as Cost);
+
+        println!("Matches before trace N filter: {:?}", self.matches.len());
 
         // If tracing was enabled we can now do another more precise pass
         if let Some(max_n_frac) = self.max_n_frac
@@ -920,6 +946,9 @@ impl<P: Profile> Searcher<P> {
             });
             self.matches.extend(tail);
         }
+
+        println!("Matches after trace N filter: {:?}", self.matches.len());
+
         &mut self.matches[tail_start..]
     }
 
@@ -3787,5 +3816,18 @@ mod tests {
             count(b"AAAA"),
             "must use Profile::is_match, not raw ==, to handle N-containing patterns"
         );
+    }
+
+    #[test]
+    fn naom_example() {
+        let needle = b"ACGTACGTACGT";
+        let haystack = b"NNNNNNNNNNNNNGGGGGGGGGGGGGGGGGNNNNNNNGTACGT";
+        let k = 1;
+        let mut searcher = Searcher::<Iupac>::new_fwd().with_max_n_frac(0.5);
+        let matches = searcher.search_all(needle, haystack, k);
+        // assert!(matches.is_empty());
+        // searcher.set_max_n_frac(1.0);
+        // let matches = searcher.search(needle, haystack, k);
+        // assert_eq!(matches.len(), 1);
     }
 }
