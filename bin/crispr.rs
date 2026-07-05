@@ -276,30 +276,23 @@ mod test {
 
     fn mock_guide_txt_file() -> NamedTempFile {
         let mut file = NamedTempFile::new().unwrap();
-        let g1 = b"TAGCATCAGCTACGNGG";
-        let g1_txt = format!("{}\n", String::from_utf8_lossy(g1));
+        let g1_txt = format!("TAGCATCAGCTACGNGG\n");
         file.write_all(g1_txt.as_bytes()).unwrap();
         file
     }
 
     fn mock_target_fasta() -> NamedTempFile {
         let mut file = NamedTempFile::new().unwrap();
-        let t1_exact = b"TAGCATCAGCTACGAGG";
-        let t1_pam_mutated = b"TAGCATCAGCTACGACG"; // C instead of G in PAM
-        let t1_n_frac_failure = b"TNNNATCAGCTACGAGG"; // 8 N's out of 17 total = 0.47..
-        let t1_fasta = format!(">exact\n{}\n", String::from_utf8_lossy(t1_exact));
-        let t1_pam_mutated_fasta = format!(
-            ">pam_mutated\n{}\n",
-            String::from_utf8_lossy(t1_pam_mutated)
-        );
-        let t1_n_frac_failure_fasta =
-            format!(">n_frac\n{}\n", String::from_utf8_lossy(t1_n_frac_failure));
+        let t1_fasta = format!(">exact\nTAGCATCAGCTACGAGG\n");
+        let t1_pam_mutated_fasta = format!(">pam_mutated\nTAGCATCAGCTACGACG\n"); // C instead of G in PAM
+        let t1_n_frac_failure_fasta = format!(">n_frac\nTNNNATCAGCTACGAGG\n"); // 3 N's out of 17 total bases
         file.write_all(t1_fasta.as_bytes()).unwrap();
         file.write_all(t1_pam_mutated_fasta.as_bytes()).unwrap();
         file.write_all(t1_n_frac_failure_fasta.as_bytes()).unwrap();
         file
     }
 
+    #[derive(Default)]
     struct Counts {
         exact: usize,
         pam_mutated: usize,
@@ -308,11 +301,7 @@ mod test {
 
     fn get_counts_from_output(tmp_path: &PathBuf) -> Counts {
         let output = fs::read_to_string(tmp_path).unwrap();
-        let mut counts = Counts {
-            exact: 0,
-            pam_mutated: 0,
-            n_frac: 0,
-        };
+        let mut counts = Counts::default();
         for line in output.lines().skip(1) {
             let parts: Vec<&str> = line.split('\t').collect();
             let target = parts[1];
