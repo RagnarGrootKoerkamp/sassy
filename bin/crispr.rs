@@ -64,15 +64,6 @@ fn get_output_writer(args: &CrisprArgs) -> Box<dyn Write + Send> {
     }
 }
 
-pub fn check_n_frac(max_n_frac: f32, match_slice: &[u8]) -> bool {
-    let n_count = match_slice
-        .iter()
-        .filter(|c| (**c & 0xDF) == b'N') // Convert to uppercase check against N
-        .count() as f32;
-    let n_frac = n_count / match_slice.len() as f32;
-    n_frac <= max_n_frac
-}
-
 fn print_and_check_params(args: &CrisprArgs, guide_sequences: &[Vec<u8>]) -> (String, f32) {
     // Check if n frac is within valid range
     if !(0.0..=1.0).contains(&args.max_n_frac) {
@@ -199,9 +190,9 @@ pub fn crispr(args: &CrisprArgs) {
             scope.spawn(|| {
                 // Searcher, IUPAC and always reverse complement
                 let mut searcher = if args.no_rc {
-                    Searcher::<Iupac>::new_fwd()
+                    Searcher::<Iupac>::new_fwd().with_max_n_frac(max_n_frac)
                 } else {
-                    Searcher::<Iupac>::new_rc()
+                    Searcher::<Iupac>::new_rc().with_max_n_frac(max_n_frac)
                 };
 
                 let filter_fn = |_q: &[u8], text_up_to_end: &[u8], strand: Strand| {
@@ -241,18 +232,6 @@ pub fn crispr(args: &CrisprArgs) {
                                 let end = m.text_end;
                                 let text = text.text();
                                 let slice = &text.as_ref()[start..end];
-
-                                // Check if satisfies user max N cut off
-                                let n_ok = if max_n_frac < 100.0 {
-                                    check_n_frac(max_n_frac, slice)
-                                } else {
-                                    true
-                                };
-
-                                if !n_ok {
-                                    continue;
-                                }
-
                                 total_found.fetch_add(1, Ordering::Relaxed);
 
                                 let match_region = if m.strand == Strand::Rc {
