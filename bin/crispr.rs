@@ -332,13 +332,13 @@ mod test {
             path: target_file.path().to_path_buf(),
         };
         crispr(&args);
-        // Read output file
         let found_counts = get_counts_from_output(&tmp_output.path().to_path_buf());
         assert_eq!(found_counts.exact, 2);
         assert_eq!(found_counts.pam_mutated, 1);
         assert_eq!(found_counts.n_frac, 2);
 
-        // If we now disable PAM mutations we should have zero for pam_mutated, rest same
+        // If we now disable PAM mutations we should have zero for pam_mutated
+        // exact also changes as now it cant move on the last char anymore
         args.allow_pam_edits = false;
         crispr(&args);
         let found_counts = get_counts_from_output(&tmp_output.path().to_path_buf());
