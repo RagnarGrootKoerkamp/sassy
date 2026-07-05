@@ -262,6 +262,9 @@ impl<'s, C: Callback> Context<'s, C> {
                 continue;
             }
             // Filter in-range edges.
+            if pos.0 < op.delta().0 || pos.1 < op.delta().1 {
+                continue;
+            }
             let new_pos = pos - op.delta();
             if new_pos.0 < min_pos.0 || new_pos.1 < min_pos.1 {
                 // matrix OOB (either coordinate out of range)
