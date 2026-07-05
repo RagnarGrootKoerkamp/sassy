@@ -15,10 +15,7 @@ use sassy::{
     profiles::{Ascii, Dna, Iupac, Profile},
 };
 
-use crate::{
-    crispr::check_n_frac,
-    input_iterator::{InputIterator, PatternRecord, TextBatch, TextRecord},
-};
+use crate::input_iterator::{InputIterator, PatternRecord, TextBatch, TextRecord};
 
 // TODO: Support ASCII alphabet.
 #[derive(clap::ValueEnum, Default, Clone, Copy, PartialEq)]
@@ -370,7 +367,6 @@ fn run_batch_v2<'a, P: Profile>(
     patterns: &'a [PatternRecord],
     text_batch: &TextBatch,
     k: usize,
-    max_n_frac: f32,
 ) {
     let patterns_vec: Vec<Vec<u8>> = patterns.iter().map(|p| p.seq.clone()).collect();
     let encoded = searcher.encode_patterns(&patterns_vec);
@@ -378,7 +374,6 @@ fn run_batch_v2<'a, P: Profile>(
         let record_matches = searcher.search_encoded_patterns(&encoded, &text.seq.text, k);
         let batch_matches: Vec<_> = record_matches
             .iter()
-            .filter(|m| check_n_frac(max_n_frac, &text.seq.text[m.text_start..m.text_end]))
             .cloned()
             .map(|m| {
                 let pattern = &patterns[m.pattern_idx];
@@ -495,9 +490,11 @@ impl Args {
                         Alphabet::Dna => {
                             SearcherType::Dna(Searcher::<Dna>::new(rc, args.base.overhang))
                         }
-                        Alphabet::Iupac => {
-                            SearcherType::Iupac(Searcher::<Iupac>::new(rc, args.base.overhang))
-                        }
+                        // Only make sense to set n_frac for IUPAC profile?
+                        Alphabet::Iupac => SearcherType::Iupac(
+                            Searcher::<Iupac>::new(rc, args.base.overhang)
+                                .with_max_n_frac(args.base.max_n_frac),
+                        ),
                     };
 
                     let mut results = vec![];
@@ -508,24 +505,12 @@ impl Args {
 
                         if args.base.v2 {
                             match &mut searcher {
-                                SearcherType::Dna(s) => run_batch_v2(
-                                    s,
-                                    &mut results,
-                                    path,
-                                    batch.1,
-                                    &batch.2,
-                                    k,
-                                    args.base.max_n_frac,
-                                ),
-                                SearcherType::Iupac(s) => run_batch_v2(
-                                    s,
-                                    &mut results,
-                                    path,
-                                    batch.1,
-                                    &batch.2,
-                                    k,
-                                    args.base.max_n_frac,
-                                ),
+                                SearcherType::Dna(s) => {
+                                    run_batch_v2(s, &mut results, path, batch.1, &batch.2, k)
+                                }
+                                SearcherType::Iupac(s) => {
+                                    run_batch_v2(s, &mut results, path, batch.1, &batch.2, k)
+                                }
                             }
                         } else {
                             for (i, text) in batch.2.iter().enumerate() {
@@ -539,17 +524,8 @@ impl Args {
                                             s.search(&pattern.seq, &text.seq, k)
                                         }
                                     };
-                                    batch_matches.extend(
-                                        record_matches
-                                            .into_iter()
-                                            .filter(|m| {
-                                                check_n_frac(
-                                                    args.base.max_n_frac,
-                                                    &text.seq.text[m.text_start..m.text_end],
-                                                )
-                                            })
-                                            .map(|m| (pattern, m)),
-                                    );
+                                    batch_matches
+                                        .extend(record_matches.into_iter().map(|m| (pattern, m)));
                                 }
 
                                 if batch_matches.is_empty() {
