@@ -1,7 +1,11 @@
 use crate::Match;
 
+/// Returns `true` if `text[start_pos:end_pos]` has an N-fraction <= `max_n_frac`.
+///
+/// N-fration is defined as count(N's) / denominator, where denominator is provided
+/// via `denominator` or defaulting to the length of the slice.
 #[inline(always)]
-fn count_ns(
+fn check_n_fraction(
     text: &[u8],
     start_pos: usize,
     end_pos: usize,
@@ -44,7 +48,7 @@ pub(crate) fn satisfy_n_endpoint_filter(
     let end_pos = end_pos.min(text.len());
     let mandatory_len = pattern_len.saturating_sub(k);
     let start_pos = end_pos.saturating_sub(mandatory_len);
-    count_ns(text, start_pos, end_pos, max_n_frac, Some(pattern_len + k))
+    check_n_fraction(text, start_pos, end_pos, max_n_frac, Some(pattern_len + k))
 }
 
 /// Returns `true` if `m` has an alignment satisfying `max_n_frac`.
@@ -52,7 +56,7 @@ pub(crate) fn satisfy_n_endpoint_filter(
 /// For traced matches we know the text slice so we just have to count the N's
 /// and check if the N-fraction is <= `max_n_frac`.
 pub(crate) fn traced_satisfy_n_frac(m: &Match, text: &[u8], max_n_frac: f32) -> bool {
-    count_ns(text, m.text_start, m.text_end, max_n_frac, None)
+    check_n_fraction(text, m.text_start, m.text_end, max_n_frac, None)
 }
 
 #[cfg(test)]
