@@ -267,3 +267,111 @@ pub fn crispr(args: &CrisprArgs) {
     );
     println!("  Time taken: {:?}", start.elapsed());
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::fs;
+    use tempfile::NamedTempFile;
+
+    fn mock_guide_txt_file() -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        let g1 = b"TAGCATCAGCTACGNGG";
+        let g1_txt = format!("{}\n", String::from_utf8_lossy(g1));
+        file.write_all(g1_txt.as_bytes()).unwrap();
+        file
+    }
+
+    fn mock_target_fasta() -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        let t1_exact = b"TAGCATCAGCTACGAGG";
+        let t1_pam_mutated = b"TAGCATCAGCTACGACG"; // C instead of G in PAM
+        let t1_n_frac_failure = b"TNNNATCAGCTACGAGG"; // 8 N's out of 17 total = 0.47..
+        let t1_fasta = format!(">exact\n{}\n", String::from_utf8_lossy(t1_exact));
+        let t1_pam_mutated_fasta = format!(
+            ">pam_mutated\n{}\n",
+            String::from_utf8_lossy(t1_pam_mutated)
+        );
+        let t1_n_frac_failure_fasta =
+            format!(">n_frac\n{}\n", String::from_utf8_lossy(t1_n_frac_failure));
+        file.write_all(t1_fasta.as_bytes()).unwrap();
+        file.write_all(t1_pam_mutated_fasta.as_bytes()).unwrap();
+        file.write_all(t1_n_frac_failure_fasta.as_bytes()).unwrap();
+        file
+    }
+
+    struct Counts {
+        exact: usize,
+        pam_mutated: usize,
+        n_frac: usize,
+    }
+
+    fn get_counts_from_output(tmp_path: &PathBuf) -> Counts {
+        let output = fs::read_to_string(tmp_path).unwrap();
+        let mut counts = Counts {
+            exact: 0,
+            pam_mutated: 0,
+            n_frac: 0,
+        };
+        for line in output.lines() {
+            let parts = line.split('\t').collect::<Vec<&str>>();
+            if parts[0] == "guide" {
+                // skip header
+                continue;
+            }
+            let target = parts[1];
+            match target {
+                "exact" => counts.exact += 1,
+                "pam_mutated" => counts.pam_mutated += 1,
+                "n_frac" => counts.n_frac += 1,
+                _ => panic!("Unknown target: {}", target),
+            }
+        }
+        counts
+    }
+
+    #[test]
+    fn test_crispr() {
+        let tmp_output = NamedTempFile::new().unwrap();
+        let guide_file = mock_guide_txt_file();
+        let target_file: NamedTempFile = mock_target_fasta();
+        let mut args = CrisprArgs {
+            guide: guide_file.path().to_string_lossy().to_string(),
+            k: 1,
+            output: Some(tmp_output.path().to_path_buf()),
+            max_n_frac: 1.0,
+            threads: None,
+            pam_length: 3,
+            allow_pam_edits: true,
+            no_rc: false,
+            path: target_file.path().to_path_buf(),
+        };
+        crispr(&args);
+        // Read output file
+        let found_counts = get_counts_from_output(&tmp_output.path().to_path_buf());
+        assert_eq!(found_counts.exact, 2);
+        assert_eq!(found_counts.pam_mutated, 1);
+        assert_eq!(found_counts.n_frac, 2);
+
+        // If we now disable PAM mutations we should have zero for pam_mutated, rest same
+        args.allow_pam_edits = false;
+        crispr(&args);
+        let found_counts = get_counts_from_output(&tmp_output.path().to_path_buf());
+        assert_eq!(found_counts.exact, 1);
+        assert_eq!(found_counts.pam_mutated, 0);
+        assert_eq!(found_counts.n_frac, 1);
+
+        // We have 3 N's / 17 = 0.176..
+        let expected_treshold = (3.0 / 17.0) as f32;
+        // Slightly above threshold should still pass
+        args.max_n_frac = expected_treshold + 0.01;
+        crispr(&args);
+        let found_counts = get_counts_from_output(&tmp_output.path().to_path_buf());
+        assert_eq!(found_counts.n_frac, 1);
+        // Setting slightly below the threshold should drop the match
+        args.max_n_frac = expected_treshold - 0.01;
+        crispr(&args);
+        let found_counts = get_counts_from_output(&tmp_output.path().to_path_buf());
+        assert_eq!(found_counts.n_frac, 0);
+    }
+}
