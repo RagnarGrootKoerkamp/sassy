@@ -313,18 +313,14 @@ mod test {
             pam_mutated: 0,
             n_frac: 0,
         };
-        for line in output.lines() {
-            let parts = line.split('\t').collect::<Vec<&str>>();
-            if parts[0] == "guide" {
-                // skip header
-                continue;
-            }
+        for line in output.lines().skip(1) {
+            let parts: Vec<&str> = line.split('\t').collect();
             let target = parts[1];
             match target {
                 "exact" => counts.exact += 1,
                 "pam_mutated" => counts.pam_mutated += 1,
                 "n_frac" => counts.n_frac += 1,
-                _ => panic!("Unknown target: {}", target),
+                _ => panic!("Unknown target: {target}"),
             }
         }
         counts
