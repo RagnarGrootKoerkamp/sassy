@@ -8,6 +8,8 @@
 //! whether to search the reverse complement ([`Searcher::new_fwd`], [`Searcher::new_rc`]),
 //! and optionally with an _overhang cost_ for IUPAC profiles ([`Searcher::new_fwd_with_overhang`]).
 //!
+//! Note that in the `Iupac` alphabet, everything matches against `NNN..NNN`. Use [`Searcher::with_max_n_frac`] to limit the fraction of `N` characters that a match may have.
+//!
 //! Given a [`Searcher`], you can search call [`Searcher::search`] with a pattern, text, and maximum edit distance `k`.
 //! This will return a vector of [`Match`] objects, that each contain the substring of text they match, the corresponding `cost`,
 //! and the `cigar` string that describes the alignment.
