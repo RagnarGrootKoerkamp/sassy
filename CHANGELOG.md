@@ -3,6 +3,7 @@
 <!-- next-header -->
 
 ## git
+- Support `max_n_frac` directly in the `Searcher` API, rather than only in the CLI. A small breaking change removes the `max_n_frac` argument from `Searcher::search_all_alignents`. ([#66](https://github.com/RagnarGrootKoerkamp/sassy/pull/66), [#67](https://github.com/RagnarGrootKoerkamp/sassy/pull/67))
 
 ## 0.2.5
 - Fix that `Searcher::without_trace` was ignored. Specifically this made `search_all` and
