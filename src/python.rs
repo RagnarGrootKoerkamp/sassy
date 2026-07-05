@@ -33,26 +33,20 @@ impl Searcher {
         alpha: Option<f64>,
         max_n_frac: Option<f64>,
     ) -> PyResult<Self> {
+        let max_n_frac = max_n_frac.unwrap_or(1.0) as f32; //1.0 defaults to `None` in search.rs
+        let alpha = alpha.map(|a| a as f32);
         let searcher = match alphabet.to_lowercase().as_str() {
             "ascii" => {
-                let mut s = search::Searcher::<Ascii>::new(false, alpha.map(|a| a as f32));
-                if let Some(max_n_frac) = max_n_frac {
-                    s.set_max_n_frac(max_n_frac as f32);
-                }
+                let mut s =
+                    search::Searcher::<Ascii>::new(false, alpha).with_max_n_frac(max_n_frac);
                 SearcherType::Ascii(s)
             }
             "dna" => {
-                let mut s = search::Searcher::<Dna>::new(rc, alpha.map(|a| a as f32));
-                if let Some(max_n_frac) = max_n_frac {
-                    s.set_max_n_frac(max_n_frac as f32);
-                }
+                let mut s = search::Searcher::<Dna>::new(rc, alpha).with_max_n_frac(max_n_frac);
                 SearcherType::Dna(s)
             }
             "iupac" => {
-                let mut s = search::Searcher::<Iupac>::new(rc, alpha.map(|a| a as f32));
-                if let Some(max_n_frac) = max_n_frac {
-                    s.set_max_n_frac(max_n_frac as f32);
-                }
+                let mut s = search::Searcher::<Iupac>::new(rc, alpha).with_max_n_frac(max_n_frac);
                 SearcherType::Iupac(s)
             }
             _ => {
