@@ -3,6 +3,8 @@
 <!-- next-header -->
 
 ## git
+- Auto-select the AVX-512 (`u64x8`) SIMD kernel on AVX-512 targets (e.g. the `x86-64-v4` variant produced by `cargo-multivers`), ~35-38% faster than `u64x4` with byte-identical output. Also software-prefetch text blocks ahead in the streaming loop, and transpose the per-block eq profile across lanes to replace the per-row gather with a single vector load.
+- **Breaking:** the `Profile` trait gains a required `eq_idx` method. Custom `Profile` implementations must add `fn eq_idx(ca: &Self::A) -> usize`, returning the same index `eq` uses to read the encoded reference.
 
 ## 0.2.6
 - Support `max_n_frac` directly in the `Searcher` API, rather than only in the CLI. A small breaking change removes the `max_n_frac` argument from `Searcher::search_all_alignents`. ([#66](https://github.com/RagnarGrootKoerkamp/sassy/pull/66), [#67](https://github.com/RagnarGrootKoerkamp/sassy/pull/67))
