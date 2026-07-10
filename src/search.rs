@@ -165,6 +165,12 @@ impl<T: AsRef<[u8]>> RcSearchAble for CachedRev<T> {
     }
 }
 
+/// How many 64-byte text blocks ahead to software-prefetch in the streaming DP
+/// loop. Chosen so the load lands before the block is consumed; the block loop
+/// does `pattern_len` rows of SIMD work per block, so a few blocks of lookahead
+/// covers typical memory latency. Tunable.
+const TEXT_PREFETCH_BLOCKS: usize = 4;
+
 #[derive(Clone)]
 struct LaneState<P: Profile> {
     decreasing: bool,
@@ -192,6 +198,17 @@ impl<P: Profile> LaneState<P> {
     fn update_and_encode(&mut self, text: &[u8], i: usize, profiler: &P, overhang: bool) {
         let start = self.chunk_offset * 64 + 64 * i;
         self.lane_end = start + 64;
+
+        // Prefetch the text block this lane will consume a few iterations from
+        // now. The DP inner loop over pattern rows gives the load time to land,
+        // hiding memory latency when the text does not fit in cache. Sequential
+        // access is already handled well by the hardware prefetcher, so the win
+        // is largest for large, out-of-cache texts.
+        let prefetch_start = start + TEXT_PREFETCH_BLOCKS * 64;
+        if prefetch_start < text.len() {
+            crate::prefetch_read(unsafe { text.as_ptr().add(prefetch_start) });
+        }
+
         if start + 64 <= text.len() {
             self.text_slice.copy_from_slice(&text[start..start + 64]);
         } else {

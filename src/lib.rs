@@ -184,6 +184,31 @@ const LANES: usize = 8;
 #[cfg(feature = "avx512")]
 type S = wide::u64x8;
 
+/// Hint the CPU to prefetch the cache line at `ptr` into L1 for reading, with
+/// high temporal locality.
+///
+/// This is a pure performance hint: `ptr` need not be readable, aligned, or
+/// dereferenceable, and passing a wild pointer is safe (the CPU discards a
+/// prefetch of an unmapped address). The caller uses it to fetch soon-to-be-read
+/// text ahead of the streaming DP loop. Uses stable inline `asm!` on aarch64
+/// because the `_prefetch` intrinsic there is still nightly-only.
+#[inline(always)]
+#[allow(unused_variables)]
+pub(crate) fn prefetch_read(ptr: *const u8) {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        core::arch::x86_64::_mm_prefetch(ptr as *const i8, core::arch::x86_64::_MM_HINT_T0);
+    }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!(
+            "prfm pldl1keep, [{p}]",
+            p = in(reg) ptr,
+            options(nostack, preserves_flags, readonly),
+        );
+    }
+}
+
 /// Print info on CPU features and speed of searching.
 #[cfg(feature = "diagnostics")]
 pub fn test_cpu_features() {
