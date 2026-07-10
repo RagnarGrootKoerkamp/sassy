@@ -136,6 +136,11 @@ impl Profile for Iupac {
     }
 
     #[inline(always)]
+    fn eq_idx(ca: &usize) -> usize {
+        *ca
+    }
+
+    #[inline(always)]
     fn is_match(char1: u8, char2: u8) -> bool {
         (Self::encode_char(char1) & Self::encode_char(char2)) > 0
     }

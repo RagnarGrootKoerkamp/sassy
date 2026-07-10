@@ -42,6 +42,11 @@ impl<const CASE_SENSITIVE: bool> Profile for Ascii<CASE_SENSITIVE> {
     }
 
     #[inline(always)]
+    fn eq_idx(ca: &usize) -> usize {
+        *ca
+    }
+
+    #[inline(always)]
     fn is_match(char1: u8, char2: u8) -> bool {
         if CASE_SENSITIVE {
             char1.eq(&char2)
