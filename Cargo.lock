@@ -1238,6 +1238,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "prefetch-index"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9057806a8d77d67bccdc0f542db43737a6f19ada3efab2adc63277feea27310f"
+
+[[package]]
 name = "prettyplease"
 version = "0.2.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1594,6 +1600,7 @@ dependencies = [
  "pa-types",
  "packed-seq",
  "perfcnt",
+ "prefetch-index",
  "pyo3",
  "pyo3-introspection",
  "rand 0.10.1",

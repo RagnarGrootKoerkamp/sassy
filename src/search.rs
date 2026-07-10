@@ -192,6 +192,10 @@ impl<P: Profile> LaneState<P> {
     fn update_and_encode(&mut self, text: &[u8], i: usize, profiler: &P, overhang: bool) {
         let start = self.chunk_offset * 64 + 64 * i;
         self.lane_end = start + 64;
+
+        // Prefetch the text 4 blocks ahead.
+        prefetch_index::prefetch_index(text, start + 4 * 64);
+
         if start + 64 <= text.len() {
             self.text_slice.copy_from_slice(&text[start..start + 64]);
         } else {
