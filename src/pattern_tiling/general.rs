@@ -1,3 +1,5 @@
+use std::sync::atomic::AtomicBool;
+
 use crate::n_filter::traced_satisfy_n_frac;
 use crate::pattern_tiling::backend::SimdBackend;
 use crate::pattern_tiling::minima::TracePostProcess;
@@ -113,7 +115,7 @@ fn trace_ranges_backend<S: SimdBackend, P: Profile>(
     trace_buffer: &mut TraceBuffer,
 ) {
     out.clear();
-    eprintln!("lanes: {}", S::LANES);
+    // eprintln!("lanes: {}", S::LANES);
     for chunk in ranges.chunks(S::LANES) {
         trace_batch_ranges(
             searcher,
@@ -201,6 +203,8 @@ enum PrefilterBackend {
     U16,
     U32,
 }
+
+pub static USE_WGPU: AtomicBool = AtomicBool::new(false);
 
 pub struct Searcher<P: Profile> {
     searcher_u8: Myers<U8Backend, P>,
@@ -350,26 +354,25 @@ impl<P: Profile> Searcher<P> {
     ) -> &[Match] {
         #[cfg(feature = "wgpu")]
         {
-            self.search_wgpu(
-                encoded_queries,
-                text,
-                k,
-                TracePostProcess::LocalMinima,
-                max_n_frac,
-            )
+            if USE_WGPU.load(std::sync::atomic::Ordering::Relaxed) {
+                return self.search_wgpu(
+                    encoded_queries,
+                    text,
+                    k,
+                    TracePostProcess::LocalMinima,
+                    max_n_frac,
+                );
+            }
         }
 
-        #[cfg(not(feature = "wgpu"))]
-        {
-            self.search_with_options(
-                encoded_queries,
-                text,
-                k,
-                Some(true),
-                TracePostProcess::LocalMinima,
-                max_n_frac,
-            )
-        }
+        self.search_with_options(
+            encoded_queries,
+            text,
+            k,
+            Some(true),
+            TracePostProcess::LocalMinima,
+            max_n_frac,
+        )
     }
 
     pub fn search_all(

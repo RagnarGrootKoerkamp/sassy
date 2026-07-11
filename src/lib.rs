@@ -151,7 +151,7 @@ mod trace;
 pub mod alignment_iterator;
 mod pattern_tiling;
 pub mod profiles;
-pub use pattern_tiling::general::EncodedPatterns;
+pub use pattern_tiling::general::{EncodedPatterns, USE_WGPU};
 pub use search::CachedRev;
 pub use search::Match;
 pub use search::RcSearchAble;

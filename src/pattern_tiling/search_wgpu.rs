@@ -95,12 +95,12 @@ impl MyersWgpu {
         // round-tripped through naga (which can choke on some rust-gpu
         // output, e.g. narrow/bool types).
         let adapter_features = adapter.features();
-        let required_features = if adapter_features.contains(wgpu::Features::SPIRV_SHADER_PASSTHROUGH)
-        {
-            wgpu::Features::PUSH_CONSTANTS | wgpu::Features::SPIRV_SHADER_PASSTHROUGH
-        } else {
-            wgpu::Features::PUSH_CONSTANTS
-        };
+        let required_features =
+            if adapter_features.contains(wgpu::Features::SPIRV_SHADER_PASSTHROUGH) {
+                wgpu::Features::PUSH_CONSTANTS | wgpu::Features::SPIRV_SHADER_PASSTHROUGH
+            } else {
+                wgpu::Features::PUSH_CONSTANTS
+            };
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -144,12 +144,14 @@ impl MyersWgpu {
         {
             let spirv_words: std::borrow::Cow<[u32]> = wgpu::util::make_spirv_raw(MYERS_KERNEL_SPV);
             unsafe {
-                device.create_shader_module_passthrough(wgpu::ShaderModuleDescriptorPassthrough::SpirV(
-                    wgpu::ShaderModuleDescriptorSpirV {
-                        label: Some("Myers Search Kernel"),
-                        source: spirv_words,
-                    },
-                ))
+                device.create_shader_module_passthrough(
+                    wgpu::ShaderModuleDescriptorPassthrough::SpirV(
+                        wgpu::ShaderModuleDescriptorSpirV {
+                            label: Some("Myers Search Kernel"),
+                            source: spirv_words,
+                        },
+                    ),
+                )
             }
         } else {
             let spirv_data = wgpu::util::make_spirv(MYERS_KERNEL_SPV);

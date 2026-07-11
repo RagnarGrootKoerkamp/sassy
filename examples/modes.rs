@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering::Relaxed;
+
 use clap::Parser;
 use rand::RngExt;
 use sassy::{Searcher, profiles::Iupac};
@@ -51,6 +53,7 @@ fn main() {
         .collect();
 
     {
+        sassy::USE_WGPU.store(true, Relaxed);
         let mut searcher = Searcher::<Iupac>::new_rc();
         for _ in 0..2 {
             let start = std::time::Instant::now();
@@ -61,6 +64,20 @@ fn main() {
                 cnt += matches.len();
             }
             eprintln!("GPU       {cnt}: {:?}", start.elapsed());
+        }
+    }
+    {
+        sassy::USE_WGPU.store(false, Relaxed);
+        let mut searcher = Searcher::<Iupac>::new_rc();
+        for _ in 0..2 {
+            let start = std::time::Instant::now();
+            let mut cnt = 0;
+            for text in &texts {
+                let pats = searcher.encode_patterns(&patterns);
+                let matches = searcher.search_encoded_patterns(&pats, text, k);
+                cnt += matches.len();
+            }
+            eprintln!("v2        {cnt}: {:?}", start.elapsed());
         }
     }
 
