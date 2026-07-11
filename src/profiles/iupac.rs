@@ -1,9 +1,9 @@
 use crate::{
     LANES,
-    profiles::{Profile, u8x32_gt, u8x32_shr},
+    profiles::{Profile, u8x32_shr},
 };
 use std::mem::transmute;
-use wide::{CmpEq, u8x32};
+use wide::{CmpEq, CmpGt, u8x32};
 
 /// IUPAC alphabet: ACGT + NYR...
 ///
@@ -84,8 +84,8 @@ impl Profile for Iupac {
             let idx5_0 = chunk0 & mask5;
             let idx5_1 = chunk1 & mask5;
 
-            let is_hi_0 = u8x32_gt(idx5_0, u8x32::splat(15));
-            let is_hi_1 = u8x32_gt(idx5_1, u8x32::splat(15));
+            let is_hi_0 = idx5_0.simd_gt(u8x32::splat(15));
+            let is_hi_1 = idx5_1.simd_gt(u8x32::splat(15));
 
             let tbl256 = u8x32::from(transmute::<_, [u8; 32]>([PACKED_NIBBLES, PACKED_NIBBLES]));
 
@@ -173,14 +173,14 @@ impl Profile for Iupac {
 
                 // Check if > '@' (64) (=b'A'-1) and < 128.
                 let in_range =
-                    u8x32_gt(upper, u8x32::splat(64)) & u8x32_gt(u8x32::splat(128), upper);
+                    upper.simd_gt(u8x32::splat(64)) & u8x32::splat(128).simd_gt(upper);
                 if !in_range.all() {
                     return false;
                 }
 
                 let idx5 = upper & u8x32::splat(0x1F);
                 let low4 = idx5 & mask4;
-                let is_hi = u8x32_gt(idx5, u8x32::splat(15));
+                let is_hi = idx5.simd_gt(u8x32::splat(15));
                 let shuffled = half_shuffle(tbl256, low4);
                 let lo_nib = shuffled & mask4;
                 let hi_nib = shuffled & high4;
