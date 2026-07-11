@@ -24,6 +24,8 @@ struct Args {
     pattern: bool,
     #[clap(long)]
     text: bool,
+    #[clap(long)]
+    gpu: bool,
 }
 
 fn main() {
@@ -37,6 +39,7 @@ fn main() {
         t,
         pattern,
         text,
+        gpu,
     } = Args::parse();
 
     let mut rng = rand::rng();
@@ -47,7 +50,21 @@ fn main() {
         .map(|_| (0..m).map(|_| b"ACGT"[rng.random_range(0..4)]).collect())
         .collect();
 
-    if !pattern && !text {
+    {
+        let mut searcher = Searcher::<Iupac>::new_rc();
+        for _ in 0..2 {
+            let start = std::time::Instant::now();
+            let mut cnt = 0;
+            for text in &texts {
+                let pats = searcher.encode_patterns(&patterns);
+                let matches = searcher.search_encoded_patterns(&pats, text, k);
+                cnt += matches.len();
+            }
+            eprintln!("GPU       {cnt}: {:?}", start.elapsed());
+        }
+    }
+
+    {
         let mut searcher = Searcher::<Iupac>::new_rc();
         for _ in 0..2 {
             let start = std::time::Instant::now();
@@ -61,7 +78,7 @@ fn main() {
             eprintln!("Single    {cnt}: {:?}", start.elapsed());
         }
     }
-    if !pattern {
+    {
         let mut searcher = Searcher::<Iupac>::new_rc();
         for _ in 0..2 {
             let start = std::time::Instant::now();
@@ -73,7 +90,7 @@ fn main() {
             eprintln!("Text      {cnt}: {:?}", start.elapsed());
         }
     }
-    if !text {
+    {
         let mut searcher = Searcher::<Iupac>::new_rc();
         for _ in 0..2 {
             let start = std::time::Instant::now();

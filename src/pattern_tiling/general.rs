@@ -211,6 +211,10 @@ pub struct Searcher<P: Profile> {
     suffix_searcher_u32: Myers<U32Backend, P>,
     alignments_buf: Vec<Match>,
     trace_buffer: TraceBuffer,
+    // Lazily initialized on first use of `search_wgpu`, since creating a WGPU
+    // device/pipeline is relatively expensive and requires an available GPU.
+    #[cfg(feature = "wgpu")]
+    wgpu_searcher: Option<crate::pattern_tiling::search_wgpu::MyersWgpu>,
 }
 
 impl<P: Profile> Clone for Searcher<P> {
@@ -225,6 +229,8 @@ impl<P: Profile> Clone for Searcher<P> {
             suffix_searcher_u32: Myers::new(Some(self.suffix_searcher_u32.alpha)),
             alignments_buf: Vec::new(),
             trace_buffer: TraceBuffer::new(64),
+            #[cfg(feature = "wgpu")]
+            wgpu_searcher: None,
         }
     }
 }
@@ -241,6 +247,8 @@ impl<P: Profile> Searcher<P> {
             suffix_searcher_u32: Myers::new(alpha),
             alignments_buf: Vec::new(),
             trace_buffer: TraceBuffer::new(64),
+            #[cfg(feature = "wgpu")]
+            wgpu_searcher: None,
         }
     }
 
@@ -339,14 +347,28 @@ impl<P: Profile> Searcher<P> {
         k: u32,
         max_n_frac: Option<f32>,
     ) -> &[Match] {
-        self.search_with_options(
-            encoded_queries,
-            text,
-            k,
-            Some(true),
-            TracePostProcess::LocalMinima,
-            max_n_frac,
-        )
+        #[cfg(feature = "wgpu")]
+        {
+            self.search_wgpu(
+                encoded_queries,
+                text,
+                k,
+                TracePostProcess::LocalMinima,
+                max_n_frac,
+            )
+        }
+
+        #[cfg(not(feature = "wgpu"))]
+        {
+            self.search_with_options(
+                encoded_queries,
+                text,
+                k,
+                Some(true),
+                TracePostProcess::LocalMinima,
+                max_n_frac,
+            )
+        }
     }
 
     pub fn search_all(
@@ -396,6 +418,62 @@ impl<P: Profile> Searcher<P> {
                 );
             });
         }
+        if let Some(max_n_frac) = max_n_frac {
+            self.alignments_buf
+                .retain(|m| traced_satisfy_n_frac(m, text, max_n_frac));
+        }
+        self.alignments_buf.as_slice()
+    }
+
+    /// GPU-accelerated search using WGPU (Vulkan/Metal/DX12/OpenGL), following
+    /// the same hierarchical prefilter/trace pattern as
+    /// `hierarchical_search_with_prefilter`: the GPU is used to quickly find
+    /// coarse candidate ranges across all patterns (thread-per-pattern), and
+    /// the existing CPU SIMD backend is then used to trace exact alignments
+    /// only within those candidate ranges.
+    #[cfg(feature = "wgpu")]
+    pub fn search_wgpu(
+        &mut self,
+        encoded_queries: &EncodedPatterns<P>,
+        text: &[u8],
+        k: u32,
+        post: TracePostProcess,
+        max_n_frac: Option<f32>,
+    ) -> &[Match] {
+        if self.wgpu_searcher.is_none() {
+            self.wgpu_searcher = Some(crate::pattern_tiling::search_wgpu::MyersWgpu::new());
+        }
+
+        // Pull out the raw query byte sequences and alpha overhang value used
+        // by the full-precision CPU backend, so the GPU prefilter pass
+        // operates on the exact same patterns/parameters.
+        let (queries, alpha): (&Vec<Vec<u8>>, f32) = match encoded_queries {
+            EncodedPatterns::U8(tq) => (&tq.queries, self.searcher_u8.alpha),
+            EncodedPatterns::U16 { full, .. } => (&full.queries, self.searcher_u16.alpha),
+            EncodedPatterns::U32 { full, .. } => (&full.queries, self.searcher_u32.alpha),
+            EncodedPatterns::U64 { full, .. } => (&full.queries, self.searcher_u64.alpha),
+        };
+
+        let ranges = self
+            .wgpu_searcher
+            .as_ref()
+            .unwrap()
+            .search_ranges::<P>(queries, text, k, Some(alpha))
+            .expect("WGPU search failed");
+
+        dispatch_encoded!(self, encoded_queries, |searcher, tq| {
+            trace_ranges_backend(
+                searcher,
+                tq,
+                text,
+                ranges.as_slice(),
+                k,
+                post,
+                &mut self.alignments_buf,
+                &mut self.trace_buffer,
+            );
+        });
+
         if let Some(max_n_frac) = max_n_frac {
             self.alignments_buf
                 .retain(|m| traced_satisfy_n_frac(m, text, max_n_frac));

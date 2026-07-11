@@ -1,0 +1,21 @@
+[package]
+name = "gpu_kernel"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+bytemuck = { version = "1.14", features = ["derive"] }
+
+# GPU target: spirv-std for SPIR-V shader compilation
+[target.'cfg(target_arch = "spirv")'.dependencies]
+spirv-std = { git = "https://github.com/rust-gpu/rust-gpu", branch = "main" }
+
+# CPU target: Allow building for host (testing, etc.)
+[target.'cfg(not(target_arch = "spirv"))'.dependencies]
+# No special dependencies needed for CPU
+
+[lints]
+workspace = true

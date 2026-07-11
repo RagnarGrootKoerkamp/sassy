@@ -1,2 +1,4 @@
 [toolchain]
-channel = "stable"
+# channel = "nightly"
+channel = "nightly-2026-05-22"
+components = ["rust-src", "rustc-dev", "llvm-tools"]

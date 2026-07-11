@@ -1,7 +1,7 @@
 #![no_std]
 #![feature(abi_ptx, core_intrinsics)]
 
-use core::intrinsics;
+use core::{intrinsics, sync::atomic::Ordering};
 
 /// Represents a hit range for a pattern match
 #[repr(C)]
@@ -50,7 +50,7 @@ pub fn myers_step_scalar(
 }
 
 // NVVM intrinsics for thread indexing
-extern "C" {
+unsafe extern "C" {
     #[link_name = "llvm.nvvm.read.ptx.sreg.ctaid.x"]
     fn block_idx_x() -> i32;
     #[link_name = "llvm.nvvm.read.ptx.sreg.tid.x"]
@@ -60,7 +60,7 @@ extern "C" {
 }
 
 /// Main CUDA kernel for Myers bit-parallel search
-/// 
+///
 /// Each thread processes one pattern against the shared text.
 #[kernel]
 #[allow(improper_ctypes_definitions)]
@@ -68,77 +68,70 @@ pub unsafe fn myers_search_kernel(
     // Input: text to search in
     text_ptr: *const u8,
     text_len: usize,
-    
+
     // Input: pre-computed pattern equality vectors (PEQs)
     // Layout: peqs[pattern_idx * 256 + char_value] = bit vector for that char
     peqs_ptr: *const PeqValue,
-    
+
     // Input: pattern parameters
     pattern_length: usize,
     num_patterns: usize,
-    
+
     // Input: search parameters
-    k: u32,                 // Maximum allowed cost
-    alpha_pattern: u64,     // Alpha mask for overhang
-    last_bit_shift: u32,    // Shift amount for last bit
-    
+    k: u32,              // Maximum allowed cost
+    alpha_pattern: u64,  // Alpha mask for overhang
+    last_bit_shift: u32, // Shift amount for last bit
+
     // Output: array of hit ranges (pre-allocated)
     hit_ranges_ptr: *mut HitRange,
     max_hits: usize,
-    
+
     // Output: atomic counter for number of hits found
     hit_count_ptr: *mut u32,
 ) {
     let tid = thread::index_1d() as usize;
-    
+
     if tid >= num_patterns {
         return;
     }
-    
+
     // Each thread processes one pattern
     let pattern_peqs_offset = tid * 256;
     let last_bit_mask = 1u64 << last_bit_shift;
-    
+
     // Initialize Myers state
     let length_mask = (!0u64) >> (64usize.saturating_sub(pattern_length));
     let masked_alpha = alpha_pattern & length_mask;
     let mut vp = alpha_pattern;
     let mut vn = 0u64;
     let mut cost = masked_alpha.count_ones() as u64;
-    
+
     let all_ones = !0u64;
-    
+
     // Track active range
     let mut is_active = false;
     let mut range_start = -1i32;
-    
+
     // Process each position in text
     for pos in 0..text_len {
         // Read character (coalesced across warp for adjacent threads)
         let c = *text_ptr.add(pos);
-        
+
         // Look up pre-computed equality vector for this char
         let eq = *peqs_ptr.add(pattern_peqs_offset + c as usize);
-        
+
         // Execute Myers step
-        let (vp_new, vn_new, cost_new) = myers_step_scalar(
-            vp,
-            vn,
-            cost,
-            eq,
-            all_ones,
-            last_bit_shift,
-            last_bit_mask,
-        );
-        
+        let (vp_new, vn_new, cost_new) =
+            myers_step_scalar(vp, vn, cost, eq, all_ones, last_bit_shift, last_bit_mask);
+
         vp = vp_new;
         vn = vn_new;
         cost = cost_new;
-        
+
         // Check if cost is within threshold
         let was_active = is_active;
         is_active = cost <= k as u64;
-        
+
         // Handle range transitions
         if is_active && !was_active {
             // Range starting
@@ -147,7 +140,7 @@ pub unsafe fn myers_search_kernel(
             // Range ending - emit hit
             // Use atomic to get unique slot
             let idx = atomics::fetch_add(hit_count_ptr, 1, Ordering::Relaxed);
-            
+
             if idx < max_hits as u32 {
                 let hit = HitRange {
                     pattern_idx: tid as u32,
@@ -158,11 +151,11 @@ pub unsafe fn myers_search_kernel(
             }
         }
     }
-    
+
     // Finalize: if still active at end, emit final range
     if is_active {
         let idx = atomics::fetch_add(hit_count_ptr, 1, Ordering::Relaxed);
-        
+
         if idx < max_hits as u32 {
             let hit = HitRange {
                 pattern_idx: tid as u32,

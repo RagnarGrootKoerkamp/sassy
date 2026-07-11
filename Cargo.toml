@@ -16,6 +16,9 @@ rust-version = "1.91"
 name = "sassy"
 crate-type = ["cdylib", "rlib"]
 
+[lints]
+workspace = true
+
 [profile.release]
 incremental = true
 opt-level = 3
@@ -86,10 +89,20 @@ prefetch-index = "0.2.1"
 cust = { git = "https://github.com/rust-gpu/rust-cuda", rev = "103a8d56935c4e0885ff7c3d25402319df1a8e00", optional = true }
 kernels = { path = "kernels", optional = true }
 
+# Optional: WGPU GPU acceleration (cross-platform: Vulkan, Metal, DX12, OpenGL)
+wgpu = { version = "26.0", features = ["spirv"], optional = true }
+pollster = { version = "0.3", optional = true }
+futures = { version = "0.3", optional = true }
+bytemuck = { version = "1.25.0", optional = true }
+gpu_kernel = { path = "gpu_kernel", optional = true }
+
 [build-dependencies]
 # Only used when cuda feature is enabled
 # Note: Currently disabled due to dependency conflicts with needletail's lzma
 # cuda_builder = { git = "https://github.com/rust-gpu/rust-cuda", rev = "7fa76f3d717038a92c90bf4a482b0b8dd3259344", features = ["rustc_codegen_nvvm"], optional = true }
+
+# WGPU: SPIR-V shader builder
+spirv-builder = { git = "https://github.com/rust-gpu/rust-gpu", branch = "main", optional = true }
 
 [dev-dependencies]
 tempfile = "3.20.0"
@@ -101,7 +114,7 @@ criterion = { version = "0.8", features = ["html_reports"] }
 perfcnt = "0.8.0"
 
 [features]
-default = ["cli", "diagnostics"]
+default = ["cli", "diagnostics", "wgpu"]
 
 # CLI binary and pretty-printing support
 cli = ["clap", "needletail", "env_logger", "num_cpus", "colored"]
@@ -118,6 +131,10 @@ avx512 = []
 # Note: Currently requires manual PTX compilation due to dependency conflicts
 cuda = ["dep:cust", "dep:kernels"]
 
+# WGPU GPU acceleration (cross-platform: Vulkan, Metal, DX12, OpenGL)
+# Works on any GPU vendor (NVIDIA, AMD, Intel), any OS (Windows, Linux, macOS)
+wgpu = ["dep:wgpu", "dep:pollster", "dep:futures", "dep:bytemuck", "dep:gpu_kernel", "dep:spirv-builder"]
+
 python = ["pyo3"]
 python-stubs = ["pyo3-introspection"]
 c = []
@@ -128,7 +145,10 @@ scalar = ["ensure_simd/scalar"]
 
 
 [workspace]
-members = [".", "evals"]
+members = [".", "evals", "gpu_kernel"]
+
+[workspace.lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(target_arch, values("spirv"))'] }
 
 [[bench]]
 name = "perf"
