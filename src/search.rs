@@ -522,13 +522,8 @@ impl<P: Profile> Searcher<P> {
 
     /// Search each given pattern in each given text, using the algorithms given by `mode` (see [`SearchMode`]).
     ///
-    /// Does multithreading using `rayon`. Pass `num_threads == 0` to run on
-    /// rayon's process-global thread pool (built once for the whole program);
-    /// size it up front with
-    /// `rayon::ThreadPoolBuilder::new().num_threads(n).build_global()` if needed.
-    /// A non-zero `num_threads` builds a dedicated pool for this call, which is
-    /// convenient for a one-off but spawns and tears down `num_threads` OS
-    /// threads every call — prefer the global pool (`0`) in hot loops.
+    /// By default, just use `num_threads = 0` for rayon's global thread pool, which defaults to 1 thread per logical core.
+    /// Otherwise, a local thread pool is built per call.
     pub fn search_many<PAT: AsRef<[u8]> + Sync, I: RcSearchAble + Sync>(
         &mut self,
         patterns: &[PAT],
@@ -589,12 +584,12 @@ impl<P: Profile> Searcher<P> {
             SearchMode::Auto => unreachable!("Not implemented yet"),
             SearchMode::BatchPatternsShort => unreachable!("Not implemented yet"),
         };
-        // dispatch: global pool when num_threads == 0, else a dedicated pool
+
         if num_threads == 0 {
-            // Reuse rayon's process-global pool instead of building (and tearing
-            // down) a fresh one on every call.
+            // Use rayon's global thread pool
             run(self)
         } else {
+            // Build a separate thread pool for this call.
             rayon::ThreadPoolBuilder::new()
                 .num_threads(num_threads)
                 .build()
@@ -3677,7 +3672,7 @@ mod tests {
             eprintln!("alpha {:?}", searcher.alpha);
             let k = rng.random_range(0..=pattern_len * 4 / 10);
             eprintln!("k {k}");
-            // Include 0 to exercise the process-global rayon pool path.
+            // 0 threads uses the global thread pool.
             let num_threads = rng.random_range(0..=4);
             eprintln!("threads {num_threads}");
 
