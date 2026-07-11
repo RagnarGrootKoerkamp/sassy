@@ -145,140 +145,6 @@ macro_rules! impl_wide_backend {
     };
 }
 
-macro_rules! impl_u8_wrapper {
-    ($name:ident, $wide_ty:ty, $signed_ty:ty, $lanes:expr) => {
-        #[derive(Clone, Copy, Debug, Default, PartialEq)]
-        #[repr(transparent)]
-        pub struct $name(pub $wide_ty);
-
-        impl Add for $name {
-            type Output = Self;
-            #[inline(always)]
-            fn add(self, rhs: Self) -> Self {
-                Self(self.0 + rhs.0)
-            }
-        }
-        impl Sub for $name {
-            type Output = Self;
-            #[inline(always)]
-            fn sub(self, rhs: Self) -> Self {
-                Self(self.0 - rhs.0)
-            }
-        }
-        impl BitAnd for $name {
-            type Output = Self;
-            #[inline(always)]
-            fn bitand(self, rhs: Self) -> Self {
-                Self(self.0 & rhs.0)
-            }
-        }
-        impl BitOr for $name {
-            type Output = Self;
-            #[inline(always)]
-            fn bitor(self, rhs: Self) -> Self {
-                Self(self.0 | rhs.0)
-            }
-        }
-        impl BitXor for $name {
-            type Output = Self;
-            #[inline(always)]
-            fn bitxor(self, rhs: Self) -> Self {
-                Self(self.0 ^ rhs.0)
-            }
-        }
-        impl BitAndAssign for $name {
-            #[inline(always)]
-            fn bitand_assign(&mut self, rhs: Self) {
-                self.0 &= rhs.0;
-            }
-        }
-        impl BitOrAssign for $name {
-            #[inline(always)]
-            fn bitor_assign(&mut self, rhs: Self) {
-                self.0 |= rhs.0;
-            }
-        }
-        impl CmpEq for $name {
-            type Output = Self;
-            #[inline(always)]
-            fn simd_eq(self, rhs: Self) -> Self {
-                Self(self.0.simd_eq(rhs.0))
-            }
-        }
-        impl Shl<u32> for $name {
-            type Output = Self;
-            #[inline(always)]
-            fn shl(self, rhs: u32) -> Self {
-                if rhs >= 8 {
-                    return Self::splat(0);
-                }
-                let mut arr = self.to_array();
-                for byte in &mut arr {
-                    *byte = byte.wrapping_shl(rhs);
-                }
-                Self(<$wide_ty>::new(arr))
-            }
-        }
-        impl Shr<u32> for $name {
-            type Output = Self;
-            #[inline(always)]
-            fn shr(self, rhs: u32) -> Self {
-                if rhs >= 8 {
-                    return Self::splat(0);
-                }
-                let mut arr = self.to_array();
-                for byte in &mut arr {
-                    *byte = byte.wrapping_shr(rhs);
-                }
-                Self(<$wide_ty>::new(arr))
-            }
-        }
-        impl Shl<i32> for $name {
-            type Output = Self;
-            #[inline(always)]
-            fn shl(self, rhs: i32) -> Self {
-                self << (rhs as u32)
-            }
-        }
-        impl Shr<i32> for $name {
-            type Output = Self;
-            #[inline(always)]
-            fn shr(self, rhs: i32) -> Self {
-                self >> (rhs as u32)
-            }
-        }
-
-        impl $name {
-            #[inline(always)]
-            pub fn new(arr: [u8; $lanes]) -> Self {
-                Self(<$wide_ty>::new(arr))
-            }
-            #[inline(always)]
-            pub fn to_array(self) -> [u8; $lanes] {
-                self.0.to_array()
-            }
-            #[inline(always)]
-            pub fn splat(val: u8) -> Self {
-                Self(<$wide_ty>::splat(val))
-            }
-            #[inline(always)]
-            pub fn simd_gt(self, rhs: Self) -> Self {
-                use std::mem::transmute;
-                let mask = <$signed_ty>::splat(1 << 7);
-                let a: $signed_ty = unsafe { transmute(self.0) };
-                let b: $signed_ty = unsafe { transmute(rhs.0) };
-                Self(unsafe { transmute(CmpGt::simd_gt(a ^ mask, b ^ mask)) })
-            }
-            #[inline(always)]
-            pub fn to_bitmask(self) -> u64 {
-                self.0.to_bitmask() as u64
-            }
-        }
-    };
-}
-
-impl_u8_wrapper!(WrapperU8x32, u8x32, i8x32, 32);
-
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
@@ -467,7 +333,7 @@ impl CmpEq for Avx512U8 {
 impl_wide_backend!(I32x8Backend, u32x8, u32, 8, 32, u8x32);
 impl_wide_backend!(I64x4Backend, u64x4, u64, 4, 64, [u8; 64]);
 impl_wide_backend!(I16x16Backend, u16x16, u16, 16, 16, [u8; 16]);
-impl_wide_backend!(I8x32Backend, WrapperU8x32, u8, 32, 8, [u8; 8]);
+impl_wide_backend!(I8x32Backend, u8x32, u8, 32, 8, [u8; 8]);
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 impl_wide_backend!(I32x16Backend, u32x16, u32, 16, 32, [u8; 32]);
