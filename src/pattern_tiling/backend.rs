@@ -145,216 +145,32 @@ macro_rules! impl_wide_backend {
     };
 }
 
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-#[derive(Clone, Copy, Debug)]
-#[repr(transparent)]
-pub struct Avx512U8(pub __m512i);
-
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl Default for Avx512U8 {
-    #[inline(always)]
-    fn default() -> Self {
-        Self::splat(0)
-    }
-}
-
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl PartialEq for Avx512U8 {
-    fn eq(&self, other: &Self) -> bool {
-        unsafe {
-            let mut a = [0u64; 8];
-            let mut b = [0u64; 8];
-            _mm512_storeu_si512(a.as_mut_ptr() as *mut _, self.0);
-            _mm512_storeu_si512(b.as_mut_ptr() as *mut _, other.0);
-            a == b
-        }
-    }
-}
-
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl Avx512U8 {
-    #[inline(always)]
-    pub fn new(arr: [u8; 64]) -> Self {
-        unsafe { Self(_mm512_loadu_si512(arr.as_ptr() as *const _)) }
-    }
-
-    #[inline(always)]
-    pub fn to_array(self) -> [u8; 64] {
-        unsafe {
-            let mut arr = [0u8; 64];
-            _mm512_storeu_si512(arr.as_mut_ptr() as *mut _, self.0);
-            arr
-        }
-    }
-
-    #[inline(always)]
-    pub fn splat(val: u8) -> Self {
-        unsafe { Self(_mm512_set1_epi8(val as i8)) }
-    }
-
-    #[inline(always)]
-    pub fn simd_gt(self, rhs: Self) -> Self {
-        unsafe {
-            let mask = _mm512_cmp_epu8_mask(self.0, rhs.0, 6); // is this safe to assume 6?
-            Self(_mm512_maskz_set1_epi8(mask, -1))
-        }
-    }
-
-    #[inline(always)]
-    pub fn to_bitmask(self) -> u64 {
-        unsafe { _mm512_movepi8_mask(self.0) as u64 }
-    }
-}
-
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl Add for Avx512U8 {
-    type Output = Self;
-    #[inline(always)]
-    fn add(self, rhs: Self) -> Self {
-        unsafe { Self(_mm512_add_epi8(self.0, rhs.0)) }
-    }
-}
-
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl Sub for Avx512U8 {
-    type Output = Self;
-    #[inline(always)]
-    fn sub(self, rhs: Self) -> Self {
-        unsafe { Self(_mm512_sub_epi8(self.0, rhs.0)) }
-    }
-}
-
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl BitAnd for Avx512U8 {
-    type Output = Self;
-    #[inline(always)]
-    fn bitand(self, rhs: Self) -> Self {
-        unsafe { Self(_mm512_and_si512(self.0, rhs.0)) }
-    }
-}
-
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl BitOr for Avx512U8 {
-    type Output = Self;
-    #[inline(always)]
-    fn bitor(self, rhs: Self) -> Self {
-        unsafe { Self(_mm512_or_si512(self.0, rhs.0)) }
-    }
-}
-
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl BitXor for Avx512U8 {
-    type Output = Self;
-    #[inline(always)]
-    fn bitxor(self, rhs: Self) -> Self {
-        unsafe { Self(_mm512_xor_si512(self.0, rhs.0)) }
-    }
-}
-
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl BitAndAssign for Avx512U8 {
-    #[inline(always)]
-    fn bitand_assign(&mut self, rhs: Self) {
-        self.0 = unsafe { _mm512_and_si512(self.0, rhs.0) };
-    }
-}
-
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl BitOrAssign for Avx512U8 {
-    #[inline(always)]
-    fn bitor_assign(&mut self, rhs: Self) {
-        self.0 = unsafe { _mm512_or_si512(self.0, rhs.0) };
-    }
-}
-
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl Shl<u32> for Avx512U8 {
-    type Output = Self;
-    #[inline(always)]
-    fn shl(self, rhs: u32) -> Self {
-        if rhs >= 8 {
-            return Self::splat(0);
-        }
-        let mut arr = self.to_array();
-        for byte in &mut arr {
-            *byte = byte.wrapping_shl(rhs);
-        }
-        Self::new(arr)
-    }
-}
-
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl Shr<u32> for Avx512U8 {
-    type Output = Self;
-    #[inline(always)]
-    fn shr(self, rhs: u32) -> Self {
-        if rhs >= 8 {
-            return Self::splat(0);
-        }
-        let mut arr = self.to_array();
-        for byte in &mut arr {
-            *byte = byte.wrapping_shr(rhs);
-        }
-        Self::new(arr)
-    }
-}
-
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl Shl<i32> for Avx512U8 {
-    type Output = Self;
-    #[inline(always)]
-    fn shl(self, rhs: i32) -> Self {
-        self << (rhs as u32)
-    }
-}
-
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl Shr<i32> for Avx512U8 {
-    type Output = Self;
-    #[inline(always)]
-    fn shr(self, rhs: i32) -> Self {
-        self >> (rhs as u32)
-    }
-}
-
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl CmpEq for Avx512U8 {
-    type Output = Self;
-    #[inline(always)]
-    fn simd_eq(self, rhs: Self) -> Self {
-        unsafe {
-            let mask = _mm512_cmpeq_epu8_mask(self.0, rhs.0);
-            Self(_mm512_maskz_set1_epi8(mask, -1))
-        }
-    }
-}
-
 // Define Backends
-impl_wide_backend!(U32x8Backend, u32x8, u32, 8, 32, u8x32);
 impl_wide_backend!(U64x4Backend, u64x4, u64, 4, 64, [u8; 64]);
+impl_wide_backend!(U32x8Backend, u32x8, u32, 8, 32, u8x32);
 impl_wide_backend!(U16x16Backend, u16x16, u16, 16, 16, [u8; 16]);
 impl_wide_backend!(U8x32Backend, u8x32, u8, 32, 8, [u8; 8]);
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-impl_wide_backend!(U32x16Backend, u32x16, u32, 16, 32, [u8; 32]);
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 impl_wide_backend!(U64x8Backend, u64x8, u64, 8, 64, [u8; 64]);
+#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+impl_wide_backend!(U32x16Backend, u32x16, u32, 16, 32, [u8; 32]);
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
 impl_wide_backend!(U16x32Backend, u16x32, u16, 32, 16, [u8; 16]);
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl_wide_backend!(U8x64Backend, Avx512U8, u8, 64, 8, [u8; 8]);
+impl_wide_backend!(U8x64Backend, u8x64, u8, 64, 8, [u8; 8]);
 
 // --- Aliases ---
-pub type U8 = U8x32Backend;
-pub type U32 = U32x8Backend;
 pub type U64 = U64x4Backend;
+pub type U32 = U32x8Backend;
 pub type U16 = U16x16Backend;
+pub type U8 = U8x32Backend;
 
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-pub type U8_512 = U8x64Backend;
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-pub type U32_512 = U32x16Backend;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 pub type U64_512 = U64x8Backend;
+#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+pub type U32_512 = U32x16Backend;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
 pub type U16_512 = U16x32Backend;
+#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
+pub type U8_512 = U8x64Backend;
