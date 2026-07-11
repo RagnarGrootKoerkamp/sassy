@@ -23,3 +23,4 @@ jobs:
       - name: Use portable config
         run: mv .cargo/config-portable.toml .cargo/config.toml
       - run: cargo test -r
+      - run: cargo check -F avx512

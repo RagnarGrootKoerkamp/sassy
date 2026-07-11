@@ -1105,7 +1105,7 @@ impl<P: Profile> Searcher<P> {
                     assert_unchecked(j < self.hp.len());
                     assert_unchecked(j < self.hm.len());
                 }
-                let hp: &mut wide::u64x4 = &mut self.hp[j];
+                let hp: &mut S = &mut self.hp[j];
                 let hm = &mut self.hm[j];
 
                 dist_to_start += *hp;
@@ -1122,7 +1122,7 @@ impl<P: Profile> Searcher<P> {
 
                     // Check if any lane has cost <= k (ie <k+1) at the current row
                     let cmp = dist_to_end.simd_lt(S::splat(k as u64 + 1));
-                    if cmp != wide::u64x4::splat(0) {
+                    if cmp != S::splat(0) {
                         // Track the highest row where we found any promising matches
 
                         cur_end_last_below = j;
