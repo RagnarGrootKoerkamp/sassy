@@ -327,8 +327,8 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
         max_overhang,
     );
 
-    let mut eq_arr = B::LaneArray::default();
-    let mut keep_mask_arr = B::LaneArray::default();
+    let mut eq_arr = B::default_array();
+    let mut keep_mask_arr = B::default_array();
 
     for i in 0..max_len {
         unsafe {

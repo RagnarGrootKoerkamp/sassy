@@ -36,7 +36,7 @@ fn build_flat_peqs<B: SimdBackend>(
             let base = block_idx * B::LANES;
             let limit = (nq - base).min(B::LANES);
 
-            let mut lane = B::LaneArray::default();
+            let mut lane = B::default_array();
             let lane_slice = lane.as_mut();
 
             for lane_idx in 0..limit {

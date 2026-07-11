@@ -7,44 +7,6 @@ use wide::{u16x32, u32x16, u64x8};
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
 use std::arch::x86_64::*;
 
-#[derive(Clone, Copy)]
-pub struct LaneArray<T: Copy, const N: usize>(pub [T; N]);
-
-impl<T: Copy, const N: usize> From<[T; N]> for LaneArray<T, N> {
-    #[inline(always)]
-    fn from(value: [T; N]) -> Self {
-        Self(value)
-    }
-}
-
-impl<T: Copy, const N: usize> From<LaneArray<T, N>> for [T; N] {
-    #[inline(always)]
-    fn from(value: LaneArray<T, N>) -> Self {
-        value.0
-    }
-}
-
-impl<T: Copy + Default, const N: usize> Default for LaneArray<T, N> {
-    #[inline(always)]
-    fn default() -> Self {
-        Self([T::default(); N])
-    }
-}
-
-impl<T: Copy, const N: usize> AsRef<[T]> for LaneArray<T, N> {
-    #[inline(always)]
-    fn as_ref(&self) -> &[T] {
-        &self.0
-    }
-}
-
-impl<T: Copy, const N: usize> AsMut<[T]> for LaneArray<T, N> {
-    #[inline(always)]
-    fn as_mut(&mut self) -> &mut [T] {
-        &mut self.0
-    }
-}
-
 pub trait SimdBackend: Copy + 'static + Send + Sync + Default + std::fmt::Debug {
     type Simd: Copy
         + Add<Output = Self::Simd>
@@ -61,15 +23,16 @@ pub trait SimdBackend: Copy + 'static + Send + Sync + Default + std::fmt::Debug 
         + PartialEq;
 
     type Scalar: Copy + PartialEq + std::fmt::Debug;
-    type LaneArray: AsRef<[Self::Scalar]> + AsMut<[Self::Scalar]> + Copy + Default;
+    type Array: AsRef<[Self::Scalar]> + AsMut<[Self::Scalar]> + Copy;
 
     const LANES: usize;
     const LIMB_BITS: usize;
 
     fn mask_word_to_scalar(word: u64) -> Self::Scalar;
     fn scalar_from_i64(value: i64) -> Self::Scalar;
-    fn from_array(arr: Self::LaneArray) -> Self::Simd;
-    fn to_array(vec: Self::Simd) -> Self::LaneArray;
+    fn default_array() -> Self::Array;
+    fn from_array(arr: Self::Array) -> Self::Simd;
+    fn to_array(vec: Self::Simd) -> Self::Array;
     fn simd_eq(lhs: Self::Simd, rhs: Self::Simd) -> Self::Simd;
     fn simd_gt(lhs: Self::Simd, rhs: Self::Simd) -> Self::Simd;
     fn scalar_to_u64(value: Self::Scalar) -> u64;
@@ -88,7 +51,7 @@ macro_rules! impl_wide_backend {
         impl SimdBackend for $name {
             type Simd = $simd_ty;
             type Scalar = $scalar;
-            type LaneArray = LaneArray<$scalar, $lanes>;
+            type Array = [$scalar; $lanes];
 
             const LANES: usize = $lanes;
             const LIMB_BITS: usize = $bits;
@@ -102,12 +65,16 @@ macro_rules! impl_wide_backend {
                 value as $scalar
             }
             #[inline(always)]
-            fn from_array(arr: Self::LaneArray) -> Self::Simd {
+            fn default_array() -> Self::Array {
+                [0; $lanes]
+            }
+            #[inline(always)]
+            fn from_array(arr: Self::Array) -> Self::Simd {
                 <$simd_ty>::new(arr.into())
             }
             #[inline(always)]
-            fn to_array(vec: Self::Simd) -> Self::LaneArray {
-                LaneArray::from(vec.to_array())
+            fn to_array(vec: Self::Simd) -> Self::Array {
+                vec.to_array()
             }
             #[inline(always)]
             fn splat_all_ones() -> Self::Simd {
