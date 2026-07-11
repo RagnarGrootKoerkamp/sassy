@@ -113,6 +113,7 @@ fn trace_ranges_backend<S: SimdBackend, P: Profile>(
     trace_buffer: &mut TraceBuffer,
 ) {
     out.clear();
+    eprintln!("lanes: {}", S::LANES);
     for chunk in ranges.chunks(S::LANES) {
         trace_batch_ranges(
             searcher,

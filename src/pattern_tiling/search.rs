@@ -83,6 +83,11 @@ impl<B: SimdBackend, P: Profile> Myers<B, P> {
                 .resize_with(total_queries, PatternHistory::default);
         }
         if self.active_ranges.len() < total_queries {
+            eprintln!(
+                "RESIZING active_ranges from {} to {}",
+                self.active_ranges.len(),
+                total_queries
+            );
             self.active_ranges.resize(total_queries, isize::MIN);
         }
     }
@@ -112,6 +117,7 @@ impl<B: SimdBackend, P: Profile> Myers<B, P> {
             block.active_mask = 0;
         }
 
+        eprintln!("length_mask: {} {}", self.active_ranges.len(), n_queries);
         self.active_ranges[..n_queries].fill(isize::MIN);
         self.hit_ranges.clear();
     }
