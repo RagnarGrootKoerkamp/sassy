@@ -113,31 +113,16 @@ macro_rules! impl_wide_backend {
 }
 
 // Define Backends
-impl_wide_backend!(U64x4Backend, u64x4, u64, 4, 64, [u8; 64]);
-impl_wide_backend!(U32x8Backend, u32x8, u32, 8, 32, u8x32);
-impl_wide_backend!(U16x16Backend, u16x16, u16, 16, 16, [u8; 16]);
-impl_wide_backend!(U8x32Backend, u8x32, u8, 32, 8, [u8; 8]);
+impl_wide_backend!(U64, u64x4, u64, 4, 64, [u8; 64]);
+impl_wide_backend!(U32, u32x8, u32, 8, 32, u8x32);
+impl_wide_backend!(U16, u16x16, u16, 16, 16, [u8; 16]);
+impl_wide_backend!(U8, u8x32, u8, 32, 8, [u8; 8]);
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-impl_wide_backend!(U64x8Backend, u64x8, u64, 8, 64, [u8; 64]);
+impl_wide_backend!(U64_512, u64x8, u64, 8, 64, [u8; 64]);
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-impl_wide_backend!(U32x16Backend, u32x16, u32, 16, 32, [u8; 32]);
+impl_wide_backend!(U32_512, u32x16, u32, 16, 32, [u8; 32]);
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl_wide_backend!(U16x32Backend, u16x32, u16, 32, 16, [u8; 16]);
+impl_wide_backend!(U16_512, u16x32, u16, 32, 16, [u8; 16]);
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl_wide_backend!(U8x64Backend, u8x64, u8, 64, 8, [u8; 8]);
-
-// --- Aliases ---
-pub type U64 = U64x4Backend;
-pub type U32 = U32x8Backend;
-pub type U16 = U16x16Backend;
-pub type U8 = U8x32Backend;
-
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-pub type U64_512 = U64x8Backend;
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-pub type U32_512 = U32x16Backend;
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-pub type U16_512 = U16x32Backend;
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-pub type U8_512 = U8x64Backend;
+impl_wide_backend!(U8_512, u8x64, u8, 64, 8, [u8; 8]);
