@@ -45,6 +45,11 @@ impl Profile for Dna {
     }
 
     #[inline(always)]
+    fn eq_idx(ca: &u8) -> usize {
+        *ca as usize
+    }
+
+    #[inline(always)]
     fn is_match(char1: u8, char2: u8) -> bool {
         (char1 | 0x20) == (char2 | 0x20)
     }

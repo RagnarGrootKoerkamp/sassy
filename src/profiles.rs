@@ -30,6 +30,11 @@ pub trait Profile: Clone + std::fmt::Debug + Sync {
     /// Given the encoding of an `a` and the encoding for 64 `b`s,
     /// return a bitmask of which characters of `b` equal the corresponding character of `a`.
     fn eq(ca: &Self::A, cb: &Self::B) -> u64;
+    /// Index into the encoded-reference profile (`Self::B`) for pattern character
+    /// `ca`. This is the same index `eq` reads internally; exposing it lets callers
+    /// build a profile transposed across SIMD lanes and keyed by character, so the
+    /// per-row lookup becomes a single vector load instead of a per-lane gather.
+    fn eq_idx(ca: &Self::A) -> usize;
     /// Allocate a buffer of at most n_bases in search (and reuse)
     fn alloc_out() -> Self::B;
     fn n_bases(&self) -> usize;

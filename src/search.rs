@@ -248,6 +248,9 @@ pub struct Searcher<P: Profile> {
     cost_matrices: [CostMatrix; LANES],
     hp: Vec<S>,
     hm: Vec<S>,
+    /// Reused scratch for the per-block transposed eq profile (see
+    /// `search_internal`). Cached here so repeated searches don't reallocate it.
+    eq_transposed: Vec<S>,
     lanes: [LaneState<P>; LANES],
 
     matches: Vec<Match>,
@@ -496,6 +499,7 @@ impl<P: Profile> Searcher<P> {
             cost_matrices: std::array::from_fn(|_| CostMatrix::default()),
             hp: vec![],
             hm: vec![],
+            eq_transposed: vec![],
             lanes: std::array::from_fn(|_| LaneState::new(P::alloc_out(), 0)),
             matches: vec![],
             _phantom: std::marker::PhantomData,
@@ -984,22 +988,42 @@ impl<P: Profile> Searcher<P> {
         match pattern {
             MultiPattern::One(p) => {
                 let (profiler, pattern_profile) = P::encode_pattern(p);
-                let get_eq = |j: usize, lanes: &[LaneState<P>; LANES]| {
-                    let pattern_char = unsafe { pattern_profile.get_unchecked(j) };
-                    S::from(std::array::from_fn(|lane| {
-                        P::eq(pattern_char, &lanes[lane].text_profile)
-                    }))
+                // The pattern character is identical across lanes, so the eq mask
+                // is a single vector load from a per-block profile transposed across
+                // lanes and keyed by character (built in `search_internal`). Only the
+                // characters the pattern uses need transposing.
+                let mut transpose_chars: Vec<usize> =
+                    pattern_profile.iter().map(|c| P::eq_idx(c)).collect();
+                transpose_chars.sort_unstable();
+                transpose_chars.dedup();
+                // Index the transposed profile with `eq_idx` on the already-allocated
+                // `pattern_profile` directly, avoiding a parallel index `Vec`.
+                let get_eq = move |j: usize, eq_transposed: &[S], _lanes: &[LaneState<P>; LANES]| {
+                    unsafe {
+                        *eq_transposed.get_unchecked(P::eq_idx(pattern_profile.get_unchecked(j)))
+                    }
                 };
-                self.search_internal(pattern, profiler, get_eq, text, k, all_minima, false);
+                self.search_internal(
+                    pattern,
+                    profiler,
+                    get_eq,
+                    &transpose_chars,
+                    text,
+                    k,
+                    all_minima,
+                    false,
+                );
             }
             MultiPattern::Multi(ps) => {
                 let (profiler, pattern_profiles) = P::encode_patterns(ps);
-                let get_eq = |j: usize, lanes: &[LaneState<P>; LANES]| {
+                // Each lane has a different pattern character, so the transpose does
+                // not apply; gather per lane as before (empty `transpose_chars`).
+                let get_eq = move |j: usize, _eq_transposed: &[S], lanes: &[LaneState<P>; LANES]| {
                     S::from(std::array::from_fn(|lane| {
                         P::eq(&pattern_profiles[j][lane], &lanes[lane].text_profile)
                     }))
                 };
-                self.search_internal(pattern, profiler, get_eq, text, k, all_minima, true);
+                self.search_internal(pattern, profiler, get_eq, &[], text, k, all_minima, true);
             }
         }
     }
@@ -1076,12 +1100,13 @@ impl<P: Profile> Searcher<P> {
         pattern: MultiPattern<'t>,
         profiler: P,
         mut get_eq: F,
+        transpose_chars: &[usize],
         text: MultiText<'t>,
         k: Cost,
         all_minima: bool,
         is_multi_pattern: bool,
     ) where
-        F: FnMut(usize, &[LaneState<P>; LANES]) -> S,
+        F: FnMut(usize, &[S], &[LaneState<P>; LANES]) -> S,
     {
         // Terminology:
         // - chunk: roughly 1/4th of the input text, with small overlaps.
@@ -1097,6 +1122,19 @@ impl<P: Profile> Searcher<P> {
         let mut prev_max_j = 0;
         let mut prev_end_last_below = 0;
 
+        // Per-block eq profile, transposed across lanes and keyed by character:
+        // `eq_transposed[c]` packs lane `l`'s `text_profile[c]` into lane `l` of a
+        // SIMD vector. For a single pattern this turns the per-row eq lookup into
+        // one vector load instead of a per-lane gather (only used when
+        // `transpose_chars` is non-empty; the multi-pattern path gathers instead).
+        //
+        // Taken out of the reused `self.eq_transposed` cache so repeated searches
+        // don't reallocate it (and to sidestep the borrow against `self.lanes`);
+        // restored at the end of the function.
+        let mut eq_transposed = std::mem::take(&mut self.eq_transposed);
+        eq_transposed.clear();
+        eq_transposed.resize(P::N_CHARS, S::splat(0));
+
         'text_chunk: for i in 0..blocks_per_chunk + max_overlap_blocks {
             let (mut vp, mut vm) = (S::splat(0), S::splat(0));
 
@@ -1104,6 +1142,13 @@ impl<P: Profile> Searcher<P> {
                 if let Some(t) = text.get_lane(lane) {
                     self.lanes[lane].update_and_encode(t, i, &profiler, self.alpha.is_some());
                 }
+            }
+
+            // Rebuild the transposed eq profile for this block, for exactly the
+            // characters the pattern uses.
+            for &c in transpose_chars {
+                eq_transposed[c] =
+                    S::from(std::array::from_fn(|lane| self.lanes[lane].text_profile[c]));
             }
 
             let (mut dist_to_start, mut dist_to_end) = (S::splat(0), S::splat(0));
@@ -1123,7 +1168,7 @@ impl<P: Profile> Searcher<P> {
                 dist_to_start += *hp;
                 dist_to_start -= *hm;
 
-                let eq = get_eq(j, &self.lanes);
+                let eq = get_eq(j, &eq_transposed, &self.lanes);
                 compute_block_simd(hp, hm, &mut vp, &mut vm, eq);
 
                 // Early termination check: If we've moved past the last row that had any
@@ -1191,6 +1236,9 @@ impl<P: Profile> Searcher<P> {
         }
 
         self.reset_rows(0, prev_max_j);
+
+        // Return the scratch buffer to the cache for the next search to reuse.
+        self.eq_transposed = eq_transposed;
 
         // If text was chunked we have to prune
         if is_single_text && !is_multi_pattern {
