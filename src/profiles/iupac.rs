@@ -1,7 +1,4 @@
-use crate::{
-    LANES,
-    profiles::{Profile, u8x32_shr},
-};
+use crate::{LANES, profiles::Profile};
 use std::mem::transmute;
 use wide::u8x32;
 
@@ -98,8 +95,8 @@ impl Profile for Iupac {
             // Shift as u16 because AVX2 does not have u8 shifts.
             // This 'leaks' bits into high half of each byte, but we only ever
             // read the low half via `m=get_encoded(base)`, so that's ok.
-            let hi_nib0 = u8x32_shr(shuffled0, 4);
-            let hi_nib1 = u8x32_shr(shuffled1, 4);
+            let hi_nib0 = shuffled0 >> 4;
+            let hi_nib1 = shuffled1 >> 4;
 
             let nib0 = is_hi_0.blend(hi_nib0, lo_nib0);
             let nib1 = is_hi_1.blend(hi_nib1, lo_nib1);

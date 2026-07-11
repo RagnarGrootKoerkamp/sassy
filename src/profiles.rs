@@ -64,13 +64,3 @@ pub trait Profile: Clone + std::fmt::Debug + Sync {
         unimplemented!("Profile does not support overhang");
     }
 }
-
-// Simd helper for stuff missing from wide.
-// FIXME: Upstream into `wide`.
-#[inline(always)]
-fn u8x32_shr(a: u8x32, shift: u8) -> u8x32 {
-    unsafe {
-        use std::mem::transmute;
-        transmute(transmute::<_, wide::u16x16>(a) >> shift)
-    }
-}

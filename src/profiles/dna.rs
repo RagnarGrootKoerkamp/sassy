@@ -1,7 +1,5 @@
 use crate::profiles::Profile;
 
-
-use super::u8x32_shr;
 use wide::u8x32;
 
 /// DNA alphabet: ACGT. Do you not want `profiles::Iupac` instead, with support for `N`?
@@ -136,7 +134,7 @@ const RC: [u8; 256] = {
 
 #[inline(always)]
 fn bases(chars: u8x32) -> u8x32 {
-    u8x32_shr(chars, 1) & u8x32::splat(3)
+    (chars >> 1) & u8x32::splat(3)
 }
 
 #[cfg(test)]
