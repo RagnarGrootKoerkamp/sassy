@@ -1,5 +1,5 @@
-use crate::profiles::{Profile, u8x32_gt};
-use wide::{CmpEq, u8x32};
+use crate::profiles::Profile;
+use wide::{CmpEq, CmpGt, u8x32};
 
 /// Compare two sequences using the stancard ASCII alphabet.
 #[derive(Clone, Debug)]
@@ -102,9 +102,9 @@ fn ascii_u64_search_case_insensitive(seq: &[u8; 64], bases: &[u8], out: &mut [u6
         // AVX2 does not have unsigned u8 compares for b'A' <= x <= b'Z'.
         // Instead, we check `(x-b'A') <= b'Z'-b'A'
         let is_char0 =
-            u8x32_gt(chunk0, u8x32::splat(A - 1)) & u8x32_gt(u8x32::splat(Z + 1), chunk0);
+            chunk0.simd_gt(u8x32::splat(A - 1)) & u8x32::splat(Z + 1).simd_gt(chunk0);
         let is_char1 =
-            u8x32_gt(chunk1, u8x32::splat(A - 1)) & u8x32_gt(u8x32::splat(Z + 1), chunk1);
+            chunk1.simd_gt(u8x32::splat(A - 1)) & u8x32::splat(Z + 1).simd_gt(chunk1);
         // Transmute from i8x32 to u8x32
         let lower0 = chunk0 | (u8x32::splat(to_lowercase) & is_char0);
         let lower1 = chunk1 | (u8x32::splat(to_lowercase) & is_char1);
