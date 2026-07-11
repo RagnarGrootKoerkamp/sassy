@@ -486,7 +486,7 @@ mod tests {
     use crate::search::Match;
 
     #[cfg(test)]
-    type TestBackend = crate::pattern_tiling::backend::U64;
+    type TestBackend = crate::pattern_tiling::backend::U64Backend;
 
     const ITER: usize = 1_000_000;
 

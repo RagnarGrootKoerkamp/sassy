@@ -98,8 +98,8 @@ impl Profile for Iupac {
             let hi_nib0 = shuffled0 >> 4;
             let hi_nib1 = shuffled1 >> 4;
 
-            let nib0 = is_hi_0.blend(hi_nib0, lo_nib0);
-            let nib1 = is_hi_1.blend(hi_nib1, lo_nib1);
+            let nib0 = is_hi_0.select(hi_nib0, lo_nib0);
+            let nib1 = is_hi_1.select(hi_nib1, lo_nib1);
 
             for (i, &base) in [b'A', b'C', b'T', b'G'].iter().enumerate() {
                 let m = u8x32::splat(Self::encode_char(base));
@@ -180,7 +180,7 @@ impl Profile for Iupac {
                 let shuffled = half_shuffle(tbl256, low4);
                 let lo_nib = shuffled & mask4;
                 let hi_nib = shuffled & high4;
-                let nib = is_hi.blend(hi_nib, lo_nib);
+                let nib = is_hi.select(hi_nib, lo_nib);
 
                 // nibbles are 0 for IUPAC.
                 if nib.simd_eq(u8x32::splat(0)).any() {

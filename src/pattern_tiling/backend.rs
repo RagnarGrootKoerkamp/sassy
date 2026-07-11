@@ -1,13 +1,6 @@
 //! Implement our own wrapper trait around SIMD types
 
 use std::ops::{Add, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, Shl, Shr, Sub};
-use wide::{u8x32, u16x16, u32x8, u64x4};
-
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-use wide::{u16x32, u32x16, u64x8};
-
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-use std::arch::x86_64::*;
 
 pub trait SimdBackend: Copy + 'static + Send + Sync + Default + std::fmt::Debug {
     type Simd: Copy
@@ -115,16 +108,20 @@ macro_rules! impl_wide_backend {
 }
 
 // Define Backends
-impl_wide_backend!(U64, u64x4, u64, 4, 64);
-impl_wide_backend!(U32, u32x8, u32, 8, 32);
-impl_wide_backend!(U16, u16x16, u16, 16, 16);
-impl_wide_backend!(U8, u8x32, u8, 32, 8);
+#[cfg(not(any(feature = "avx512", target_feature = "avx512f")))]
+impl_wide_backend!(U64Backend, wide::u64x4, u64, 4, 64);
+#[cfg(not(any(feature = "avx512", target_feature = "avx512f")))]
+impl_wide_backend!(U32Backend, wide::u32x8, u32, 8, 32);
+#[cfg(not(any(feature = "avx512", target_feature = "avx512f")))]
+impl_wide_backend!(U16Backend, wide::u16x16, u16, 16, 16);
+#[cfg(not(any(feature = "avx512", target_feature = "avx512f")))]
+impl_wide_backend!(U8Backend, wide::u8x32, u8, 32, 8);
 
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-impl_wide_backend!(U64_512, u64x8, u64, 8, 64);
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-impl_wide_backend!(U32_512, u32x16, u32, 16, 32);
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl_wide_backend!(U16_512, u16x32, u16, 32, 16);
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-impl_wide_backend!(U8_512, u8x64, u8, 64, 8);
+#[cfg(any(feature = "avx512", target_feature = "avx512f"))]
+impl_wide_backend!(U64Backend, wide::u64x8, u64, 8, 64);
+#[cfg(any(feature = "avx512", target_feature = "avx512f"))]
+impl_wide_backend!(U32Backend, wide::u32x16, u32, 16, 32);
+#[cfg(any(feature = "avx512", target_feature = "avx512bw"))]
+impl_wide_backend!(U16Backend, wide::u16x32, u16, 32, 16);
+#[cfg(any(feature = "avx512", target_feature = "avx512bw"))]
+impl_wide_backend!(U8Backend, wide::u8x64, u8, 64, 8);

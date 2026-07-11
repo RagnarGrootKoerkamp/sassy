@@ -1084,7 +1084,7 @@ dependencies = [
  "ensure_simd",
  "mem_dbg",
  "rand 0.10.1",
- "wide",
+ "wide 1.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -1606,7 +1606,7 @@ dependencies = [
  "rand 0.10.1",
  "rayon",
  "tempfile",
- "wide",
+ "wide 1.5.0 (git+https://github.com/ragnargrootkoerkamp/wide)",
 ]
 
 [[package]]
@@ -1987,6 +1987,15 @@ name = "wide"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfdfe6a32973f2d1b268b8895845a8a96cac2f0191e72c27cc929036060dbf89"
+dependencies = [
+ "bytemuck",
+ "safe_arch",
+]
+
+[[package]]
+name = "wide"
+version = "1.5.0"
+source = "git+https://github.com/ragnargrootkoerkamp/wide#f67047940a96a7b5eaf5785f268b1610a8f705f9"
 dependencies = [
  "bytemuck",
  "safe_arch",

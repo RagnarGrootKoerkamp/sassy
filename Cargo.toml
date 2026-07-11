@@ -54,7 +54,8 @@ required-features = ["cli"]
 pa-types = "1.5.0"
 log = "0.4.27"
 either = "1.15.0"
-wide = "1.5.0"
+# wide = "1.5.0"
+wide = { git = "https://github.com/ragnargrootkoerkamp/wide" }
 ensure_simd = "0.1.0"
 rayon = "1.11.0"
 itertools = "0.15.0"

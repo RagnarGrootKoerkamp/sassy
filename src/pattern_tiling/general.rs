@@ -11,25 +11,7 @@ use crate::search::Match;
 // If AVX-512 is available, we want to use the 512-bit backends instead of the default 256-bit ones.
 // This allows processing twice as many patterns in parallel.
 
-#[cfg(not(all(target_arch = "x86_64", target_feature = "avx512bw")))]
-pub type U8Backend = crate::pattern_tiling::backend::U8;
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-pub type U8Backend = crate::pattern_tiling::backend::U8_512;
-
-#[cfg(not(all(target_arch = "x86_64", target_feature = "avx512bw")))]
-pub type U16Backend = crate::pattern_tiling::backend::U16;
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512bw"))]
-pub type U16Backend = crate::pattern_tiling::backend::U16_512;
-
-#[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
-pub type U32Backend = crate::pattern_tiling::backend::U32;
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-pub type U32Backend = crate::pattern_tiling::backend::U32_512;
-
-#[cfg(not(all(target_arch = "x86_64", target_feature = "avx512f")))]
-pub type U64Backend = crate::pattern_tiling::backend::U64;
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-pub type U64Backend = crate::pattern_tiling::backend::U64_512;
+pub use crate::pattern_tiling::backend::*;
 
 // Even with macros to generate most of the code this is still A LOT to look at
 macro_rules! dispatch_encoded {
