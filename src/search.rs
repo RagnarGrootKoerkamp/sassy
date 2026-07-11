@@ -522,7 +522,13 @@ impl<P: Profile> Searcher<P> {
 
     /// Search each given pattern in each given text, using the algorithms given by `mode` (see [`SearchMode`]).
     ///
-    /// Does multithreading using `rayon`.
+    /// Does multithreading using `rayon`. Pass `num_threads == 0` to run on
+    /// rayon's process-global thread pool (built once for the whole program);
+    /// size it up front with
+    /// `rayon::ThreadPoolBuilder::new().num_threads(n).build_global()` if needed.
+    /// A non-zero `num_threads` builds a dedicated pool for this call, which is
+    /// convenient for a one-off but spawns and tears down `num_threads` OS
+    /// threads every call — prefer the global pool (`0`) in hot loops.
     pub fn search_many<PAT: AsRef<[u8]> + Sync, I: RcSearchAble + Sync>(
         &mut self,
         patterns: &[PAT],
@@ -531,63 +537,70 @@ impl<P: Profile> Searcher<P> {
         num_threads: usize,
         mode: SearchMode,
     ) -> Vec<Match> {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(num_threads)
-            .build()
-            .unwrap()
-            .install(|| match mode {
-                SearchMode::Single => map_collect_cartesian_product(
-                    patterns,
+        let run = |searcher: &Self| match mode {
+            SearchMode::Single => map_collect_cartesian_product(
+                patterns,
+                texts,
+                searcher,
+                |searcher, pattern, text, pi, ti| {
+                    let mut matches = searcher.search(pattern.as_ref(), text, k);
+                    matches.iter_mut().for_each(move |m| {
+                        m.pattern_idx = pi;
+                        m.text_idx = ti;
+                    });
+                    matches
+                },
+            ),
+            SearchMode::BatchPatterns => {
+                let pattern_batches: Vec<&[PAT]> = patterns.chunks(LANES).collect();
+
+                map_collect_cartesian_product(
+                    &pattern_batches,
                     texts,
-                    self,
-                    |searcher, pattern, text, pi, ti| {
-                        let mut matches = searcher.search(pattern.as_ref(), text, k);
+                    searcher,
+                    |searcher, pattern_batch, text, pbi, ti| {
+                        let mut matches = searcher.search_patterns(pattern_batch, text, k);
                         matches.iter_mut().for_each(move |m| {
-                            m.pattern_idx = pi;
+                            m.pattern_idx += pbi * LANES;
                             m.text_idx = ti;
                         });
                         matches
                     },
-                ),
-                SearchMode::BatchPatterns => {
-                    let pattern_batches: Vec<&[PAT]> = patterns.chunks(LANES).collect();
+                )
+            }
 
-                    map_collect_cartesian_product(
-                        &pattern_batches,
-                        texts,
-                        self,
-                        |searcher, pattern_batch, text, pbi, ti| {
-                            let mut matches = searcher.search_patterns(pattern_batch, text, k);
-                            matches.iter_mut().for_each(move |m| {
-                                m.pattern_idx += pbi * LANES;
-                                m.text_idx = ti;
-                            });
-                            matches
-                        },
-                    )
-                }
+            SearchMode::BatchTexts => {
+                let text_batches: Vec<&[I]> = texts.chunks(LANES).collect();
 
-                SearchMode::BatchTexts => {
-                    let text_batches: Vec<&[I]> = texts.chunks(LANES).collect();
-
-                    map_collect_cartesian_product(
-                        patterns,
-                        &text_batches,
-                        self,
-                        |searcher, pattern, text_batch, pi, tbi| {
-                            let mut matches =
-                                searcher.search_texts(pattern.as_ref(), text_batch, k);
-                            matches.iter_mut().for_each(move |m| {
-                                m.pattern_idx = pi;
-                                m.text_idx += tbi * LANES;
-                            });
-                            matches
-                        },
-                    )
-                }
-                SearchMode::Auto => unreachable!("Not implemented yet"),
-                SearchMode::BatchPatternsShort => unreachable!("Not implemented yet"),
-            })
+                map_collect_cartesian_product(
+                    patterns,
+                    &text_batches,
+                    searcher,
+                    |searcher, pattern, text_batch, pi, tbi| {
+                        let mut matches = searcher.search_texts(pattern.as_ref(), text_batch, k);
+                        matches.iter_mut().for_each(move |m| {
+                            m.pattern_idx = pi;
+                            m.text_idx += tbi * LANES;
+                        });
+                        matches
+                    },
+                )
+            }
+            SearchMode::Auto => unreachable!("Not implemented yet"),
+            SearchMode::BatchPatternsShort => unreachable!("Not implemented yet"),
+        };
+        // dispatch: global pool when num_threads == 0, else a dedicated pool
+        if num_threads == 0 {
+            // Reuse rayon's process-global pool instead of building (and tearing
+            // down) a fresh one on every call.
+            run(self)
+        } else {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(num_threads)
+                .build()
+                .unwrap()
+                .install(|| run(self))
+        }
     }
 
     /// Search multiple similar-length texts in chunks of `LANES` at a time.
@@ -3664,7 +3677,8 @@ mod tests {
             eprintln!("alpha {:?}", searcher.alpha);
             let k = rng.random_range(0..=pattern_len * 4 / 10);
             eprintln!("k {k}");
-            let num_threads = rng.random_range(1..=4);
+            // Include 0 to exercise the process-global rayon pool path.
+            let num_threads = rng.random_range(0..=4);
             eprintln!("threads {num_threads}");
 
             let mut matches_single =
