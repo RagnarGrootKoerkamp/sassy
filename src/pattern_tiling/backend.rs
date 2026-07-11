@@ -1,5 +1,5 @@
 use std::ops::{Add, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, Shl, Shr, Sub};
-use wide::{CmpEq, CmpGt, i8x32, u8x32, u16x16, u32x8, u64x4};
+use wide::{u8x32, u16x16, u32x8, u64x4};
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 use wide::{u16x32, u32x16, u64x8};
@@ -58,7 +58,6 @@ pub trait SimdBackend: Copy + 'static + Send + Sync + Default + std::fmt::Debug 
         + Shr<i32, Output = Self::Simd>
         + Shl<u32, Output = Self::Simd>
         + Shr<u32, Output = Self::Simd>
-        + CmpEq<Output = Self::Simd>
         + PartialEq;
 
     type Scalar: Copy + PartialEq + std::fmt::Debug;
@@ -71,6 +70,7 @@ pub trait SimdBackend: Copy + 'static + Send + Sync + Default + std::fmt::Debug 
     fn scalar_from_i64(value: i64) -> Self::Scalar;
     fn from_array(arr: Self::LaneArray) -> Self::Simd;
     fn to_array(vec: Self::Simd) -> Self::LaneArray;
+    fn simd_eq(lhs: Self::Simd, rhs: Self::Simd) -> Self::Simd;
     fn simd_gt(lhs: Self::Simd, rhs: Self::Simd) -> Self::Simd;
     fn scalar_to_u64(value: Self::Scalar) -> u64;
     fn splat_all_ones() -> Self::Simd;
@@ -129,12 +129,14 @@ macro_rules! impl_wide_backend {
             fn scalar_to_u64(value: Self::Scalar) -> u64 {
                 value as u64
             }
-
+            #[inline(always)]
+            fn simd_eq(lhs: Self::Simd, rhs: Self::Simd) -> Self::Simd {
+                lhs.simd_eq(rhs)
+            }
             #[inline(always)]
             fn simd_gt(lhs: Self::Simd, rhs: Self::Simd) -> Self::Simd {
                 lhs.simd_gt(rhs)
             }
-
             #[inline(always)]
             fn lanes_with_zero(vec: Self::Simd) -> u64 {
                 vec.simd_eq(<$simd_ty>::splat(0)).to_bitmask() as u64
