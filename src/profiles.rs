@@ -5,7 +5,6 @@ pub(crate) mod iupac;
 pub use ascii::{Ascii, CaseInsensitiveAscii, CaseSensitiveAscii};
 pub use dna::Dna;
 pub use iupac::Iupac;
-use wide::u8x32;
 
 use std::ops::{Index, IndexMut};
 
@@ -43,7 +42,10 @@ pub trait Profile: Clone + std::fmt::Debug + Sync {
     /// case-insensitivity).
     fn is_match_slice(pattern: &[u8], text: &[u8]) -> bool {
         pattern.len() == text.len()
-            && pattern.iter().zip(text).all(|(&p, &t)| Self::is_match(p, t))
+            && pattern
+                .iter()
+                .zip(text)
+                .all(|(&p, &t)| Self::is_match(p, t))
     }
     /// Reverse-complement the input string.
     fn reverse_complement(_query: &[u8]) -> Vec<u8> {

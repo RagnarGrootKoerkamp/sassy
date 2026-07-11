@@ -3,7 +3,7 @@ use crate::{
     profiles::{Profile, u8x32_shr},
 };
 use std::mem::transmute;
-use wide::{CmpEq, CmpGt, u8x32};
+use wide::u8x32;
 
 /// IUPAC alphabet: ACGT + NYR...
 ///
@@ -172,8 +172,7 @@ impl Profile for Iupac {
                 let upper = chunk & u8x32::splat(!0x20);
 
                 // Check if > '@' (64) (=b'A'-1) and < 128.
-                let in_range =
-                    upper.simd_gt(u8x32::splat(64)) & u8x32::splat(128).simd_gt(upper);
+                let in_range = upper.simd_gt(u8x32::splat(64)) & u8x32::splat(128).simd_gt(upper);
                 if !in_range.all() {
                     return false;
                 }

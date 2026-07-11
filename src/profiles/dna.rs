@@ -1,8 +1,8 @@
 use crate::profiles::Profile;
 
-use wide::{CmpEq, u8x32};
 
 use super::u8x32_shr;
+use wide::u8x32;
 
 /// DNA alphabet: ACGT. Do you not want `profiles::Iupac` instead, with support for `N`?
 ///

@@ -54,10 +54,10 @@ required-features = ["cli"]
 pa-types = "1.5.0"
 log = "0.4.27"
 either = "1.15.0"
-wide = "1.1.1"
+wide = "1.5.0"
 ensure_simd = "0.1.0"
 rayon = "1.11.0"
-itertools = "0.14.0"
+itertools = "0.15.0"
 derivative = "2.2.0"
 memchr = "2.8.1"
 arrayvec = "0.7.6"
@@ -73,19 +73,14 @@ colored = { version = "3.0.0", optional = true }
 rand = { version = "0.10.0", optional = true }
 
 # Optional: Python bindings
-pyo3 = { version = "0.28", features = [
-  "extension-module",
-  "abi3-py38",
-  "generate-import-lib",
-  "experimental-inspect",
-], optional = true }
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py38", "generate-import-lib", "experimental-inspect"], optional = true }
 
 # Optional: Python stub generation via pyo3-introspection
-pyo3-introspection = { version = "0.28", optional = true }
+pyo3-introspection = { version = "0.29", optional = true }
 
 [dev-dependencies]
 tempfile = "3.20.0"
-packed-seq = "4.3.0"
+packed-seq = "5.0.0"
 rand = "0.10.0"
 criterion = { version = "0.8", features = ["html_reports"] }
 
