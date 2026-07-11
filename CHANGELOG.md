@@ -3,6 +3,10 @@
 <!-- next-header -->
 
 ## git
+- The v1 search now also automatically uses AVX-512 when available on the target hardware, not just
+  when explicitly requested using the `avx512` feature flag.
+  The v2 batched pattern search already was using AVX-512.
+  ([#68](https://github.com/RagnarGrootKoerkamp/sassy/pull/68))
 - `Searcher::search_many` takes `num_threads = 0` to reuse the global thread
   pool ([#69](https://github.com/RagnarGrootKoerkamp/sassy/pull/69))
 - Update `wide` to `1.5.0` and cleanup the wrapper types in `backend.rs` accordingly.

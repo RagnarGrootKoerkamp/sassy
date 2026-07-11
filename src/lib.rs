@@ -172,16 +172,16 @@ mod python;
 #[cfg(feature = "c")]
 mod c;
 
-// TYPEDEFS
+// TYPEDEFS: enable AVX512 when available or when explicitly requested.
 
-#[cfg(not(feature = "avx512"))]
+#[cfg(not(any(feature = "avx512", target_feature = "avx512f")))]
 const LANES: usize = 4;
-#[cfg(not(feature = "avx512"))]
+#[cfg(not(any(feature = "avx512", target_feature = "avx512f")))]
 type S = wide::u64x4;
 
-#[cfg(feature = "avx512")]
+#[cfg(any(feature = "avx512", target_feature = "avx512f"))]
 const LANES: usize = 8;
-#[cfg(feature = "avx512")]
+#[cfg(any(feature = "avx512", target_feature = "avx512f"))]
 type S = wide::u64x8;
 
 /// Print info on CPU features and speed of searching.
