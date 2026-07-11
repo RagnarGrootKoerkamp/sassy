@@ -1,0 +1,16 @@
+[package]
+name = "kernels"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cuda_std = { git = "https://github.com/rust-gpu/rust-cuda", rev = "103a8d56935c4e0885ff7c3d25402319df1a8e00", default-features = false }
+
+[lib]
+# cdylib: Required for CUDA PTX compilation (nvptx targets don't support binary crates)
+# rlib: Allows kernels crate to be used as a dependency by the main sassy crate
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = 3
+lto = true

@@ -80,6 +80,17 @@ pyo3 = { version = "0.29", features = ["extension-module", "abi3-py38", "generat
 pyo3-introspection = { version = "0.29", optional = true }
 prefetch-index = "0.2.1"
 
+# Optional: CUDA GPU acceleration via rust-cuda
+# Using latest main branch for better compatibility
+# Note: Requires CUDA SDK installed. Set CUDA_LIBRARY_PATH if needed.
+cust = { git = "https://github.com/rust-gpu/rust-cuda", rev = "103a8d56935c4e0885ff7c3d25402319df1a8e00", optional = true }
+kernels = { path = "kernels", optional = true }
+
+[build-dependencies]
+# Only used when cuda feature is enabled
+# Note: Currently disabled due to dependency conflicts with needletail's lzma
+# cuda_builder = { git = "https://github.com/rust-gpu/rust-cuda", rev = "7fa76f3d717038a92c90bf4a482b0b8dd3259344", features = ["rustc_codegen_nvvm"], optional = true }
+
 [dev-dependencies]
 tempfile = "3.20.0"
 packed-seq = "5.0.0"
@@ -102,6 +113,10 @@ diagnostics = ["rand"]
 # Not enabled by default, since it's not faster.
 # V2 automatically uses AVX-512 based on compile-time feature detection of the target cpu.
 avx512 = []
+
+# CUDA GPU acceleration (requires CUDA toolkit and LLVM 7.x)
+# Note: Currently requires manual PTX compilation due to dependency conflicts
+cuda = ["dep:cust", "dep:kernels"]
 
 python = ["pyo3"]
 python-stubs = ["pyo3-introspection"]
