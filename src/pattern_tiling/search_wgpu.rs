@@ -276,19 +276,8 @@ impl MyersWgpu {
 
         let peqs = precompute_peqs::<P>(queries);
 
-        let max_hits = (num_patterns as usize * 10).max(1);
-
-        let params = MyersParams {
-            text_len: text.len() as u32,
-            pattern_length,
-            num_patterns,
-            k,
-            alpha_pattern,
-            last_bit_shift: pattern_length.saturating_sub(1),
-            max_hits: max_hits as u32,
-        };
-
-        // Create buffers.
+        // Text and PEQ buffers are independent of max_hits, so build them once
+        // and reuse them across the grow-and-retry dispatches below.
         let text_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -305,7 +294,81 @@ impl MyersWgpu {
                 usage: wgpu::BufferUsages::STORAGE,
             });
 
-        let hit_ranges_size = (max_hits * std::mem::size_of::<GpuHitRange>()) as u64;
+        let num_workgroups = num_patterns.div_ceil(gpu_kernel::WORKGROUP_SIZE);
+
+        // The kernel counts every hit atomically but only writes ranges while
+        // idx < max_hits. If the true count exceeds the buffer, the surplus is
+        // dropped, so grow to the reported count and re-dispatch until every hit
+        // fits (converges in <= 2 iterations: the retry sizes to the exact count).
+        let mut max_hits = (num_patterns as usize * 10).max(1);
+        let (hit_count, hit_ranges_staging) = loop {
+            let params = MyersParams {
+                text_len: text.len() as u32,
+                pattern_length,
+                num_patterns,
+                k,
+                alpha_pattern,
+                last_bit_shift: pattern_length.saturating_sub(1),
+                max_hits: max_hits as u32,
+            };
+            let (hit_count, hit_ranges_staging) = self
+                .dispatch_and_count(&params, &text_buffer, &peqs_buffer, num_workgroups)
+                .await?;
+            match next_hit_capacity(hit_count, max_hits as u32) {
+                Some(bigger) => max_hits = bigger as usize, // overflow: grow and retry
+                None => break (hit_count, hit_ranges_staging),
+            }
+        };
+
+        let actual_hits = (hit_count as usize).min(max_hits);
+        if actual_hits == 0 {
+            return Ok(Vec::new());
+        }
+
+        // Read back hit ranges.
+        let ranges_slice = hit_ranges_staging.slice(..);
+        let (ranges_sender, ranges_receiver) = futures::channel::oneshot::channel();
+        ranges_slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = ranges_sender.send(result);
+        });
+        let _ = self.device.poll(wgpu::PollType::Wait);
+        ranges_receiver
+            .await
+            .map_err(|e| WgpuSearchError::Other(format!("Channel error: {e:?}")))?
+            .map_err(|e| WgpuSearchError::Other(format!("Buffer async error: {e:?}")))?;
+
+        let hit_ranges = {
+            let view = ranges_slice.get_mapped_range();
+            let gpu_ranges: &[GpuHitRange] = bytemuck::cast_slice(&view);
+            gpu_ranges[..actual_hits]
+                .iter()
+                .map(|r| HitRange {
+                    pattern_idx: r.pattern_idx as usize,
+                    start: r.start as isize,
+                    end: r.end as isize,
+                })
+                .collect()
+        };
+        hit_ranges_staging.unmap();
+
+        Ok(hit_ranges)
+    }
+
+    /// Dispatch the kernel once with `params` and read back the atomic hit count.
+    /// Returns the count and the hit-ranges staging buffer (mapped-readable), so
+    /// the caller can read ranges from the final, non-overflowing dispatch. Fresh
+    /// hit-ranges/hit-count buffers are created each call (their size depends on
+    /// `params.max_hits`); the `text`/`peqs` buffers are passed in and reused.
+    async fn dispatch_and_count(
+        &self,
+        params: &MyersParams,
+        text_buffer: &wgpu::Buffer,
+        peqs_buffer: &wgpu::Buffer,
+        num_workgroups: u32,
+    ) -> Result<(u32, wgpu::Buffer), WgpuSearchError> {
+        let hit_ranges_size =
+            (params.max_hits as usize * std::mem::size_of::<GpuHitRange>()) as u64;
+
         let hit_ranges_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Myers Hit Ranges Buffer"),
             size: hit_ranges_size,
@@ -358,8 +421,6 @@ impl MyersWgpu {
             ],
         });
 
-        let num_workgroups = num_patterns.div_ceil(gpu_kernel::WORKGROUP_SIZE);
-
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -373,17 +434,11 @@ impl MyersWgpu {
             });
             compute_pass.set_pipeline(&self.pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
-            compute_pass.set_push_constants(0, bytemuck::bytes_of(&params));
+            compute_pass.set_push_constants(0, bytemuck::bytes_of(params));
             compute_pass.dispatch_workgroups(num_workgroups.max(1), 1, 1);
         }
 
-        encoder.copy_buffer_to_buffer(
-            &hit_ranges_buffer,
-            0,
-            &hit_ranges_staging,
-            0,
-            hit_ranges_size,
-        );
+        encoder.copy_buffer_to_buffer(&hit_ranges_buffer, 0, &hit_ranges_staging, 0, hit_ranges_size);
         encoder.copy_buffer_to_buffer(
             &hit_count_buffer,
             0,
@@ -409,43 +464,24 @@ impl MyersWgpu {
 
         let hit_count = {
             let view = count_slice.get_mapped_range();
-            let count: u32 = bytemuck::cast_slice::<u8, u32>(&view)[0];
-            count
+            bytemuck::cast_slice::<u8, u32>(&view)[0]
         };
         hit_count_staging.unmap();
 
-        let actual_hits = (hit_count as usize).min(max_hits);
-        if actual_hits == 0 {
-            return Ok(Vec::new());
-        }
+        Ok((hit_count, hit_ranges_staging))
+    }
+}
 
-        // Read back hit ranges.
-        let ranges_slice = hit_ranges_staging.slice(..);
-        let (ranges_sender, ranges_receiver) = futures::channel::oneshot::channel();
-        ranges_slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = ranges_sender.send(result);
-        });
-        let _ = self.device.poll(wgpu::PollType::Wait);
-        ranges_receiver
-            .await
-            .map_err(|e| WgpuSearchError::Other(format!("Channel error: {e:?}")))?
-            .map_err(|e| WgpuSearchError::Other(format!("Buffer async error: {e:?}")))?;
-
-        let hit_ranges = {
-            let view = ranges_slice.get_mapped_range();
-            let gpu_ranges: &[GpuHitRange] = bytemuck::cast_slice(&view);
-            gpu_ranges[..actual_hits]
-                .iter()
-                .map(|r| HitRange {
-                    pattern_idx: r.pattern_idx as usize,
-                    start: r.start as isize,
-                    end: r.end as isize,
-                })
-                .collect()
-        };
-        hit_ranges_staging.unmap();
-
-        Ok(hit_ranges)
+/// Given the atomically-counted hit total reported by the kernel and the
+/// capacity of the output buffer it wrote into, return `Some(new_capacity)` if
+/// the buffer overflowed (so the caller must re-dispatch with a bigger buffer),
+/// or `None` if all hits fit. The kernel counts every hit but only writes while
+/// `idx < max_hits`, so `reported > capacity` means hits were dropped.
+fn next_hit_capacity(reported: u32, current_capacity: u32) -> Option<u32> {
+    if reported > current_capacity {
+        Some(reported)
+    } else {
+        None
     }
 }
 
@@ -505,6 +541,18 @@ fn generate_alpha_mask(alpha: f32, length: usize) -> u64 {
     }
 
     mask
+}
+
+#[cfg(test)]
+mod max_hits_tests {
+    use super::next_hit_capacity;
+
+    #[test]
+    fn detects_overflow_and_requests_true_count() {
+        assert_eq!(next_hit_capacity(5, 10), None); // fits: no retry
+        assert_eq!(next_hit_capacity(10, 10), None); // exactly full: no drop
+        assert_eq!(next_hit_capacity(23, 10), Some(23)); // overflow: grow to 23
+    }
 }
 
 #[cfg(test)]
