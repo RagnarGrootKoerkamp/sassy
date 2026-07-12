@@ -30,6 +30,9 @@ struct Args {
     gpu: bool,
 }
 
+const GPU_REPEATS: usize = 4;
+const REPEATS: usize = 1;
+
 fn main() {
     env_logger::init();
 
@@ -52,10 +55,14 @@ fn main() {
         .map(|_| (0..m).map(|_| b"ACGT"[rng.random_range(0..4)]).collect())
         .collect();
 
+    let nn = n * t;
+    let mm = m * p;
+    let pat_bp = p * t * n;
+
     {
         sassy::USE_WGPU.store(true, Relaxed);
-        let mut searcher = Searcher::<Iupac>::new_rc();
-        for _ in 0..2 {
+        let mut searcher = Searcher::<Iupac>::new_fwd().without_trace();
+        for _ in 0..GPU_REPEATS {
             let start = std::time::Instant::now();
             let mut cnt = 0;
             for text in &texts {
@@ -63,13 +70,18 @@ fn main() {
                 let matches = searcher.search_encoded_patterns(&pats, text, k);
                 cnt += matches.len();
             }
-            eprintln!("GPU       {cnt}: {:?}", start.elapsed());
+            let elapsed = start.elapsed().as_secs_f64();
+            eprintln!(
+                "GPU       {cnt}: {:.3?} s {:.3?} ns/pat/bp",
+                elapsed,
+                elapsed / pat_bp as f64 * 1e9
+            );
         }
     }
     {
         sassy::USE_WGPU.store(false, Relaxed);
-        let mut searcher = Searcher::<Iupac>::new_rc();
-        for _ in 0..2 {
+        let mut searcher = Searcher::<Iupac>::new_fwd().without_trace();
+        for _ in 0..REPEATS {
             let start = std::time::Instant::now();
             let mut cnt = 0;
             for text in &texts {
@@ -77,13 +89,18 @@ fn main() {
                 let matches = searcher.search_encoded_patterns(&pats, text, k);
                 cnt += matches.len();
             }
-            eprintln!("v2        {cnt}: {:?}", start.elapsed());
+            let elapsed = start.elapsed().as_secs_f64();
+            eprintln!(
+                "v2        {cnt}: {:.3?} s {:.3?} ns/pat/bp",
+                elapsed,
+                elapsed / pat_bp as f64 * 1e9
+            );
         }
     }
 
     {
-        let mut searcher = Searcher::<Iupac>::new_rc();
-        for _ in 0..2 {
+        let mut searcher = Searcher::<Iupac>::new_fwd().without_trace();
+        for _ in 0..REPEATS {
             let start = std::time::Instant::now();
             let mut cnt = 0;
             for pattern in &patterns {
@@ -92,31 +109,31 @@ fn main() {
                     cnt += matches.len();
                 }
             }
-            eprintln!("Single    {cnt}: {:?}", start.elapsed());
+            eprintln!("Single    {cnt}: {:.1?}", start.elapsed());
         }
     }
     {
-        let mut searcher = Searcher::<Iupac>::new_rc();
-        for _ in 0..2 {
+        let mut searcher = Searcher::<Iupac>::new_fwd().without_trace();
+        for _ in 0..REPEATS {
             let start = std::time::Instant::now();
             let mut cnt = 0;
             for pattern in &patterns {
                 let matches = searcher.search_texts(&pattern, &texts, k);
                 cnt += matches.len();
             }
-            eprintln!("Text      {cnt}: {:?}", start.elapsed());
+            eprintln!("Text      {cnt}: {:.1?}", start.elapsed());
         }
     }
     {
-        let mut searcher = Searcher::<Iupac>::new_rc();
-        for _ in 0..2 {
+        let mut searcher = Searcher::<Iupac>::new_fwd().without_trace();
+        for _ in 0..REPEATS {
             let start = std::time::Instant::now();
             let mut cnt = 0;
             for text in &texts {
                 let matches = searcher.search_patterns(&patterns, &text, k);
                 cnt += matches.len();
             }
-            eprintln!("Patterns: {cnt}: {:?}", start.elapsed());
+            eprintln!("Patterns: {cnt}: {:.1?}", start.elapsed());
         }
     }
 }
