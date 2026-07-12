@@ -5,3 +5,13 @@ rustflags = ["-C", "target-cpu=native"]
 # Prevent pyo3 rebuilding all the time.
 [env]
 PYO3_PYTHON = "/usr/bin/python3"
+
+# macOS: let `cargo run`/`cargo test` find the Homebrew Vulkan loader
+# (libvulkan.dylib), which in turn loads MoltenVK. Apple GPUs have no native
+# Vulkan and sassy's rust-gpu kernel targets SPIR-V/Vulkan, so the wgpu backend
+# runs through MoltenVK there. This prepends the Homebrew lib dirs (Apple Silicon
+# and Intel) to the dyld search path without replacing the OS default fallbacks;
+# not force-set, so a developer's own value wins. Harmless on Linux/Windows
+# (DYLD_* is macOS-only). Applies to cargo run/test only -- for an installed or
+# directly-invoked binary, export the var yourself (see the README).
+DYLD_LIBRARY_PATH = { value = "/opt/homebrew/lib:/usr/local/lib", force = false }
