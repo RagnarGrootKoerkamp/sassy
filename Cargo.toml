@@ -90,7 +90,7 @@ cust = { git = "https://github.com/rust-gpu/rust-cuda", rev = "103a8d56935c4e088
 kernels = { path = "kernels", optional = true }
 
 # Optional: WGPU GPU acceleration (cross-platform: Vulkan, Metal, DX12, OpenGL)
-wgpu = { version = "26.0", features = ["spirv"], optional = true }
+wgpu = { version = "26.0", features = ["spirv", "vulkan", "vulkan-portability"], optional = true }
 pollster = { version = "0.3", optional = true }
 futures = { version = "0.3", optional = true }
 bytemuck = { version = "1.25.0", optional = true }
