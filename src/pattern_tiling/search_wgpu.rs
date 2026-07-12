@@ -113,12 +113,18 @@ impl MyersWgpu {
                 wgpu::Features::PUSH_CONSTANTS
             };
 
+        // The PEQ table is one storage buffer, so at high pattern counts it exceeds
+        // the default 128 MiB binding cap. Request the adapter's actual maxima.
+        let adapter_limits = adapter.limits();
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("Myers WGPU Device"),
                 required_features,
                 required_limits: wgpu::Limits {
                     max_push_constant_size: 128,
+                    max_storage_buffer_binding_size: adapter_limits
+                        .max_storage_buffer_binding_size,
+                    max_buffer_size: adapter_limits.max_buffer_size,
                     ..Default::default()
                 },
                 memory_hints: Default::default(),
