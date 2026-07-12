@@ -56,13 +56,22 @@ pub struct MyersWgpu {
 
 impl MyersWgpu {
     pub fn new() -> Self {
-        pollster::block_on(Self::new_async()).unwrap()
+        Self::new_checked().unwrap_or_else(|e| panic!("{e}\n\n{}", adapter_help_message()))
+    }
+
+    /// Fallible constructor. Returns `WgpuSearchError::NoAdapter` when no Vulkan
+    /// adapter is available; see [`adapter_help_message`] for platform guidance.
+    pub fn new_checked() -> Result<Self, WgpuSearchError> {
+        pollster::block_on(Self::new_async())
     }
     /// Initialize the WGPU device and compute pipeline. We require the Vulkan
     /// backend (matching the `spirv-unknown-vulkan1.2` target used to compile
-    /// the kernel): other backends (GL, DX12 without passthrough) go through
-    /// naga's SPIR-V -> IR translation, which does not support all the
-    /// constructs emitted by rustc_codegen_spirv (e.g. narrow/bool types).
+    /// the kernel) with raw SPIR-V passthrough. The native Metal backend goes
+    /// through naga's SPIR-V -> IR translation, which rejects rust-gpu's output:
+    /// `Uint scalar width 1 is not supported` (that width-1 uint is intrinsic --
+    /// it comes from ordinary comparisons -- alongside u64/atomic and
+    /// `Block`-decoration gaps). On macOS this runs via MoltenVK (SPIRV-Cross),
+    /// which legalizes those constructs.
     pub async fn new_async() -> Result<Self, WgpuSearchError> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN,
@@ -135,9 +144,9 @@ impl MyersWgpu {
 
     fn create_pipeline(device: &wgpu::Device) -> (wgpu::ComputePipeline, wgpu::BindGroupLayout) {
         // Prefer raw SPIR-V passthrough (bypasses naga's SPIR-V -> IR
-        // translation, which does not support all constructs emitted by
-        // rustc_codegen_spirv, e.g. narrow/bool types). Fall back to the
-        // naga-validated path if the device doesn't support passthrough.
+        // translation, which rejects rust-gpu's output -- e.g. `Uint scalar
+        // width 1 is not supported`). Fall back to the naga-validated path if
+        // the device doesn't support passthrough.
         let shader_module = if device
             .features()
             .contains(wgpu::Features::SPIRV_SHADER_PASSTHROUGH)
@@ -472,6 +481,20 @@ impl MyersWgpu {
     }
 }
 
+/// Actionable guidance shown when no Vulkan adapter is found. On macOS the fix is
+/// MoltenVK (Apple GPUs have no native Vulkan; sassy's rust-gpu kernel targets
+/// SPIR-V/Vulkan). Elsewhere it is a missing or broken Vulkan driver/loader.
+pub(crate) fn adapter_help_message() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "No Vulkan adapter found. On macOS, sassy's GPU kernel runs through MoltenVK; \
+         install it and the Vulkan loader with:\n  brew install molten-vk vulkan-loader\n\
+         (Apple GPUs have no native Vulkan support.)"
+    } else {
+        "No Vulkan adapter found. Ensure a Vulkan driver and loader are installed \
+         and visible to this process."
+    }
+}
+
 /// Given the atomically-counted hit total reported by the kernel and the
 /// capacity of the output buffer it wrote into, return `Some(new_capacity)` if
 /// the buffer overflowed (so the caller must re-dispatch with a bigger buffer),
@@ -552,6 +575,21 @@ mod max_hits_tests {
         assert_eq!(next_hit_capacity(5, 10), None); // fits: no retry
         assert_eq!(next_hit_capacity(10, 10), None); // exactly full: no drop
         assert_eq!(next_hit_capacity(23, 10), Some(23)); // overflow: grow to 23
+    }
+}
+
+#[cfg(test)]
+mod adapter_help_tests {
+    use super::adapter_help_message;
+
+    #[test]
+    fn message_is_platform_appropriate() {
+        let msg = adapter_help_message();
+        assert!(msg.contains("Vulkan"));
+        #[cfg(target_os = "macos")]
+        assert!(msg.contains("brew install molten-vk"));
+        #[cfg(not(target_os = "macos"))]
+        assert!(!msg.contains("brew"));
     }
 }
 

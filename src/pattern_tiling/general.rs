@@ -463,7 +463,7 @@ impl<P: Profile> Searcher<P> {
             .as_ref()
             .unwrap()
             .search_ranges::<P>(queries, text, k, Some(alpha))
-            .expect("WGPU search failed");
+            .unwrap_or_else(|e| panic!("WGPU search failed: {e}"));
 
         dispatch_encoded!(self, encoded_queries, |searcher, tq| {
             trace_ranges_backend(
