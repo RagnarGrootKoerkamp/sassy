@@ -311,7 +311,18 @@ impl MyersWgpu {
                 usage: wgpu::BufferUsages::STORAGE,
             });
 
-        let num_workgroups = num_patterns.div_ceil(gpu_kernel::WORKGROUP_SIZE);
+        // Tile the text into ~TARGET_THREADS threads total to fill the GPU at low
+        // pattern counts; collapses to one tile once patterns alone suffice.
+        const TARGET_THREADS: u32 = 1 << 16; // 65536
+        const MIN_TILE: u32 = 2048; // bound the per-tile m+k recompute overhead
+        let text_len_u32 = text.len() as u32;
+        let n_tiles = {
+            let want = (TARGET_THREADS / num_patterns.max(1)).max(1);
+            let max_useful = (text_len_u32 / MIN_TILE).max(1);
+            want.min(max_useful)
+        };
+        let tile_size = text_len_u32.div_ceil(n_tiles);
+        let num_workgroups = (num_patterns * n_tiles).div_ceil(gpu_kernel::WORKGROUP_SIZE);
 
         // The kernel counts every hit atomically but only writes ranges while
         // idx < max_hits. If the true count exceeds the buffer, the surplus is
@@ -327,6 +338,8 @@ impl MyersWgpu {
                 alpha_pattern,
                 last_bit_shift: pattern_length.saturating_sub(1),
                 max_hits: max_hits as u32,
+                tile_size,
+                n_tiles,
             };
             let (hit_count, hit_ranges_staging) = self
                 .dispatch_and_count(&params, &text_buffer, &peqs_buffer, num_workgroups)
