@@ -347,3 +347,37 @@ int main() {
     sassy_searcher_free(searcher);
 }
 ```
+
+## Running the GPU (WGPU) backend on macOS
+
+The experimental GPU backend (`--features wgpu`) compiles the Myers kernel from
+Rust to SPIR-V via [rust-gpu](https://github.com/rust-gpu/rust-gpu), which only
+targets Vulkan. Apple GPUs have no native Vulkan, so on macOS the kernel runs
+through **MoltenVK** (a Vulkan-on-Metal translation layer). Native Metal is not
+an option for this kernel: wgpu's SPIR-V→Metal path (naga) rejects rust-gpu's
+output (`Uint scalar width 1 is not supported`).
+
+One-time setup:
+
+```sh
+brew install molten-vk vulkan-loader
+```
+
+`cargo run`/`cargo test` then find the loader automatically via `.cargo/config.toml`.
+For an installed or directly-invoked binary, export the path yourself:
+
+```sh
+export DYLD_LIBRARY_PATH="$(brew --prefix)/lib:$DYLD_LIBRARY_PATH"
+```
+
+Then, e.g.:
+
+```sh
+cargo run -F wgpu,cli --no-default-features --example modes -- -n 100000 -m 20 -k 3 -p 1000 -t 1
+```
+
+**Performance note:** on Apple integrated graphics via MoltenVK the GPU backend is
+a correctness/development vehicle, not a speed win at small scale. The optimized CPU
+SIMD path (`v2`) is competitive up to a few thousand patterns; the GPU pulls ahead
+only with large pattern batches. Expect the real performance story on a discrete
+NVIDIA/AMD GPU with native Vulkan.
