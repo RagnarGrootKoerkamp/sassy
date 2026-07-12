@@ -43,6 +43,10 @@ pub struct MyersParams {
     pub alpha_pattern: T,
     pub last_bit_shift: u32,
     pub max_hits: u32,
+    /// Text positions each tile owns; `0` = one tile over the whole text.
+    pub tile_size: u32,
+    /// ceil(text_len / tile_size), precomputed on the host; `1` when not tiling.
+    pub n_tiles: u32,
 }
 
 /// Type alias for pattern equality vectors
@@ -114,21 +118,58 @@ pub fn myers_search_kernel(
     #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] hit_count: &mut [u32],
     #[spirv(push_constant)] params: &MyersParams,
 ) {
-    let thread_id = global_id.x as usize;
+    use spirv_std::arch::atomic_i_add;
+    use spirv_std::memory::{Scope, Semantics};
 
-    // Early exit if thread ID exceeds number of patterns
-    if thread_id >= params.num_patterns as usize {
+    let thread_id = global_id.x as usize;
+    let text_len = params.text_len as usize;
+
+    // One thread per (pattern, tile); n_tiles <= 1 is one tile over the whole text.
+    let n_tiles = if params.n_tiles == 0 { 1usize } else { params.n_tiles as usize };
+    if thread_id >= params.num_patterns as usize * n_tiles {
         return;
     }
+    let pattern_id = thread_id / n_tiles;
+    let tile_id = thread_id % n_tiles;
 
-    // Each thread processes one pattern
-    let pattern_peqs_offset = thread_id * 256;
+    let tile_size = if params.tile_size == 0 {
+        text_len
+    } else {
+        params.tile_size as usize
+    };
+
+    // This tile emits only runs whose start is in [owned_start, owned_end), so
+    // every run is emitted by exactly one tile.
+    let owned_start = tile_id * tile_size;
+    let owned_end_unclamped = owned_start + tile_size;
+    let owned_end = if owned_end_unclamped < text_len {
+        owned_end_unclamped
+    } else {
+        text_len
+    };
+    if owned_start >= text_len {
+        return; // tile entirely past the text (rounding slack)
+    }
+
+    // A match spans <= m + k chars, so starting m + k before owned_start makes the
+    // Myers state correct from there on. (No saturating_sub on SPIR-V.)
+    let pattern_length = params.pattern_length as usize;
+    let margin = pattern_length + params.k as usize;
+    let scan_start = if owned_start > margin {
+        owned_start - margin
+    } else {
+        0
+    };
+    let scan_end_unclamped = owned_end + margin;
+    let scan_end = if scan_end_unclamped < text_len {
+        scan_end_unclamped
+    } else {
+        text_len
+    };
+
+    let pattern_peqs_offset = pattern_id * 256;
     let last_bit_mask = (1 as T) << params.last_bit_shift;
 
-    // Initialize Myers state
-    // `saturating_sub` is not supported on the SPIR-V target, so compute the
-    // shift amount with a branchless equivalent.
-    let pattern_length = params.pattern_length as usize;
     let shift_amount = if pattern_length >= 64 {
         0
     } else {
@@ -142,20 +183,17 @@ pub fn myers_search_kernel(
 
     let all_ones: T = !0;
 
-    // Track active range
     let mut is_active = false;
+    let mut emitting = false; // inside a run this tile owns
     let mut range_start = -1i32;
 
-    // Process each position in text
-    let text_len = params.text_len as usize;
-    for pos in 0..text_len {
-        // Read character
+    // Scan the tile plus margin, but keep going past scan_end while a run this tile
+    // owns is still open (a low-cost stretch longer than the margin). Indices are in
+    // bounds by construction, so the reads are unchecked.
+    let mut pos = scan_start;
+    while pos < text_len && (pos < scan_end || emitting) {
         let c = unsafe { *text.get_unchecked(pos) };
-
-        // Look up pre-computed equality vector for this char
         let eq = unsafe { *peqs.get_unchecked(pattern_peqs_offset + c as usize) };
-
-        // Execute Myers step
         let (vp_new, vn_new, cost_new) = myers_step_scalar(
             vp,
             vn,
@@ -165,26 +203,23 @@ pub fn myers_search_kernel(
             params.last_bit_shift,
             last_bit_mask,
         );
-
         vp = vp_new;
         vn = vn_new;
         cost = cost_new;
 
-        // Check if cost is within threshold
         let was_active = is_active;
         is_active = cost <= params.k as T;
 
-        // Handle range transitions
         if is_active && !was_active {
-            // Range starting
-            range_start = pos as i32;
+            // A run starts at `pos`; own it iff pos is in [owned_start, owned_end).
+            if pos >= owned_start && pos < owned_end {
+                emitting = true;
+                range_start = pos as i32;
+            } else {
+                emitting = false;
+            }
         } else if !is_active && was_active {
-            // Range ending - emit hit
-            // Use atomic to get unique slot
-            #[cfg(target_arch = "spirv")]
-            {
-                use spirv_std::arch::atomic_i_add;
-                use spirv_std::memory::{Scope, Semantics};
+            if emitting {
                 let idx = unsafe {
                     atomic_i_add::<
                         u32,
@@ -192,41 +227,35 @@ pub fn myers_search_kernel(
                         { Semantics::UNIFORM_MEMORY.bits() },
                     >(&mut hit_count[0], 1)
                 };
-
                 if idx < params.max_hits {
                     hit_ranges[idx as usize] = HitRange {
-                        pattern_idx: thread_id as u32,
+                        pattern_idx: pattern_id as u32,
                         start: range_start,
                         end: (pos - 1) as i32,
                         _padding: 0,
                     };
                 }
+                emitting = false;
             }
         }
+        pos += 1;
     }
 
-    // Finalize: if still active at end, emit final range
-    if is_active {
-        #[cfg(target_arch = "spirv")]
-        {
-            use spirv_std::arch::atomic_i_add;
-            use spirv_std::memory::{Scope, Semantics};
-            let idx = unsafe {
-                atomic_i_add::<
-                    u32,
-                    { Scope::QueueFamily as u32 },
-                    { Semantics::UNIFORM_MEMORY.bits() },
-                >(&mut hit_count[0], 1)
+    // Finalize: a run this tile owns that is still active at the end of the scan.
+    if emitting {
+        let idx = unsafe {
+            atomic_i_add::<u32, { Scope::QueueFamily as u32 }, { Semantics::UNIFORM_MEMORY.bits() }>(
+                &mut hit_count[0],
+                1,
+            )
+        };
+        if idx < params.max_hits {
+            hit_ranges[idx as usize] = HitRange {
+                pattern_idx: pattern_id as u32,
+                start: range_start,
+                end: (pos - 1) as i32,
+                _padding: 0,
             };
-
-            if idx < params.max_hits {
-                hit_ranges[idx as usize] = HitRange {
-                    pattern_idx: thread_id as u32,
-                    start: range_start,
-                    end: (text_len - 1) as i32,
-                    _padding: 0,
-                };
-            }
         }
     }
 }
