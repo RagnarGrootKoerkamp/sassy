@@ -515,7 +515,7 @@ mod tests {
     #[test]
     #[ignore] // Only run when a WGPU-compatible GPU/driver is available.
     fn test_wgpu_search_basic() {
-        let searcher = pollster::block_on(MyersWgpu::new()).expect("Failed to initialize WGPU");
+        let searcher = MyersWgpu::new();
 
         let queries = vec![b"ACGT".to_vec(), b"TGCA".to_vec()];
         let text = b"AAACGTTTGCAAA";
