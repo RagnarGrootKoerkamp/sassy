@@ -287,9 +287,14 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
 
     // Prep allocs for single block search
     let length_mask = (!0u64) >> (64usize.saturating_sub(t_queries.pattern_length));
+    // Only the current trace batch (<= LANES) is active here, so size the
+    // per-query state to `filled_till`, consistent with `history`/`positions`
+    // (sized by `ensure_capacity(1, buffer.filled_till)` above). The GPU search
+    // path reaches this without `Myers::search_ranges` having grown the buffers
+    // to `n_queries`, so passing `n_queries` here would overrun `active_ranges`.
     searcher.search_prep(
         1,
-        t_queries.n_queries,
+        buffer.filled_till,
         t_queries.pattern_length,
         searcher.alpha_pattern & length_mask,
     );
@@ -449,4 +454,34 @@ fn traceback_single<B: SimdBackend, P: Profile>(
     };
 
     m
+}
+
+#[cfg(test)]
+mod trace_gpu_path_tests {
+    use super::*;
+    use crate::pattern_tiling::backend::U32Backend;
+    use crate::pattern_tiling::search::{HitRange, Myers};
+    use crate::pattern_tiling::tqueries::TQueries;
+    use crate::profiles::Iupac;
+
+    // Reproduces the GPU trace path: a fresh Myers (per-query buffers never grown
+    // by search_ranges) traced against RC-doubled queries whose n_queries far
+    // exceeds a single block. Must not panic / index out of bounds.
+    #[test]
+    fn trace_batch_ranges_tolerates_ungrown_active_ranges() {
+        let mut searcher = Myers::<U32Backend, Iupac>::new(None);
+        let queries = vec![b"ACGTACGTACGTACGTACGT".to_vec()]; // 1 pattern, 20bp
+        let tq = TQueries::<U32Backend, Iupac>::new(&queries, /*include_rc=*/ true);
+        assert!(tq.n_queries >= 2, "RC should give n_queries >= 2");
+
+        let text = b"ACGTACGTACGTACGTACGTACGT";
+        let ranges = [HitRange { pattern_idx: 0, start: 0, end: 19 }];
+        let mut buffer = TraceBuffer::new(U32Backend::LANES);
+
+        // Pre-fix: panics "range end index {n_queries} out of range for slice of length {LANES-ish}".
+        trace_batch_ranges::<U32Backend, Iupac>(
+            &mut searcher, &tq, text, &ranges, 3,
+            TracePostProcess::LocalMinima, None, None, &mut buffer,
+        );
+    }
 }

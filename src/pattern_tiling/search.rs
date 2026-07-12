@@ -118,6 +118,14 @@ impl<B: SimdBackend, P: Profile> Myers<B, P> {
         }
 
         // eprintln!("length_mask: {} {}", self.active_ranges.len(), n_queries);
+        // The WGPU trace path reaches search_prep without going through
+        // `search_ranges` (range finding runs on the GPU), so the per-query
+        // `active_ranges` buffer may not yet be sized to `n_queries`. The CPU
+        // path always resizes it beforehand; do the same defensively here so
+        // the fill below cannot index out of bounds.
+        if self.active_ranges.len() < n_queries {
+            self.active_ranges.resize(n_queries, isize::MIN);
+        }
         self.active_ranges[..n_queries].fill(isize::MIN);
         self.hit_ranges.clear();
     }
