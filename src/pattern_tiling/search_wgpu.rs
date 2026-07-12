@@ -539,28 +539,31 @@ fn precompute_peqs<P: Profile>(queries: &[Vec<u8>]) -> Vec<T> {
         *slot = P::encode_char(v as u8);
     }
 
-    for (pattern_idx, query) in queries.iter().enumerate() {
-        let base_offset = pattern_idx * 256;
-        for (pos, &pattern_byte) in query.iter().enumerate() {
-            if pos >= 64 {
-                break; // Limit to 64-bit patterns.
-            }
-            let enc_pattern = P::encode_char(pattern_byte);
-            if enc_pattern == 0 {
-                continue; // Skip wildcard/unmatched pattern chars, as in TQueries::new.
-            }
-            let bit = 1 << pos;
-            // A pattern position matches a text byte whenever their IUPAC
-            // encodings share at least one bit (ambiguity-code compatible),
-            // mirroring the bitwise-overlap check in `TQueries::new` /
-            // `Profile::is_match`.
-            for (byte, &enc_text) in encoded_byte.iter().enumerate() {
-                if (enc_pattern & enc_text) != 0 {
-                    peqs[base_offset + byte] |= bit;
+    // Each pattern owns a disjoint 256-entry slice, so this parallelizes cleanly.
+    use rayon::prelude::*;
+    peqs.par_chunks_mut(256)
+        .zip(queries.par_iter())
+        .for_each(|(chunk, query)| {
+            for (pos, &pattern_byte) in query.iter().enumerate() {
+                if pos >= 64 {
+                    break; // Limit to 64-bit patterns.
+                }
+                let enc_pattern = P::encode_char(pattern_byte);
+                if enc_pattern == 0 {
+                    continue; // Skip wildcard/unmatched pattern chars, as in TQueries::new.
+                }
+                let bit = 1 << pos;
+                // A pattern position matches a text byte whenever their IUPAC
+                // encodings share at least one bit (ambiguity-code compatible),
+                // mirroring the bitwise-overlap check in `TQueries::new` /
+                // `Profile::is_match`.
+                for (byte, &enc_text) in encoded_byte.iter().enumerate() {
+                    if (enc_pattern & enc_text) != 0 {
+                        chunk[byte] |= bit;
+                    }
                 }
             }
-        }
-    }
+        });
 
     peqs
 }
