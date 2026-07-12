@@ -11,6 +11,8 @@ use spirv_std::{glam::UVec3, spirv};
 /// Each thread processes one pattern
 pub const WORKGROUP_SIZE: u32 = 256;
 
+type T = u32;
+
 /// Represents a hit range for a pattern match
 /// Must be repr(C) and Pod for GPU/CPU sharing
 #[repr(C)]
@@ -38,28 +40,28 @@ pub struct MyersParams {
     pub pattern_length: u32,
     pub num_patterns: u32,
     pub k: u32, // Maximum allowed cost
-    pub alpha_pattern: u64,
+    pub alpha_pattern: T,
     pub last_bit_shift: u32,
     pub max_hits: u32,
 }
 
 /// Type alias for pattern equality vectors
-pub type PeqValue = u64;
+pub type PeqValue = T;
 
 /// Core Myers bit-parallel algorithm step (scalar version for GPU)
 ///
-/// This is the same algorithm as the SIMD version, but operates on scalar u64 values.
+/// This is the same algorithm as the SIMD version, but operates on scalar T values.
 /// Each GPU thread executes this independently for its assigned pattern.
 #[inline(always)]
 fn myers_step_scalar(
-    vp: u64,
-    vn: u64,
-    cost: u64,
-    eq: u64,
-    all_ones: u64,
+    vp: T,
+    vn: T,
+    cost: T,
+    eq: T,
+    all_ones: T,
     last_bit_shift: u32,
-    last_bit_mask: u64,
-) -> (u64, u64, u64) {
+    last_bit_mask: T,
+) -> (T, T, T) {
     let eq_and_pv = eq & vp;
     let xh = ((eq_and_pv.wrapping_add(vp)) ^ vp) | eq;
     let mh = vp & xh;
@@ -80,11 +82,11 @@ fn myers_step_scalar(
     (vp_out, vn_out, cost_out)
 }
 
-/// Count the number of one bits in a u64 (popcount)
-/// SPIR-V doesn't have u64::count_ones in core, so we implement it
+/// Count the number of one bits in a T (popcount)
+/// SPIR-V doesn't have T::count_ones in core, so we implement it
 #[allow(unused)]
 #[inline]
-fn count_ones_u64(mut x: u64) -> u32 {
+fn count_ones(mut x: T) -> u32 {
     let mut count = 0u32;
     while x != 0 {
         x &= x - 1; // Clear the lowest set bit
@@ -99,7 +101,7 @@ fn count_ones_u64(mut x: u64) -> u32 {
 ///
 /// Memory layout:
 /// - binding 0: text (read-only)
-/// - binding 1: pattern equality vectors (PEQs) - [num_patterns * 256]u64
+/// - binding 1: pattern equality vectors (PEQs) - [num_patterns * 256]T
 /// - binding 2: output hit ranges (read-write)
 /// - binding 3: atomic hit counter (read-write)
 #[cfg(target_arch = "spirv")]
@@ -107,7 +109,7 @@ fn count_ones_u64(mut x: u64) -> u32 {
 pub fn myers_search_kernel(
     #[spirv(global_invocation_id)] global_id: UVec3,
     #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] text: &[u8],
-    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] peqs: &[u64],
+    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] peqs: &[T],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] hit_ranges: &mut [HitRange],
     #[spirv(storage_buffer, descriptor_set = 0, binding = 3)] hit_count: &mut [u32],
     #[spirv(push_constant)] params: &MyersParams,
@@ -121,20 +123,24 @@ pub fn myers_search_kernel(
 
     // Each thread processes one pattern
     let pattern_peqs_offset = thread_id * 256;
-    let last_bit_mask = 1u64 << params.last_bit_shift;
+    let last_bit_mask = (1 as T) << params.last_bit_shift;
 
     // Initialize Myers state
     // `saturating_sub` is not supported on the SPIR-V target, so compute the
     // shift amount with a branchless equivalent.
     let pattern_length = params.pattern_length as usize;
-    let shift_amount = if pattern_length >= 64 { 0 } else { 64 - pattern_length };
-    let length_mask = (!0u64) >> shift_amount;
+    let shift_amount = if pattern_length >= 64 {
+        0
+    } else {
+        64 - pattern_length
+    };
+    let length_mask = (!0 as T) >> shift_amount;
     let masked_alpha = params.alpha_pattern & length_mask;
     let mut vp = params.alpha_pattern;
-    let mut vn = 0u64;
-    let mut cost = count_ones_u64(masked_alpha) as u64;
+    let mut vn: T = 0;
+    let mut cost = count_ones(masked_alpha) as T;
 
-    let all_ones = !0u64;
+    let all_ones: T = !0;
 
     // Track active range
     let mut is_active = false;
@@ -144,10 +150,10 @@ pub fn myers_search_kernel(
     let text_len = params.text_len as usize;
     for pos in 0..text_len {
         // Read character
-        let c = text[pos];
+        let c = unsafe { *text.get_unchecked(pos) };
 
         // Look up pre-computed equality vector for this char
-        let eq = peqs[pattern_peqs_offset + c as usize];
+        let eq = unsafe { *peqs.get_unchecked(pattern_peqs_offset + c as usize) };
 
         // Execute Myers step
         let (vp_new, vn_new, cost_new) = myers_step_scalar(
@@ -166,7 +172,7 @@ pub fn myers_search_kernel(
 
         // Check if cost is within threshold
         let was_active = is_active;
-        is_active = cost <= params.k as u64;
+        is_active = cost <= params.k as T;
 
         // Handle range transitions
         if is_active && !was_active {
@@ -206,10 +212,11 @@ pub fn myers_search_kernel(
             use spirv_std::arch::atomic_i_add;
             use spirv_std::memory::{Scope, Semantics};
             let idx = unsafe {
-                atomic_i_add::<u32, { Scope::QueueFamily as u32 }, { Semantics::UNIFORM_MEMORY.bits() }>(
-                    &mut hit_count[0],
-                    1,
-                )
+                atomic_i_add::<
+                    u32,
+                    { Scope::QueueFamily as u32 },
+                    { Semantics::UNIFORM_MEMORY.bits() },
+                >(&mut hit_count[0], 1)
             };
 
             if idx < params.max_hits {
@@ -228,7 +235,7 @@ pub fn myers_search_kernel(
 #[cfg(not(target_arch = "spirv"))]
 pub fn myers_search_kernel_cpu(
     text: &[u8],
-    peqs: &[u64],
+    peqs: &[T],
     hit_ranges: &mut [HitRange],
     hit_count: &mut u32,
     params: &MyersParams,
@@ -239,15 +246,15 @@ pub fn myers_search_kernel_cpu(
     }
 
     let pattern_peqs_offset = thread_id * 256;
-    let last_bit_mask = 1u64 << params.last_bit_shift;
+    let last_bit_mask = (1 as T) << params.last_bit_shift;
 
-    let length_mask = (!0u64) >> (64usize.saturating_sub(params.pattern_length as usize));
+    let length_mask = (!0 as T) >> (64usize.saturating_sub(params.pattern_length as usize));
     let masked_alpha = params.alpha_pattern & length_mask;
     let mut vp = params.alpha_pattern;
-    let mut vn = 0u64;
-    let mut cost = masked_alpha.count_ones() as u64;
+    let mut vn: T = 0;
+    let mut cost: T = masked_alpha.count_ones() as T;
 
-    let all_ones = !0u64;
+    let all_ones: T = !0;
 
     let mut is_active = false;
     let mut range_start = -1i32;
@@ -271,7 +278,7 @@ pub fn myers_search_kernel_cpu(
         cost = cost_new;
 
         let was_active = is_active;
-        is_active = cost <= params.k as u64;
+        is_active = cost <= params.k as T;
 
         if is_active && !was_active {
             range_start = pos as i32;
@@ -329,10 +336,10 @@ mod tests {
 
     #[test]
     fn test_count_ones() {
-        assert_eq!(count_ones_u64(0), 0);
-        assert_eq!(count_ones_u64(1), 1);
-        assert_eq!(count_ones_u64(0b1010), 2);
-        assert_eq!(count_ones_u64(0b11111111), 8);
-        assert_eq!(count_ones_u64(!0u64), 64);
+        assert_eq!(count_ones(0), 0);
+        assert_eq!(count_ones(1), 1);
+        assert_eq!(count_ones(0b1010), 2);
+        assert_eq!(count_ones(0b11111111), 8);
+        assert_eq!(count_ones(!0u64), 64);
     }
 }

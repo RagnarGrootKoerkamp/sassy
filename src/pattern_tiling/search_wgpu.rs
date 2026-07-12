@@ -24,6 +24,8 @@ static MYERS_KERNEL_SPV: &[u8] = include_bytes!(env!("MYERS_KERNEL_SPV_PATH"));
 /// Entry point name of the compiled kernel.
 const MYERS_KERNEL_ENTRY: &str = env!("MYERS_KERNEL_SPV_ENTRY");
 
+type T = u32;
+
 /// Error types for WGPU operations.
 #[derive(Debug)]
 pub enum WgpuSearchError {
@@ -281,7 +283,7 @@ impl MyersWgpu {
         let pattern_length = queries[0].len() as u32;
 
         let alpha_val = alpha.unwrap_or(1.0);
-        let alpha_pattern = generate_alpha_mask(alpha_val, pattern_length as usize);
+        let alpha_pattern = generate_alpha_mask(alpha_val, pattern_length as usize) as T;
 
         let peqs = precompute_peqs::<P>(queries);
 
@@ -447,7 +449,13 @@ impl MyersWgpu {
             compute_pass.dispatch_workgroups(num_workgroups.max(1), 1, 1);
         }
 
-        encoder.copy_buffer_to_buffer(&hit_ranges_buffer, 0, &hit_ranges_staging, 0, hit_ranges_size);
+        encoder.copy_buffer_to_buffer(
+            &hit_ranges_buffer,
+            0,
+            &hit_ranges_staging,
+            0,
+            hit_ranges_size,
+        );
         encoder.copy_buffer_to_buffer(
             &hit_count_buffer,
             0,
@@ -513,9 +521,9 @@ fn next_hit_capacity(reported: u32, current_capacity: u32) -> Option<u32> {
 /// For each pattern and each possible character value (0-255), compute a
 /// 64-bit vector indicating which positions in the pattern match that
 /// character.
-fn precompute_peqs<P: Profile>(queries: &[Vec<u8>]) -> Vec<u64> {
+fn precompute_peqs<P: Profile>(queries: &[Vec<u8>]) -> Vec<T> {
     let num_patterns = queries.len();
-    let mut peqs = vec![0u64; num_patterns * 256];
+    let mut peqs = vec![0; num_patterns * 256];
 
     // Pre-compute the IUPAC-style encoding for every possible raw text byte
     // (0..256) once, since `P::encode_char` returns a small bitmask (e.g. one
@@ -535,7 +543,7 @@ fn precompute_peqs<P: Profile>(queries: &[Vec<u8>]) -> Vec<u64> {
             if enc_pattern == 0 {
                 continue; // Skip wildcard/unmatched pattern chars, as in TQueries::new.
             }
-            let bit = 1u64 << pos;
+            let bit = 1 << pos;
             // A pattern position matches a text byte whenever their IUPAC
             // encodings share at least one bit (ambiguity-code compatible),
             // mirroring the bitwise-overlap check in `TQueries::new` /
@@ -552,14 +560,14 @@ fn precompute_peqs<P: Profile>(queries: &[Vec<u8>]) -> Vec<u64> {
 }
 
 /// Generate alpha mask for overhang handling.
-fn generate_alpha_mask(alpha: f32, length: usize) -> u64 {
-    let mut mask = 0u64;
+fn generate_alpha_mask(alpha: f32, length: usize) -> T {
+    let mut mask = 0;
     let limit = length.min(64);
 
     for i in 0..limit {
-        let val = ((i + 1) as f32 * alpha).floor() as u64 - (i as f32 * alpha).floor() as u64;
+        let val = ((i + 1) as f32 * alpha).floor() as T - (i as f32 * alpha).floor() as T;
         if val >= 1 {
-            mask |= 1u64 << i;
+            mask |= 1 << i;
         }
     }
 
