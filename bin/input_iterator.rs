@@ -1,8 +1,12 @@
 use needletail::{FastxReader, parse_fastx_file, parse_fastx_stdin};
-use noodles::{bam, sam::alignment::RecordBuf};
+use noodles::{
+    bam,
+    sam::{self, alignment::RecordBuf},
+};
 use sassy::CachedRev;
 use std::{
     fs::File,
+    io::BufReader,
     path::{Path, PathBuf},
     sync::{Arc, Mutex}, // TODO: could use parking_lot mutex - faster
 };
@@ -22,10 +26,7 @@ pub struct PatternRecord {
     pub seq: Vec<u8>,
 }
 
-/// A text to be searched, with ID from fasta file.
-/// TODO: Reduce the number of allocations here.
 #[derive(Debug)]
-
 pub enum TextRecord {
     Fastx {
         id: ID,
@@ -87,6 +88,10 @@ enum InputReader {
         reader: bam::io::Reader<noodles::bgzf::io::Reader<File>>,
         header: Arc<noodles::sam::Header>,
     },
+    Sam {
+        reader: sam::io::Reader<BufReader<File>>,
+        header: Arc<noodles::sam::Header>,
+    },
 }
 
 impl InputReader {
@@ -121,6 +126,26 @@ impl InputReader {
                     record_buf,
                 })
             }
+            Self::Sam { reader, header } => {
+                let mut record_buf = RecordBuf::default();
+                let bytes_read = reader
+                    .read_record_buf(header, &mut record_buf)
+                    .expect("Failed to read a SAM alignment record");
+                if bytes_read == 0 {
+                    return None;
+                }
+
+                let id = record_buf
+                    .name()
+                    .map(|name| String::from_utf8_lossy(name.as_ref()).into_owned())
+                    .unwrap_or_else(|| "*".to_string());
+                let seq = CachedRev::new(record_buf.sequence().as_ref().to_vec(), false);
+                Some(TextRecord::Sam {
+                    id,
+                    seq,
+                    record_buf,
+                })
+            }
         }
     }
 }
@@ -138,16 +163,42 @@ pub struct InputIterator<'a> {
     rev: bool,
 }
 
+/// Returns whether `path` selects BAM input using the CLI's `.bam` extension convention.
 pub fn is_bam_path(path: &Path) -> bool {
     path.extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("bam"))
 }
 
+/// Returns whether `path` selects SAM input using a `.sam` extension.
+pub fn is_sam_path(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("sam"))
+}
+
+/// Returns whether `path` is a BAM or SAM alignment input.
+pub fn is_alignment_path(path: &Path) -> bool {
+    is_bam_path(path) || is_sam_path(path)
+}
+
 fn parse_file(path: &PathBuf) -> InputReader {
     if is_bam_path(path) {
-        let mut reader = bam::io::Reader::new(File::open(path).expect("open BAM input"));
-        let header = Arc::new(reader.read_header().expect("read BAM header"));
+        let mut reader = bam::io::Reader::new(
+            File::open(path)
+                .unwrap_or_else(|e| panic!("Failed to open BAM input `{}`: {e}", path.display())),
+        );
+        let header = Arc::new(reader.read_header().unwrap_or_else(|e| {
+            panic!("Failed to read BAM header from `{}`: {e}", path.display())
+        }));
         InputReader::Bam { reader, header }
+    } else if is_sam_path(path) {
+        let mut reader =
+            sam::io::Reader::new(BufReader::new(File::open(path).unwrap_or_else(|e| {
+                panic!("Failed to open SAM input `{}`: {e}", path.display())
+            })));
+        let header = Arc::new(reader.read_header().unwrap_or_else(|e| {
+            panic!("Failed to read SAM header from `{}`: {e}", path.display())
+        }));
+        InputReader::Sam { reader, header }
     } else if path == Path::new("") || path == Path::new("-") {
         InputReader::Fastx(parse_fastx_stdin().unwrap())
     } else {

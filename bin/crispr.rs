@@ -145,7 +145,7 @@ pub fn matching_seq<P: Profile>(seq1: &[u8], seq2: &[u8]) -> bool {
 pub fn crispr(args: &CrisprArgs) {
     assert!(
         !is_bam_path(&args.path),
-        "BAM input is not supported by crispr"
+        "`crispr` does not support BAM input. Provide a FASTA/FASTQ file instead."
     );
     let guide_sequences = read_guide_sequences(&args.guide);
     println!("[GUIDES] Found {} guides", guide_sequences.len());

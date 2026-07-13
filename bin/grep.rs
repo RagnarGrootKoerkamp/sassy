@@ -19,7 +19,9 @@ use sassy::{
     profiles::{Ascii, Dna, Iupac, Profile},
 };
 
-use crate::input_iterator::{InputIterator, PatternRecord, TextBatch, TextRecord, is_bam_path};
+use crate::input_iterator::{
+    InputIterator, PatternRecord, TextBatch, TextRecord, is_alignment_path, is_bam_path,
+};
 use crate::sam::SamColumn;
 
 // TODO: Support ASCII alphabet.
@@ -133,7 +135,7 @@ pub struct GrepArgs {
     #[arg(long, default_missing_value = "-", num_args(0..=1))]
     filter: Option<PathBuf>,
 
-    /// Extra mandatory SAM fields to append to TSV output for BAM input.
+    /// Extra SAM fields to append to TSV output for SAM/BAM input.
     #[arg(long, value_name = "FIELDS")]
     more_columns: Option<String>,
 }
@@ -164,7 +166,7 @@ pub struct SearchArgs {
     #[arg(long, default_missing_value = "-", num_args(0..=1))]
     filter: Option<PathBuf>,
 
-    /// Extra mandatory SAM fields to append to TSV output for BAM input.
+    /// Extra SAM fields to append to TSV output for SAM/BAM input.
     #[arg(long, value_name = "FIELDS")]
     more_columns: Option<String>,
 }
@@ -178,7 +180,7 @@ pub struct FilterArgs {
     #[arg(long, default_missing_value = "-", num_args(0..=1))]
     search: Option<PathBuf>,
 
-    /// Add Sassy match data as local-use BAM tags when filtering BAM input.
+    /// Add Sassy match data as local-use SAM/BAM tags when filtering alignment input.
     #[arg(long)]
     annotate: bool,
 }
@@ -200,6 +202,10 @@ enum FilterWriter {
     Bam {
         writer: bam::io::Writer<bgzf::io::Writer<Box<dyn Write + Send>>>,
         header: std::sync::Arc<sam::Header>,
+    },
+    Sam {
+        writer: sam::io::Writer<Box<dyn Write + Send>>,
+        header: Arc<sam::Header>,
     },
 }
 
@@ -397,14 +403,29 @@ impl FilterArgs {
     }
 }
 
-fn read_bam_headers(paths: &[PathBuf]) -> HashMap<PathBuf, Arc<sam::Header>> {
+/// Reads alignment headers up front so output can serialize records after parallel matching.
+fn read_alignment_headers(paths: &[PathBuf]) -> HashMap<PathBuf, Arc<sam::Header>> {
     paths
         .iter()
-        .filter(|path| is_bam_path(path))
+        .filter(|path| is_alignment_path(path))
         .map(|path| {
-            let mut reader = bam::io::Reader::new(File::open(path).expect("open BAM input"));
-            let header = Arc::new(reader.read_header().expect("read BAM header"));
-            (path.clone(), header)
+            let header = if is_bam_path(path) {
+                let mut reader = bam::io::Reader::new(File::open(path).unwrap_or_else(|e| {
+                    panic!("Failed to open BAM input `{}`: {e}", path.display())
+                }));
+                reader.read_header().unwrap_or_else(|e| {
+                    panic!("Failed to read BAM header from `{}`: {e}", path.display())
+                })
+            } else {
+                let mut reader =
+                    sam::io::Reader::new(std::io::BufReader::new(File::open(path).unwrap_or_else(
+                        |e| panic!("Failed to open SAM input `{}`: {e}", path.display()),
+                    )));
+                reader.read_header().unwrap_or_else(|e| {
+                    panic!("Failed to read SAM header from `{}`: {e}", path.display())
+                })
+            };
+            (path.clone(), Arc::new(header))
         })
         .collect()
 }
@@ -455,34 +476,38 @@ impl Args {
         if self.base.paths.is_empty() {
             self.base.paths = vec![PathBuf::from("")];
         }
-        let bam_paths: Vec<_> = self
+        let alignment_paths: Vec<_> = self
             .base
             .paths
             .iter()
-            .filter(|path| is_bam_path(path))
+            .filter(|path| is_alignment_path(path))
             .collect();
-        if !bam_paths.is_empty() && self.base.sam {
-            panic!("--sam is not supported with BAM input");
+        if !alignment_paths.is_empty() && self.base.sam {
+            panic!(
+                "`--sam` cannot be used with SAM/BAM input. Remove `--sam`; alignment records retain their stored orientation."
+            );
         }
-        if !self.more_columns.is_empty() && bam_paths.is_empty() {
-            panic!("--more-columns requires BAM input");
+        if !self.more_columns.is_empty() && alignment_paths.is_empty() {
+            panic!("`--more-columns` requires at least one `.bam` or `.sam` input path.");
         }
-        if !self.more_columns.is_empty() && bam_paths.len() != self.base.paths.len() {
-            panic!("--more-columns cannot be used with mixed BAM and FASTX input");
+        if !self.more_columns.is_empty() && alignment_paths.len() != self.base.paths.len() {
+            panic!(
+                "`--more-columns` cannot be used with mixed SAM/BAM and FASTX input. Run alignment and FASTX inputs separately."
+            );
         }
-        if self.filter.is_some() && !bam_paths.is_empty() {
+        if self.filter.is_some() && !alignment_paths.is_empty() {
             assert_eq!(
-                bam_paths.len(),
+                alignment_paths.len(),
                 1,
-                "BAM filtering accepts exactly one BAM input"
+                "SAM/BAM filtering accepts exactly one alignment input because the output preserves one source header."
             );
             assert_eq!(
-                bam_paths.len(),
+                alignment_paths.len(),
                 self.base.paths.len(),
-                "BAM and FASTX inputs cannot be mixed when filtering"
+                "SAM/BAM filtering cannot mix alignment and FASTX inputs. Run each input format separately."
             );
         }
-        let bam_headers = read_bam_headers(&self.base.paths);
+        let alignment_headers = read_alignment_headers(&self.base.paths);
         let args = &self;
 
         let patterns = args.get_patterns();
@@ -524,17 +549,26 @@ impl Args {
                 filter_to_stdout = true;
                 Box::new(std::io::stdout()) as Box<dyn std::io::Write + Send>
             };
-            if let Some(path) = bam_paths.first() {
-                let header = bam_headers
+            if let Some(path) = alignment_paths.first() {
+                let header = alignment_headers
                     .get(*path)
-                    .expect("BAM header is missing")
+                    .expect("Alignment header metadata was not loaded for the requested input")
                     .clone();
-                let mut bam_writer = bam::io::Writer::new(writer);
-                bam_writer.write_header(&header).expect("write BAM header");
-                Mutex::new(FilterWriter::Bam {
-                    writer: bam_writer,
-                    header,
-                })
+                if is_bam_path(path) {
+                    let mut bam_writer = bam::io::Writer::new(writer);
+                    bam_writer.write_header(&header).expect("write BAM header");
+                    Mutex::new(FilterWriter::Bam {
+                        writer: bam_writer,
+                        header,
+                    })
+                } else {
+                    let mut sam_writer = sam::io::Writer::new(writer);
+                    sam_writer.write_header(&header).expect("write SAM header");
+                    Mutex::new(FilterWriter::Sam {
+                        writer: sam_writer,
+                        header,
+                    })
+                }
             } else {
                 Mutex::new(FilterWriter::Fastx(writer))
             }
@@ -580,7 +614,7 @@ impl Args {
             for _ in 0..num_threads {
                 let output = &output;
                 let global_histogram = &global_histogram;
-                let bam_headers = &bam_headers;
+                let alignment_headers = &alignment_headers;
                 let filter_writer = filter_writer.as_ref();
                 let match_writer = match_writer.as_ref();
                 s.spawn(move || {
@@ -681,7 +715,7 @@ impl Args {
                             for (path, text, matches) in front_results {
                                 args.output(
                                     path,
-                                    bam_headers.get(path).map(Arc::as_ref),
+                                    alignment_headers.get(path).map(Arc::as_ref),
                                     &text.0[text.1],
                                     matches,
                                     &mut filter_writer,
@@ -834,6 +868,23 @@ impl Args {
                     .write_alignment_record(header, &record)
                     .expect("write BAM record");
             }
+            FilterWriter::Sam { writer, header } => {
+                let TextRecord::Sam { record_buf, .. } = text else {
+                    panic!("SAM output requires SAM input");
+                };
+                let mut record = record_buf.clone();
+                if self.annotate && !matches.is_empty() {
+                    crate::sam::annotate_bam_record(
+                        &mut record,
+                        matches,
+                        self.base.alphabet,
+                        self.base.sam,
+                    );
+                }
+                writer
+                    .write_alignment_record(header, &record)
+                    .expect("write SAM record");
+            }
         }
     }
 
@@ -848,10 +899,29 @@ impl Args {
         if matches.is_empty() {
             return;
         }
+        let additional_columns = if self.more_columns.is_empty() {
+            String::new()
+        } else {
+            let TextRecord::Sam { record_buf, .. } = text else {
+                panic!("`--more-columns` can only format BAM records.");
+            };
+            let fields = crate::sam::sam_fields(
+                bam_header.expect("BAM header metadata is unavailable for this output record"),
+                record_buf,
+            );
+            format!(
+                "\t{}",
+                self.more_columns
+                    .iter()
+                    .map(|column| format!("{}={}", column.name(), column.value(&fields)))
+                    .collect::<Vec<_>>()
+                    .join("\t")
+            )
+        };
         eprintln!(
             "{}",
             format!(
-                "{}>{}",
+                "{}>{}{additional_columns}",
                 path.display().to_string().cyan().bold(),
                 text.id().bold()
             )
@@ -909,7 +979,7 @@ impl Args {
                 record_buf,
             );
             for column in &self.more_columns {
-                write!(writer, "\t{}", fields[column.index()]).unwrap();
+                write!(writer, "\t{}", column.value(&fields)).unwrap();
             }
         }
         writeln!(writer).unwrap();

@@ -14,6 +14,7 @@ use sassy::{
 use crate::{grep::Alphabet, input_iterator::PatternRecord};
 
 #[derive(Clone, Copy)]
+/// A SAM field that can be appended to Sassy TSV output.
 pub(crate) enum SamColumn {
     Qname,
     Flag,
@@ -26,10 +27,12 @@ pub(crate) enum SamColumn {
     Tlen,
     Seq,
     Qual,
+    /// All optional SAM alignment fields in their standard `TAG:TYPE:VALUE` representation.
+    Data,
 }
 
 impl SamColumn {
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 12] = [
         Self::Qname,
         Self::Flag,
         Self::Rname,
@@ -41,8 +44,10 @@ impl SamColumn {
         Self::Tlen,
         Self::Seq,
         Self::Qual,
+        Self::Data,
     ];
 
+    /// Parses the `--more-columns` value, accepting `all` or mandatory SAM field names.
     pub fn parse_list(value: Option<&str>) -> Vec<Self> {
         let Some(value) = value else {
             return Vec::new();
@@ -57,7 +62,7 @@ impl SamColumn {
         }
         assert!(
             !fields.iter().any(|field| field.eq_ignore_ascii_case("all")),
-            "`all` cannot be combined with individual SAM fields"
+            "`--more-columns=all` cannot be combined with individual SAM fields"
         );
         fields
             .into_iter()
@@ -73,11 +78,15 @@ impl SamColumn {
                 "TLEN" => Self::Tlen,
                 "SEQ" => Self::Seq,
                 "QUAL" => Self::Qual,
-                _ => panic!("Invalid --more-columns field `{field}`"),
+                "DATA" => Self::Data,
+                _ => panic!(
+                    "Invalid `--more-columns` field `{field}`. Use `all` or one of QNAME, FLAG, RNAME, POS, MAPQ, CIGAR, RNEXT, PNEXT, TLEN, SEQ, QUAL, DATA."
+                ),
             })
             .collect()
     }
 
+    /// Returns the SAM specification field name.
     pub fn name(self) -> &'static str {
         match self {
             Self::Qname => "QNAME",
@@ -91,26 +100,35 @@ impl SamColumn {
             Self::Tlen => "TLEN",
             Self::Seq => "SEQ",
             Self::Qual => "QUAL",
+            Self::Data => "DATA",
         }
     }
 
-    pub fn index(self) -> usize {
+    /// Returns this column's standard SAM representation from a serialized alignment line.
+    ///
+    /// `DATA` joins all optional fields with tabs, matching the SAM alignment-line format
+    /// produced by Noodles' writer.
+    pub fn value(self, fields: &[String]) -> String {
         match self {
-            Self::Qname => 0,
-            Self::Flag => 1,
-            Self::Rname => 2,
-            Self::Pos => 3,
-            Self::Mapq => 4,
-            Self::Cigar => 5,
-            Self::Rnext => 6,
-            Self::Pnext => 7,
-            Self::Tlen => 8,
-            Self::Seq => 9,
-            Self::Qual => 10,
+            Self::Qname => fields[0].clone(),
+            Self::Flag => fields[1].clone(),
+            Self::Rname => fields[2].clone(),
+            Self::Pos => fields[3].clone(),
+            Self::Mapq => fields[4].clone(),
+            Self::Cigar => fields[5].clone(),
+            Self::Rnext => fields[6].clone(),
+            Self::Pnext => fields[7].clone(),
+            Self::Tlen => fields[8].clone(),
+            Self::Seq => fields[9].clone(),
+            Self::Qual => fields[10].clone(),
+            Self::Data => fields[11..].join("\t"),
         }
     }
 }
 
+/// Formats a BAM record as SAM and returns its mandatory fields plus any auxiliary fields.
+///
+/// Noodles uses `header` to resolve BAM reference IDs to the textual `RNAME` and `RNEXT` fields.
 pub fn sam_fields(header: &sam::Header, record_buf: &RecordBuf) -> Vec<String> {
     let mut writer = sam::io::Writer::new(Vec::new());
     writer
@@ -125,6 +143,12 @@ pub fn sam_fields(header: &sam::Header, record_buf: &RecordBuf) -> Vec<String> {
     fields
 }
 
+/// Adds Sassy's local-use BAM tags to a matching record.
+///
+/// `sN` stores the match count. `sC`, `sS`, `sB`, and `sE` are parallel numeric arrays for
+/// cost, strand (`0` forward, `1` reverse-complement), zero-based start, and exclusive end.
+/// `sP`, `sR`, and `sG` are percent-encoded comma-separated lists of pattern IDs, matched
+/// regions, and Sassy CIGARs in the same match order.
 pub fn annotate_bam_record(
     record: &mut RecordBuf,
     matches: &[(&PatternRecord, Match)],
@@ -216,6 +240,7 @@ pub fn annotate_bam_record(
     );
 }
 
+/// Formats a matching region in Sassy's default or SAM-compatible orientation.
 pub fn format_match_region(
     alphabet: Alphabet,
     sam_output: bool,
@@ -232,6 +257,7 @@ pub fn format_match_region(
     }
 }
 
+/// Formats a Sassy CIGAR, reversing reverse-complement matches for SAM-compatible output.
 pub fn format_cigar(sam_output: bool, cigar: &Cigar, strand: Strand) -> String {
     if strand == Strand::Rc && sam_output {
         let mut cigar = cigar.clone();
@@ -307,13 +333,13 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 "QNAME", "FLAG", "RNAME", "POS", "MAPQ", "CIGAR", "RNEXT", "PNEXT", "TLEN", "SEQ",
-                "QUAL",
+                "QUAL", "DATA",
             ]
         );
     }
 
     #[test]
-    #[should_panic(expected = "Invalid --more-columns field")]
+    #[should_panic(expected = "Invalid `--more-columns` field")]
     fn sam_column_rejects_unknown_field() {
         SamColumn::parse_list(Some("QNAME,NM"));
     }
@@ -321,12 +347,14 @@ mod tests {
     #[test]
     fn sam_fields_formats_mandatory_columns() {
         let (header, record) = record();
+        let fields = sam_fields(&header, &record);
         assert_eq!(
-            sam_fields(&header, &record),
+            fields,
             [
                 "r1", "0", "chr20", "1", "60", "4M", "*", "0", "0", "ACGT", "!!!!", "NM:i:0",
             ]
         );
+        assert_eq!(SamColumn::Data.value(&fields), "NM:i:0");
     }
 
     #[test]
