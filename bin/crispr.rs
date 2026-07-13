@@ -1,4 +1,4 @@
-use crate::input_iterator::{InputIterator, PatternRecord};
+use crate::input_iterator::{InputIterator, PatternRecord, is_bam_path};
 use sassy::{
     RcSearchAble, Searcher, Strand,
     profiles::{Iupac, Profile},
@@ -143,6 +143,10 @@ pub fn matching_seq<P: Profile>(seq1: &[u8], seq2: &[u8]) -> bool {
 }
 
 pub fn crispr(args: &CrisprArgs) {
+    assert!(
+        !is_bam_path(&args.path),
+        "BAM input is not supported by crispr"
+    );
     let guide_sequences = read_guide_sequences(&args.guide);
     println!("[GUIDES] Found {} guides", guide_sequences.len());
 
@@ -211,8 +215,8 @@ pub fn crispr(args: &CrisprArgs) {
                             let guide_string = String::from_utf8_lossy(guide_sequence);
                             let id_text = &text;
 
-                            let id = &id_text.id;
-                            let text = &id_text.seq;
+                            let id = id_text.id();
+                            let text = id_text.seq();
 
                             let matches = if !args.allow_pam_edits {
                                 searcher.search_with_fn(guide_sequence, text, args.k, true, filter_fn)

@@ -1,13 +1,17 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     fs::File,
     io::{BufRead, Read, Write},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 use colored::Colorize;
 use needletail::parse_fastx_file;
+use noodles::{
+    bam, bgzf,
+    sam::{self, alignment::io::Write as AlignmentWrite},
+};
 use pa_types::Cigar;
 use sassy::{
     Match, Searcher, Strand,
@@ -15,7 +19,7 @@ use sassy::{
     profiles::{Ascii, Dna, Iupac, Profile},
 };
 
-use crate::input_iterator::{InputIterator, PatternRecord, TextBatch, TextRecord};
+use crate::input_iterator::{InputIterator, PatternRecord, TextBatch, TextRecord, is_bam_path};
 
 // TODO: Support ASCII alphabet.
 #[derive(clap::ValueEnum, Default, Clone, Copy, PartialEq)]
@@ -107,7 +111,7 @@ pub struct BaseArgs {
     sam: bool,
 
     // Positional
-    /// Input Fastx files. May be gzipped.
+    /// Input FASTX or BAM files. FASTX may be gzipped; BAM is selected by a `.bam` extension.
     paths: Vec<PathBuf>,
 }
 
@@ -127,6 +131,10 @@ pub struct GrepArgs {
     /// Filtered output file. Empty or "-" for stdout.
     #[arg(long, default_missing_value = "-", num_args(0..=1))]
     filter: Option<PathBuf>,
+
+    /// Extra mandatory SAM fields to append to TSV output for BAM input.
+    #[arg(long, value_name = "FIELDS")]
+    more_columns: Option<String>,
 }
 
 /// Thin mirror of `GrepArgs` for lightweight `agrep` subcommand.
@@ -154,6 +162,10 @@ pub struct SearchArgs {
     /// Filtered output file. Empty or "-" for stdout.
     #[arg(long, default_missing_value = "-", num_args(0..=1))]
     filter: Option<PathBuf>,
+
+    /// Extra mandatory SAM fields to append to TSV output for BAM input.
+    #[arg(long, value_name = "FIELDS")]
+    more_columns: Option<String>,
 }
 
 #[derive(clap::Parser, Clone)]
@@ -164,6 +176,10 @@ pub struct FilterArgs {
     /// TSV output file to write all matches. Empty or "-" for stdout.
     #[arg(long, default_missing_value = "-", num_args(0..=1))]
     search: Option<PathBuf>,
+
+    /// Add Sassy match data as local-use BAM tags when filtering BAM input.
+    #[arg(long)]
+    annotate: bool,
 }
 
 struct Args {
@@ -174,6 +190,114 @@ struct Args {
     grep: bool,
     search: Option<PathBuf>,
     filter: Option<PathBuf>,
+    more_columns: Vec<SamColumn>,
+    annotate: bool,
+}
+
+enum FilterWriter {
+    Fastx(Box<dyn Write + Send>),
+    Bam {
+        writer: bam::io::Writer<bgzf::io::Writer<Box<dyn Write + Send>>>,
+        header: std::sync::Arc<sam::Header>,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum SamColumn {
+    Qname,
+    Flag,
+    Rname,
+    Pos,
+    Mapq,
+    Cigar,
+    Rnext,
+    Pnext,
+    Tlen,
+    Seq,
+    Qual,
+}
+
+impl SamColumn {
+    const ALL: [Self; 11] = [
+        Self::Qname,
+        Self::Flag,
+        Self::Rname,
+        Self::Pos,
+        Self::Mapq,
+        Self::Cigar,
+        Self::Rnext,
+        Self::Pnext,
+        Self::Tlen,
+        Self::Seq,
+        Self::Qual,
+    ];
+
+    fn parse_list(value: Option<&str>) -> Vec<Self> {
+        let Some(value) = value else {
+            return Vec::new();
+        };
+        let fields: Vec<_> = value.split(',').map(str::trim).collect();
+        assert!(
+            !fields.is_empty() && fields.iter().all(|field| !field.is_empty()),
+            "--more-columns must be a non-empty comma-separated list"
+        );
+        if fields.len() == 1 && fields[0].eq_ignore_ascii_case("all") {
+            return Self::ALL.to_vec();
+        }
+        assert!(
+            !fields.iter().any(|field| field.eq_ignore_ascii_case("all")),
+            "`all` cannot be combined with individual SAM fields"
+        );
+        fields
+            .into_iter()
+            .map(|field| match field.to_ascii_uppercase().as_str() {
+                "QNAME" => Self::Qname,
+                "FLAG" => Self::Flag,
+                "RNAME" => Self::Rname,
+                "POS" => Self::Pos,
+                "MAPQ" => Self::Mapq,
+                "CIGAR" => Self::Cigar,
+                "RNEXT" => Self::Rnext,
+                "PNEXT" => Self::Pnext,
+                "TLEN" => Self::Tlen,
+                "SEQ" => Self::Seq,
+                "QUAL" => Self::Qual,
+                _ => panic!("Invalid --more-columns field `{field}`"),
+            })
+            .collect()
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Qname => "QNAME",
+            Self::Flag => "FLAG",
+            Self::Rname => "RNAME",
+            Self::Pos => "POS",
+            Self::Mapq => "MAPQ",
+            Self::Cigar => "CIGAR",
+            Self::Rnext => "RNEXT",
+            Self::Pnext => "PNEXT",
+            Self::Tlen => "TLEN",
+            Self::Seq => "SEQ",
+            Self::Qual => "QUAL",
+        }
+    }
+
+    fn index(self) -> usize {
+        match self {
+            Self::Qname => 0,
+            Self::Flag => 1,
+            Self::Rname => 2,
+            Self::Pos => 3,
+            Self::Mapq => 4,
+            Self::Cigar => 5,
+            Self::Rnext => 6,
+            Self::Pnext => 7,
+            Self::Tlen => 8,
+            Self::Seq => 9,
+            Self::Qual => 10,
+        }
+    }
 }
 
 impl GrepArgs {
@@ -183,6 +307,7 @@ impl GrepArgs {
             context,
             search,
             filter,
+            more_columns,
         } = self;
         Args {
             base,
@@ -190,6 +315,8 @@ impl GrepArgs {
             grep: true,
             search,
             filter,
+            more_columns: SamColumn::parse_list(more_columns.as_deref()),
+            annotate: false,
         }
         .run()
     }
@@ -329,13 +456,19 @@ fn print_statistics(hist: &[usize]) {
 
 impl SearchArgs {
     pub fn run(self) {
-        let SearchArgs { base, filter } = self;
+        let SearchArgs {
+            base,
+            filter,
+            more_columns,
+        } = self;
         Args {
             base,
             context: 0,
             grep: false,
             search: Some(PathBuf::from("")),
             filter,
+            more_columns: SamColumn::parse_list(more_columns.as_deref()),
+            annotate: false,
         }
         .run()
     }
@@ -343,21 +476,38 @@ impl SearchArgs {
 
 impl FilterArgs {
     pub fn run(self) {
-        let FilterArgs { base, search } = self;
+        let FilterArgs {
+            base,
+            search,
+            annotate,
+        } = self;
         Args {
             base,
             context: 0,
             grep: false,
             search,
             filter: Some(PathBuf::from("")),
+            more_columns: Vec::new(),
+            annotate,
         }
         .run()
     }
 }
 
+fn read_bam_headers(paths: &[PathBuf]) -> HashMap<PathBuf, Arc<sam::Header>> {
+    paths
+        .iter()
+        .filter(|path| is_bam_path(path))
+        .map(|path| {
+            let mut reader = bam::io::Reader::new(File::open(path).expect("open BAM input"));
+            let header = Arc::new(reader.read_header().expect("read BAM header"));
+            (path.clone(), header)
+        })
+        .collect()
+}
+
 fn run_batch_v2<'a, P: Profile>(
     searcher: &mut Searcher<P>,
-    //fixme: simpler return?
     results: &mut Vec<(
         &'a Path,
         (TextBatch, usize),
@@ -367,11 +517,12 @@ fn run_batch_v2<'a, P: Profile>(
     patterns: &'a [PatternRecord],
     text_batch: &TextBatch,
     k: usize,
+    include_empty: bool,
 ) {
     let patterns_vec: Vec<Vec<u8>> = patterns.iter().map(|p| p.seq.clone()).collect();
     let encoded = searcher.encode_patterns(&patterns_vec);
     for (i, text) in text_batch.iter().enumerate() {
-        let record_matches = searcher.search_encoded_patterns(&encoded, &text.seq.text, k);
+        let record_matches = searcher.search_encoded_patterns(&encoded, &text.seq().text, k);
         let batch_matches: Vec<_> = record_matches
             .iter()
             .cloned()
@@ -380,7 +531,7 @@ fn run_batch_v2<'a, P: Profile>(
                 (pattern, m)
             })
             .collect();
-        if batch_matches.is_empty() {
+        if batch_matches.is_empty() && !include_empty {
             continue;
         }
         results.push((path, (text_batch.clone(), i), batch_matches));
@@ -401,6 +552,34 @@ impl Args {
         if self.base.paths.is_empty() {
             self.base.paths = vec![PathBuf::from("")];
         }
+        let bam_paths: Vec<_> = self
+            .base
+            .paths
+            .iter()
+            .filter(|path| is_bam_path(path))
+            .collect();
+        if !bam_paths.is_empty() && self.base.sam {
+            panic!("--sam is not supported with BAM input");
+        }
+        if !self.more_columns.is_empty() && bam_paths.is_empty() {
+            panic!("--more-columns requires BAM input");
+        }
+        if !self.more_columns.is_empty() && bam_paths.len() != self.base.paths.len() {
+            panic!("--more-columns cannot be used with mixed BAM and FASTX input");
+        }
+        if self.filter.is_some() && !bam_paths.is_empty() {
+            assert_eq!(
+                bam_paths.len(),
+                1,
+                "BAM filtering accepts exactly one BAM input"
+            );
+            assert_eq!(
+                bam_paths.len(),
+                self.base.paths.len(),
+                "BAM and FASTX inputs cannot be mixed when filtering"
+            );
+        }
+        let bam_headers = read_bam_headers(&self.base.paths);
         let args = &self;
 
         let patterns = args.get_patterns();
@@ -442,7 +621,20 @@ impl Args {
                 filter_to_stdout = true;
                 Box::new(std::io::stdout()) as Box<dyn std::io::Write + Send>
             };
-            Mutex::new(writer)
+            if let Some(path) = bam_paths.first() {
+                let header = bam_headers
+                    .get(*path)
+                    .expect("BAM header is missing")
+                    .clone();
+                let mut bam_writer = bam::io::Writer::new(writer);
+                bam_writer.write_header(&header).expect("write BAM header");
+                Mutex::new(FilterWriter::Bam {
+                    writer: bam_writer,
+                    header,
+                })
+            } else {
+                Mutex::new(FilterWriter::Fastx(writer))
+            }
         });
 
         // Match writer
@@ -464,10 +656,18 @@ impl Args {
                 );
             }
 
-            let header = format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-                "pat_id", "text_id", "cost", "strand", "start", "end", "match_region", "cigar"
-            );
+            let mut columns = vec![
+                "pat_id",
+                "text_id",
+                "cost",
+                "strand",
+                "start",
+                "end",
+                "match_region",
+                "cigar",
+            ];
+            columns.extend(args.more_columns.iter().map(|column| column.name()));
+            let header = format!("{}\n", columns.join("\t"));
             write!(writer, "{header}").unwrap();
 
             Mutex::new(writer)
@@ -477,6 +677,7 @@ impl Args {
             for _ in 0..num_threads {
                 let output = &output;
                 let global_histogram = &global_histogram;
+                let bam_headers = &bam_headers;
                 let filter_writer = filter_writer.as_ref();
                 let match_writer = match_writer.as_ref();
                 s.spawn(move || {
@@ -505,12 +706,24 @@ impl Args {
 
                         if args.base.v2 {
                             match &mut searcher {
-                                SearcherType::Dna(s) => {
-                                    run_batch_v2(s, &mut results, path, batch.1, &batch.2, k)
-                                }
-                                SearcherType::Iupac(s) => {
-                                    run_batch_v2(s, &mut results, path, batch.1, &batch.2, k)
-                                }
+                                SearcherType::Dna(s) => run_batch_v2(
+                                    s,
+                                    &mut results,
+                                    path,
+                                    batch.1,
+                                    &batch.2,
+                                    k,
+                                    args.filter.is_some() && args.base.invert,
+                                ),
+                                SearcherType::Iupac(s) => run_batch_v2(
+                                    s,
+                                    &mut results,
+                                    path,
+                                    batch.1,
+                                    &batch.2,
+                                    k,
+                                    args.filter.is_some() && args.base.invert,
+                                ),
                             }
                         } else {
                             for (i, text) in batch.2.iter().enumerate() {
@@ -518,17 +731,19 @@ impl Args {
                                 for pattern in batch.1 {
                                     let record_matches = match &mut searcher {
                                         SearcherType::Dna(s) => {
-                                            s.search(&pattern.seq, &text.seq, k)
+                                            s.search(&pattern.seq, text.seq(), k)
                                         }
                                         SearcherType::Iupac(s) => {
-                                            s.search(&pattern.seq, &text.seq, k)
+                                            s.search(&pattern.seq, text.seq(), k)
                                         }
                                     };
                                     batch_matches
                                         .extend(record_matches.into_iter().map(|m| (pattern, m)));
                                 }
 
-                                if batch_matches.is_empty() {
+                                if batch_matches.is_empty()
+                                    && !(args.filter.is_some() && args.base.invert)
+                                {
                                     continue;
                                 }
                                 results.push((path, (batch.2.clone(), i), batch_matches));
@@ -563,6 +778,7 @@ impl Args {
                             for (path, text, matches) in front_results {
                                 args.output(
                                     path,
+                                    bam_headers.get(path).map(Arc::as_ref),
                                     &text.0[text.1],
                                     matches,
                                     &mut filter_writer,
@@ -581,6 +797,13 @@ impl Args {
             }
         });
 
+        if let Some(filter_writer) = filter_writer {
+            let mut filter_writer = filter_writer.into_inner().unwrap();
+            if let FilterWriter::Bam { writer, .. } = &mut filter_writer {
+                writer.try_finish().expect("finish BAM output");
+            }
+        }
+
         print_statistics(&global_histogram.into_inner().unwrap());
         assert!(output.into_inner().unwrap().1.is_empty());
     }
@@ -589,9 +812,10 @@ impl Args {
     fn output(
         &self,
         path: &Path,
+        bam_header: Option<&sam::Header>,
         text: &TextRecord,
         mut matches: Vec<(&PatternRecord, Match)>,
-        filter_writer: &mut Option<std::sync::MutexGuard<'_, Box<dyn Write + Send>>>,
+        filter_writer: &mut Option<std::sync::MutexGuard<'_, FilterWriter>>,
         match_writer: &mut Option<std::sync::MutexGuard<'_, Box<dyn Write + Send>>>,
     ) {
         matches.sort_by_key(|m| m.1.text_start);
@@ -599,22 +823,32 @@ impl Args {
         if self.filter.is_some() {
             let writer = &mut **filter_writer.as_mut().unwrap();
             if !self.base.invert && !matches.is_empty() {
-                self.print_matching_record(text, writer);
+                self.print_matching_record(text, &matches, writer);
             }
             if self.base.invert && matches.is_empty() {
-                self.print_matching_record(text, writer);
+                self.print_matching_record(text, &matches, writer);
             }
         }
 
         match (self.grep, self.search.is_some()) {
             // 2. If grep, interleave with search output if needed.
-            (true, _) => {
-                self.print_matches_for_record(path, text, &matches, match_writer.as_deref_mut())
-            }
+            (true, _) => self.print_matches_for_record(
+                path,
+                bam_header,
+                text,
+                &matches,
+                match_writer.as_deref_mut(),
+            ),
             // 3. Just write the search output.
             (false, true) => {
                 for (pattern, m) in &matches {
-                    self.print_match_tsv(pattern, text, m, match_writer.as_deref_mut().unwrap());
+                    self.print_match_tsv(
+                        pattern,
+                        bam_header,
+                        text,
+                        m,
+                        match_writer.as_deref_mut().unwrap(),
+                    );
                 }
             }
             (false, false) => {}
@@ -660,21 +894,45 @@ impl Args {
         panic!("No --pattern, --pattern-file, or --pattern-fasta provided!");
     }
 
-    fn print_matching_record(&self, text: &TextRecord, writer: &mut (dyn std::io::Write + Send)) {
-        if !text.quality.is_empty() {
-            writeln!(writer, "@{}", text.id).unwrap();
-            writeln!(writer, "{}", String::from_utf8_lossy(&text.seq.text)).unwrap();
-            writeln!(writer, "+").unwrap();
-            writeln!(writer, "{}", String::from_utf8_lossy(&text.quality)).unwrap();
-        } else {
-            writeln!(writer, ">{}", text.id).unwrap();
-            writeln!(writer, "{}", String::from_utf8_lossy(&text.seq.text)).unwrap();
+    fn print_matching_record(
+        &self,
+        text: &TextRecord,
+        matches: &[(&PatternRecord, Match)],
+        writer: &mut FilterWriter,
+    ) {
+        match writer {
+            FilterWriter::Fastx(writer) => match text {
+                TextRecord::Fastx { id, seq, quality } if !quality.is_empty() => {
+                    writeln!(writer, "@{id}").unwrap();
+                    writeln!(writer, "{}", String::from_utf8_lossy(&seq.text)).unwrap();
+                    writeln!(writer, "+").unwrap();
+                    writeln!(writer, "{}", String::from_utf8_lossy(quality)).unwrap();
+                }
+                TextRecord::Fastx { id, seq, .. } => {
+                    writeln!(writer, ">{id}").unwrap();
+                    writeln!(writer, "{}", String::from_utf8_lossy(&seq.text)).unwrap();
+                }
+                TextRecord::Sam { .. } => panic!("FASTX output requires FASTX input"),
+            },
+            FilterWriter::Bam { writer, header } => {
+                let TextRecord::Sam { record_buf, .. } = text else {
+                    panic!("BAM output requires BAM input");
+                };
+                let mut record = record_buf.clone();
+                if self.annotate && !matches.is_empty() {
+                    self.annotate_bam_record(&mut record, matches);
+                }
+                writer
+                    .write_alignment_record(header, &record)
+                    .expect("write BAM record");
+            }
         }
     }
 
     fn print_matches_for_record(
         &self,
         path: &Path,
+        bam_header: Option<&sam::Header>,
         text: &TextRecord,
         matches: &Vec<(&PatternRecord, Match)>,
         mut match_writer: Option<&mut impl std::io::Write>,
@@ -687,18 +945,18 @@ impl Args {
             format!(
                 "{}>{}",
                 path.display().to_string().cyan().bold(),
-                text.id.bold()
+                text.id().bold()
             )
             .bold()
         );
         for (pattern, m) in matches {
             if let Some(match_writer) = match_writer.as_mut() {
-                self.print_match_tsv(pattern, text, m, match_writer);
+                self.print_match_tsv(pattern, bam_header, text, m, match_writer);
             }
             let s = m.pretty_print(
                 Some(&pattern.id),
                 &pattern.seq,
-                &text.seq.text,
+                &text.seq().text,
                 PrettyPrintDirection::Text,
                 self.context,
                 PrettyPrintStyle::Full,
@@ -710,6 +968,7 @@ impl Args {
     fn print_match_tsv(
         &self,
         pattern: &PatternRecord,
+        bam_header: Option<&sam::Header>,
         text: &TextRecord,
         m: &Match,
         writer: &mut impl std::io::Write,
@@ -717,22 +976,136 @@ impl Args {
         let cost = m.cost;
         let start = m.text_start;
         let end = m.text_end;
-        let slice = &text.seq.text[start..end];
+        let slice = &text.seq().text[start..end];
         let match_region = self.format_match_region(slice, m.strand);
         let match_region = String::from_utf8_lossy(&match_region);
 
         let pat_id = &pattern.id;
-        let text_id = &text.id;
+        let text_id = text.id();
         let cigar = self.format_cigar(&m.cigar, m.strand);
         let strand = match m.strand {
             Strand::Fwd => "+",
             Strand::Rc => "-",
         };
-        writeln!(
+        write!(
             writer,
             "{pat_id}\t{text_id}\t{cost}\t{strand}\t{start}\t{end}\t{match_region}\t{cigar}"
         )
         .unwrap();
+        if !self.more_columns.is_empty() {
+            let fields = self.sam_fields(bam_header, text);
+            for column in &self.more_columns {
+                write!(writer, "\t{}", fields[column.index()]).unwrap();
+            }
+        }
+        writeln!(writer).unwrap();
+    }
+
+    fn sam_fields(&self, bam_header: Option<&sam::Header>, text: &TextRecord) -> Vec<String> {
+        let TextRecord::Sam { record_buf, .. } = text else {
+            panic!("--more-columns requires BAM input");
+        };
+        let header = bam_header.expect("BAM batch is missing its SAM header");
+        let mut writer = sam::io::Writer::new(Vec::new());
+        writer
+            .write_alignment_record(header, record_buf)
+            .expect("format SAM record");
+        let line = String::from_utf8(writer.into_inner()).expect("SAM record is UTF-8");
+        let fields: Vec<_> = line.trim_end().split('\t').map(str::to_owned).collect();
+        assert!(
+            fields.len() >= 11,
+            "SAM writer returned fewer than 11 mandatory fields"
+        );
+        fields
+    }
+
+    fn annotate_bam_record(
+        &self,
+        record: &mut noodles::sam::alignment::RecordBuf,
+        matches: &[(&PatternRecord, Match)],
+    ) {
+        use noodles::sam::alignment::{record::data::field::Tag, record_buf::data::field::Value};
+
+        let match_regions = matches
+            .iter()
+            .map(|(_, m)| {
+                percent_encode(&self.format_match_region(
+                    &record.sequence().as_ref()[m.text_start..m.text_end],
+                    m.strand,
+                ))
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let data = record.data_mut();
+        for tag in [b"sN", b"sC", b"sS", b"sB", b"sE", b"sP", b"sR", b"sG"] {
+            data.remove(&Tag::from(*tag));
+        }
+
+        let to_u32 = |value: usize, name: &str| {
+            u32::try_from(value)
+                .unwrap_or_else(|_| panic!("{name} exceeds BAM auxiliary tag range"))
+        };
+        data.insert(
+            Tag::from(*b"sN"),
+            Value::from(to_u32(matches.len(), "match count")),
+        );
+        data.insert(
+            Tag::from(*b"sC"),
+            Value::from(
+                matches
+                    .iter()
+                    .map(|(_, m)| u32::try_from(m.cost).expect("match cost must be non-negative"))
+                    .collect::<Vec<_>>(),
+            ),
+        );
+        data.insert(
+            Tag::from(*b"sS"),
+            Value::from(
+                matches
+                    .iter()
+                    .map(|(_, m)| if m.strand == Strand::Fwd { 0u8 } else { 1u8 })
+                    .collect::<Vec<_>>(),
+            ),
+        );
+        data.insert(
+            Tag::from(*b"sB"),
+            Value::from(
+                matches
+                    .iter()
+                    .map(|(_, m)| to_u32(m.text_start, "match start"))
+                    .collect::<Vec<_>>(),
+            ),
+        );
+        data.insert(
+            Tag::from(*b"sE"),
+            Value::from(
+                matches
+                    .iter()
+                    .map(|(_, m)| to_u32(m.text_end, "match end"))
+                    .collect::<Vec<_>>(),
+            ),
+        );
+        data.insert(
+            Tag::from(*b"sP"),
+            Value::from(
+                matches
+                    .iter()
+                    .map(|(pattern, _)| percent_encode(&pattern.id))
+                    .collect::<Vec<_>>()
+                    .join(","),
+            ),
+        );
+        data.insert(Tag::from(*b"sR"), Value::from(match_regions));
+        data.insert(
+            Tag::from(*b"sG"),
+            Value::from(
+                matches
+                    .iter()
+                    .map(|(_, m)| percent_encode(self.format_cigar(&m.cigar, m.strand).as_bytes()))
+                    .collect::<Vec<_>>()
+                    .join(","),
+            ),
+        );
     }
 
     fn format_match_region(&self, slice: &[u8], strand: Strand) -> Vec<u8> {
@@ -755,6 +1128,18 @@ impl Args {
             cigar.to_string()
         }
     }
+}
+
+fn percent_encode(value: impl AsRef<[u8]>) -> String {
+    value
+        .as_ref()
+        .iter()
+        .flat_map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => vec![*byte],
+            byte => format!("%{byte:02X}").into_bytes(),
+        })
+        .map(char::from)
+        .collect()
 }
 
 #[cfg(test)]
