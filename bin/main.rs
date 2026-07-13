@@ -1,6 +1,7 @@
 mod crispr;
 mod grep;
 mod input_iterator;
+mod sam;
 
 use clap::Parser;
 use crispr::{CrisprArgs, crispr};

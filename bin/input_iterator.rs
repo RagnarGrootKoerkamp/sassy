@@ -335,7 +335,7 @@ mod tests {
                 .1
                 .2
                 .iter()
-                .map(|item| item.seq.text.clone())
+                .map(|item| item.seq().text.clone())
                 .collect::<std::collections::HashSet<_>>();
             let text_len = unique_texts.iter().map(|text| text.len()).sum::<usize>();
             let n_patterns = batch

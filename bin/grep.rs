@@ -20,10 +20,11 @@ use sassy::{
 };
 
 use crate::input_iterator::{InputIterator, PatternRecord, TextBatch, TextRecord, is_bam_path};
+use crate::sam::SamColumn;
 
 // TODO: Support ASCII alphabet.
 #[derive(clap::ValueEnum, Default, Clone, Copy, PartialEq)]
-enum Alphabet {
+pub(crate) enum Alphabet {
     Dna,
     #[default]
     Iupac,
@@ -200,104 +201,6 @@ enum FilterWriter {
         writer: bam::io::Writer<bgzf::io::Writer<Box<dyn Write + Send>>>,
         header: std::sync::Arc<sam::Header>,
     },
-}
-
-#[derive(Clone, Copy)]
-enum SamColumn {
-    Qname,
-    Flag,
-    Rname,
-    Pos,
-    Mapq,
-    Cigar,
-    Rnext,
-    Pnext,
-    Tlen,
-    Seq,
-    Qual,
-}
-
-impl SamColumn {
-    const ALL: [Self; 11] = [
-        Self::Qname,
-        Self::Flag,
-        Self::Rname,
-        Self::Pos,
-        Self::Mapq,
-        Self::Cigar,
-        Self::Rnext,
-        Self::Pnext,
-        Self::Tlen,
-        Self::Seq,
-        Self::Qual,
-    ];
-
-    fn parse_list(value: Option<&str>) -> Vec<Self> {
-        let Some(value) = value else {
-            return Vec::new();
-        };
-        let fields: Vec<_> = value.split(',').map(str::trim).collect();
-        assert!(
-            !fields.is_empty() && fields.iter().all(|field| !field.is_empty()),
-            "--more-columns must be a non-empty comma-separated list"
-        );
-        if fields.len() == 1 && fields[0].eq_ignore_ascii_case("all") {
-            return Self::ALL.to_vec();
-        }
-        assert!(
-            !fields.iter().any(|field| field.eq_ignore_ascii_case("all")),
-            "`all` cannot be combined with individual SAM fields"
-        );
-        fields
-            .into_iter()
-            .map(|field| match field.to_ascii_uppercase().as_str() {
-                "QNAME" => Self::Qname,
-                "FLAG" => Self::Flag,
-                "RNAME" => Self::Rname,
-                "POS" => Self::Pos,
-                "MAPQ" => Self::Mapq,
-                "CIGAR" => Self::Cigar,
-                "RNEXT" => Self::Rnext,
-                "PNEXT" => Self::Pnext,
-                "TLEN" => Self::Tlen,
-                "SEQ" => Self::Seq,
-                "QUAL" => Self::Qual,
-                _ => panic!("Invalid --more-columns field `{field}`"),
-            })
-            .collect()
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::Qname => "QNAME",
-            Self::Flag => "FLAG",
-            Self::Rname => "RNAME",
-            Self::Pos => "POS",
-            Self::Mapq => "MAPQ",
-            Self::Cigar => "CIGAR",
-            Self::Rnext => "RNEXT",
-            Self::Pnext => "PNEXT",
-            Self::Tlen => "TLEN",
-            Self::Seq => "SEQ",
-            Self::Qual => "QUAL",
-        }
-    }
-
-    fn index(self) -> usize {
-        match self {
-            Self::Qname => 0,
-            Self::Flag => 1,
-            Self::Rname => 2,
-            Self::Pos => 3,
-            Self::Mapq => 4,
-            Self::Cigar => 5,
-            Self::Rnext => 6,
-            Self::Pnext => 7,
-            Self::Tlen => 8,
-            Self::Seq => 9,
-            Self::Qual => 10,
-        }
-    }
 }
 
 impl GrepArgs {
@@ -920,7 +823,12 @@ impl Args {
                 };
                 let mut record = record_buf.clone();
                 if self.annotate && !matches.is_empty() {
-                    self.annotate_bam_record(&mut record, matches);
+                    crate::sam::annotate_bam_record(
+                        &mut record,
+                        matches,
+                        self.base.alphabet,
+                        self.base.sam,
+                    );
                 }
                 writer
                     .write_alignment_record(header, &record)
@@ -993,7 +901,13 @@ impl Args {
         )
         .unwrap();
         if !self.more_columns.is_empty() {
-            let fields = self.sam_fields(bam_header, text);
+            let TextRecord::Sam { record_buf, .. } = text else {
+                panic!("--more-columns requires BAM input");
+            };
+            let fields = crate::sam::sam_fields(
+                bam_header.expect("BAM batch is missing its SAM header"),
+                record_buf,
+            );
             for column in &self.more_columns {
                 write!(writer, "\t{}", fields[column.index()]).unwrap();
             }
@@ -1001,145 +915,13 @@ impl Args {
         writeln!(writer).unwrap();
     }
 
-    fn sam_fields(&self, bam_header: Option<&sam::Header>, text: &TextRecord) -> Vec<String> {
-        let TextRecord::Sam { record_buf, .. } = text else {
-            panic!("--more-columns requires BAM input");
-        };
-        let header = bam_header.expect("BAM batch is missing its SAM header");
-        let mut writer = sam::io::Writer::new(Vec::new());
-        writer
-            .write_alignment_record(header, record_buf)
-            .expect("format SAM record");
-        let line = String::from_utf8(writer.into_inner()).expect("SAM record is UTF-8");
-        let fields: Vec<_> = line.trim_end().split('\t').map(str::to_owned).collect();
-        assert!(
-            fields.len() >= 11,
-            "SAM writer returned fewer than 11 mandatory fields"
-        );
-        fields
-    }
-
-    fn annotate_bam_record(
-        &self,
-        record: &mut noodles::sam::alignment::RecordBuf,
-        matches: &[(&PatternRecord, Match)],
-    ) {
-        use noodles::sam::alignment::{record::data::field::Tag, record_buf::data::field::Value};
-
-        let match_regions = matches
-            .iter()
-            .map(|(_, m)| {
-                percent_encode(&self.format_match_region(
-                    &record.sequence().as_ref()[m.text_start..m.text_end],
-                    m.strand,
-                ))
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        let data = record.data_mut();
-        for tag in [b"sN", b"sC", b"sS", b"sB", b"sE", b"sP", b"sR", b"sG"] {
-            data.remove(&Tag::from(*tag));
-        }
-
-        let to_u32 = |value: usize, name: &str| {
-            u32::try_from(value)
-                .unwrap_or_else(|_| panic!("{name} exceeds BAM auxiliary tag range"))
-        };
-        data.insert(
-            Tag::from(*b"sN"),
-            Value::from(to_u32(matches.len(), "match count")),
-        );
-        data.insert(
-            Tag::from(*b"sC"),
-            Value::from(
-                matches
-                    .iter()
-                    .map(|(_, m)| u32::try_from(m.cost).expect("match cost must be non-negative"))
-                    .collect::<Vec<_>>(),
-            ),
-        );
-        data.insert(
-            Tag::from(*b"sS"),
-            Value::from(
-                matches
-                    .iter()
-                    .map(|(_, m)| if m.strand == Strand::Fwd { 0u8 } else { 1u8 })
-                    .collect::<Vec<_>>(),
-            ),
-        );
-        data.insert(
-            Tag::from(*b"sB"),
-            Value::from(
-                matches
-                    .iter()
-                    .map(|(_, m)| to_u32(m.text_start, "match start"))
-                    .collect::<Vec<_>>(),
-            ),
-        );
-        data.insert(
-            Tag::from(*b"sE"),
-            Value::from(
-                matches
-                    .iter()
-                    .map(|(_, m)| to_u32(m.text_end, "match end"))
-                    .collect::<Vec<_>>(),
-            ),
-        );
-        data.insert(
-            Tag::from(*b"sP"),
-            Value::from(
-                matches
-                    .iter()
-                    .map(|(pattern, _)| percent_encode(&pattern.id))
-                    .collect::<Vec<_>>()
-                    .join(","),
-            ),
-        );
-        data.insert(Tag::from(*b"sR"), Value::from(match_regions));
-        data.insert(
-            Tag::from(*b"sG"),
-            Value::from(
-                matches
-                    .iter()
-                    .map(|(_, m)| percent_encode(self.format_cigar(&m.cigar, m.strand).as_bytes()))
-                    .collect::<Vec<_>>()
-                    .join(","),
-            ),
-        );
-    }
-
     fn format_match_region(&self, slice: &[u8], strand: Strand) -> Vec<u8> {
-        if strand == Strand::Rc && !self.base.sam {
-            match self.base.alphabet {
-                Alphabet::Dna => <Dna as Profile>::reverse_complement(slice),
-                Alphabet::Iupac => <Iupac as Profile>::reverse_complement(slice),
-            }
-        } else {
-            slice.to_vec()
-        }
+        crate::sam::format_match_region(self.base.alphabet, self.base.sam, slice, strand)
     }
 
     fn format_cigar(&self, cigar: &Cigar, strand: Strand) -> String {
-        if strand == Strand::Rc && self.base.sam {
-            let mut cigar = cigar.clone();
-            cigar.reverse();
-            cigar.to_string()
-        } else {
-            cigar.to_string()
-        }
+        crate::sam::format_cigar(self.base.sam, cigar, strand)
     }
-}
-
-fn percent_encode(value: impl AsRef<[u8]>) -> String {
-    value
-        .as_ref()
-        .iter()
-        .flat_map(|byte| match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => vec![*byte],
-            byte => format!("%{byte:02X}").into_bytes(),
-        })
-        .map(char::from)
-        .collect()
 }
 
 #[cfg(test)]
@@ -1214,6 +996,7 @@ mod test {
             context,
             search,
             filter,
+            more_columns: _,
         } = GrepArgs::try_parse_from(argv).unwrap();
         Args {
             base,
@@ -1221,6 +1004,8 @@ mod test {
             grep: true,
             search,
             filter,
+            more_columns: Vec::new(),
+            annotate: false,
         }
     }
 }
