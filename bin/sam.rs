@@ -10,8 +10,26 @@ use sassy::{
     Match, Strand,
     profiles::{Dna, Iupac, Profile},
 };
+use std::path::Path;
 
 use crate::{grep::Alphabet, input_iterator::PatternRecord};
+
+/// Returns whether `path` selects BAM input using the CLI's `.bam` extension convention.
+pub fn is_bam_path(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("bam"))
+}
+
+/// Returns whether `path` selects SAM input using a `.sam` extension.
+pub fn is_sam_path(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("sam"))
+}
+
+/// Returns whether `path` is a BAM or SAM alignment input.
+pub fn is_alignment_path(path: &Path) -> bool {
+    is_bam_path(path) || is_sam_path(path)
+}
 
 #[derive(Clone, Copy)]
 /// A SAM field that can be appended to Sassy TSV output.

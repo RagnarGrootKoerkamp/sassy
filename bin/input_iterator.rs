@@ -1,4 +1,5 @@
-use needletail::{FastxReader, parse_fastx_file, parse_fastx_stdin};
+use crate::sam::{is_alignment_path, is_bam_path, is_sam_path};
+use needletail::{FastxReader, parse_fastx_file, parse_fastx_stdin, quality};
 use noodles::{
     bam,
     sam::{self, alignment::RecordBuf},
@@ -59,6 +60,13 @@ impl TextRecord {
             Self::Fastx { seq, .. } | Self::Sam { seq, .. } => seq,
         }
     }
+
+    pub fn quality(&self) -> &[u8] {
+        match self {
+            Self::Fastx { quality, .. } => quality,
+            Self::Sam { record_buf, .. } => record_buf.quality_scores().as_ref(),
+        }
+    }
 }
 
 /// A batch of text records of around 1MB by default.
@@ -71,7 +79,7 @@ pub type TextBatch = Arc<Vec<TextRecord>>;
 pub type TaskBatch<'a> = (&'a Path, &'a [PatternRecord], TextBatch);
 
 struct RecordState {
-    reader: InputReader,
+    pub(super) reader: InputReader,
     /// The last batch of text records.
     text_batch: Arc<Vec<TextRecord>>,
     /// The next file index.
@@ -157,30 +165,13 @@ impl InputReader {
 pub struct InputIterator<'a> {
     patterns: &'a [PatternRecord],
     paths: &'a Vec<PathBuf>,
-    state: Mutex<RecordState>,
+    pub(super) state: Mutex<RecordState>,
     batch_byte_limit: usize,
     batch_pattern_limit: usize,
     rev: bool,
 }
 
-/// Returns whether `path` selects BAM input using the CLI's `.bam` extension convention.
-pub fn is_bam_path(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("bam"))
-}
-
-/// Returns whether `path` selects SAM input using a `.sam` extension.
-pub fn is_sam_path(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("sam"))
-}
-
-/// Returns whether `path` is a BAM or SAM alignment input.
-pub fn is_alignment_path(path: &Path) -> bool {
-    is_bam_path(path) || is_sam_path(path)
-}
-
-fn parse_file(path: &PathBuf) -> InputReader {
+fn parse_file(path: &PathBuf) -> (InputReader, Option<Arc<noodles::sam::Header>>) {
     if is_bam_path(path) {
         let mut reader = bam::io::Reader::new(
             File::open(path)
@@ -189,7 +180,13 @@ fn parse_file(path: &PathBuf) -> InputReader {
         let header = Arc::new(reader.read_header().unwrap_or_else(|e| {
             panic!("Failed to read BAM header from `{}`: {e}", path.display())
         }));
-        InputReader::Bam { reader, header }
+        (
+            InputReader::Bam {
+                reader,
+                header: header.clone(),
+            },
+            Some(header),
+        )
     } else if is_sam_path(path) {
         let mut reader =
             sam::io::Reader::new(BufReader::new(File::open(path).unwrap_or_else(|e| {
@@ -198,11 +195,17 @@ fn parse_file(path: &PathBuf) -> InputReader {
         let header = Arc::new(reader.read_header().unwrap_or_else(|e| {
             panic!("Failed to read SAM header from `{}`: {e}", path.display())
         }));
-        InputReader::Sam { reader, header }
+        (
+            InputReader::Sam {
+                reader,
+                header: header.clone(),
+            },
+            Some(header),
+        )
     } else if path == Path::new("") || path == Path::new("-") {
-        InputReader::Fastx(parse_fastx_stdin().unwrap())
+        (InputReader::Fastx(parse_fastx_stdin().unwrap()), None)
     } else {
-        InputReader::Fastx(parse_fastx_file(path).unwrap())
+        (InputReader::Fastx(parse_fastx_file(path).unwrap()), None)
     }
 }
 
@@ -216,8 +219,8 @@ impl<'a> InputIterator<'a> {
         max_batch_bytes: Option<usize>,
         max_batch_patterns: Option<usize>,
         rev: bool,
-    ) -> Self {
-        let reader = parse_file(&paths[0]);
+    ) -> (Self, Option<Arc<noodles::sam::Header>>) {
+        let (reader, header) = parse_file(&paths[0]);
         // Just empty state when we create the iterator
         let batch_pattern_limit = max_batch_patterns.unwrap_or(DEFAULT_BATCH_PATTERNS);
         let state = RecordState {
@@ -227,14 +230,17 @@ impl<'a> InputIterator<'a> {
             pat_idx: patterns.len() / batch_pattern_limit + 2,
             batch_id: 0,
         };
-        Self {
-            patterns,
-            paths,
-            state: Mutex::new(state),
-            batch_byte_limit: max_batch_bytes.unwrap_or(DEFAULT_BATCH_BYTES),
-            batch_pattern_limit,
-            rev,
-        }
+        (
+            Self {
+                patterns,
+                paths,
+                state: Mutex::new(state),
+                batch_byte_limit: max_batch_bytes.unwrap_or(DEFAULT_BATCH_BYTES),
+                batch_pattern_limit,
+                rev,
+            },
+            header,
+        )
     }
 
     /// Get the next batch, or returns None when done.
@@ -274,7 +280,7 @@ impl<'a> InputIterator<'a> {
                                 return None;
                             }
                             // Start reading next file.
-                            state.reader = parse_file(&self.paths[state.file_idx]);
+                            state.reader = parse_file(&self.paths[state.file_idx]).0;
                             continue;
                         }
                     }
@@ -375,7 +381,7 @@ mod tests {
 
         // Create the iterator
         let paths = vec![file.path().to_path_buf()];
-        let iter = InputIterator::new(&paths, &patterns, Some(500), None, true);
+        let (iter, _) = InputIterator::new(&paths, &patterns, Some(500), None, true);
 
         // Pull 10 batches
         let mut batch_id = 0;

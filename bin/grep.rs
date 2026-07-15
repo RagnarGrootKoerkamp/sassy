@@ -9,8 +9,12 @@ use std::{
 use colored::Colorize;
 use needletail::parse_fastx_file;
 use noodles::{
-    bam, bgzf,
-    sam::{self, alignment::io::Write as AlignmentWrite},
+    bam::{self, io::reader::header::sam_header},
+    bgzf,
+    sam::{
+        self,
+        alignment::{RecordBuf, io::Write as AlignmentWrite},
+    },
 };
 use pa_types::Cigar;
 use sassy::{
@@ -19,10 +23,10 @@ use sassy::{
     profiles::{Ascii, Dna, Iupac, Profile},
 };
 
-use crate::input_iterator::{
-    InputIterator, PatternRecord, TextBatch, TextRecord, is_alignment_path, is_bam_path,
+use crate::{
+    input_iterator::{InputIterator, PatternRecord, TextBatch, TextRecord},
+    sam::{SamColumn, is_alignment_path, is_bam_path},
 };
-use crate::sam::SamColumn;
 
 // TODO: Support ASCII alphabet.
 #[derive(clap::ValueEnum, Default, Clone, Copy, PartialEq)]
@@ -403,33 +407,6 @@ impl FilterArgs {
     }
 }
 
-/// Reads alignment headers up front so output can serialize records after parallel matching.
-fn read_alignment_headers(paths: &[PathBuf]) -> HashMap<PathBuf, Arc<sam::Header>> {
-    paths
-        .iter()
-        .filter(|path| is_alignment_path(path))
-        .map(|path| {
-            let header = if is_bam_path(path) {
-                let mut reader = bam::io::Reader::new(File::open(path).unwrap_or_else(|e| {
-                    panic!("Failed to open BAM input `{}`: {e}", path.display())
-                }));
-                reader.read_header().unwrap_or_else(|e| {
-                    panic!("Failed to read BAM header from `{}`: {e}", path.display())
-                })
-            } else {
-                let mut reader =
-                    sam::io::Reader::new(std::io::BufReader::new(File::open(path).unwrap_or_else(
-                        |e| panic!("Failed to open SAM input `{}`: {e}", path.display()),
-                    )));
-                reader.read_header().unwrap_or_else(|e| {
-                    panic!("Failed to read SAM header from `{}`: {e}", path.display())
-                })
-            };
-            (path.clone(), Arc::new(header))
-        })
-        .collect()
-}
-
 fn run_batch_v2<'a, P: Profile>(
     searcher: &mut Searcher<P>,
     results: &mut Vec<(
@@ -441,7 +418,6 @@ fn run_batch_v2<'a, P: Profile>(
     patterns: &'a [PatternRecord],
     text_batch: &TextBatch,
     k: usize,
-    include_empty: bool,
 ) {
     let patterns_vec: Vec<Vec<u8>> = patterns.iter().map(|p| p.seq.clone()).collect();
     let encoded = searcher.encode_patterns(&patterns_vec);
@@ -455,7 +431,7 @@ fn run_batch_v2<'a, P: Profile>(
                 (pattern, m)
             })
             .collect();
-        if batch_matches.is_empty() && !include_empty {
+        if batch_matches.is_empty() {
             continue;
         }
         results.push((path, (text_batch.clone(), i), batch_matches));
@@ -463,7 +439,7 @@ fn run_batch_v2<'a, P: Profile>(
 }
 
 impl Args {
-    fn run(mut self) {
+    fn validate_args(&mut self) {
         if self.base.invert && self.filter.is_none() {
             eprintln!(
                 "{}",
@@ -473,41 +449,41 @@ impl Args {
             );
         }
 
-        if self.base.paths.is_empty() {
-            self.base.paths = vec![PathBuf::from("")];
+        match self.base.paths.len() {
+            0 => {
+                // No argument. Read from stdin.
+                self.base.paths = vec![PathBuf::from("")];
+            }
+
+            1 => {
+                // One input file. Can be fast or alignment
+                let path = &self.base.paths[0];
+                if is_alignment_path(path) {
+                    if self.base.sam {
+                        panic!(
+                            "`--sam` does not apply to SAM/BAM input to avoid confusion. Remove `--sam`"
+                        );
+                    } else {
+                        if !self.more_columns.is_empty() {
+                            eprintln!(
+                                "`--more-columns` applies to SAM/BAM inputs. Ignored for fastx input."
+                            );
+                        }
+                    }
+                }
+            }
+
+            _ => {
+                // Multiple inputs. Does not support multiple alignment file input.
+                if self.base.paths.iter().any(|path| is_alignment_path(path)) {
+                    panic!("Only fastx files are supported as multiple inputs.")
+                }
+            }
         }
-        let alignment_paths: Vec<_> = self
-            .base
-            .paths
-            .iter()
-            .filter(|path| is_alignment_path(path))
-            .collect();
-        if !alignment_paths.is_empty() && self.base.sam {
-            panic!(
-                "`--sam` cannot be used with SAM/BAM input. Remove `--sam`; alignment records retain their stored orientation."
-            );
-        }
-        if !self.more_columns.is_empty() && alignment_paths.is_empty() {
-            panic!("`--more-columns` requires at least one `.bam` or `.sam` input path.");
-        }
-        if !self.more_columns.is_empty() && alignment_paths.len() != self.base.paths.len() {
-            panic!(
-                "`--more-columns` cannot be used with mixed SAM/BAM and FASTX input. Run alignment and FASTX inputs separately."
-            );
-        }
-        if self.filter.is_some() && !alignment_paths.is_empty() {
-            assert_eq!(
-                alignment_paths.len(),
-                1,
-                "SAM/BAM filtering accepts exactly one alignment input because the output preserves one source header."
-            );
-            assert_eq!(
-                alignment_paths.len(),
-                self.base.paths.len(),
-                "SAM/BAM filtering cannot mix alignment and FASTX inputs. Run each input format separately."
-            );
-        }
-        let alignment_headers = read_alignment_headers(&self.base.paths);
+    }
+    fn run(mut self) {
+        self.validate_args();
+
         let args = &self;
 
         let patterns = args.get_patterns();
@@ -518,13 +494,14 @@ impl Args {
             && !args.base.no_rc;
 
         let num_threads = args.base.threads.unwrap_or_else(num_cpus::get);
-        let task_iterator = &InputIterator::new(
+        let (task_iterator, sam_header) = InputIterator::new(
             &args.base.paths,
             &patterns,
             None,
             args.base.pattern_batch_size,
             rc,
         );
+        let task_iterator = &task_iterator;
 
         let output = Mutex::new((
             0,
@@ -549,11 +526,9 @@ impl Args {
                 filter_to_stdout = true;
                 Box::new(std::io::stdout()) as Box<dyn std::io::Write + Send>
             };
-            if let Some(path) = alignment_paths.first() {
-                let header = alignment_headers
-                    .get(*path)
-                    .expect("Alignment header metadata was not loaded for the requested input")
-                    .clone();
+
+            if let Some(header) = sam_header.clone() {
+                // Input is an alignment file
                 if is_bam_path(path) {
                     let mut bam_writer = bam::io::Writer::new(writer);
                     bam_writer.write_header(&header).expect("write BAM header");
@@ -604,7 +579,7 @@ impl Args {
                 "cigar",
             ];
             columns.extend(args.more_columns.iter().map(|column| column.name()));
-            let header = format!("{}\n", columns.join("\t"));
+            let header = format!("{}\n", columns.join("\t")); // TODO: data columns
             write!(writer, "{header}").unwrap();
 
             Mutex::new(writer)
@@ -614,9 +589,9 @@ impl Args {
             for _ in 0..num_threads {
                 let output = &output;
                 let global_histogram = &global_histogram;
-                let alignment_headers = &alignment_headers;
                 let filter_writer = filter_writer.as_ref();
                 let match_writer = match_writer.as_ref();
+                let sam_header = sam_header.clone();
                 s.spawn(move || {
                     enum SearcherType {
                         Dna(Searcher<Dna>),
@@ -643,24 +618,12 @@ impl Args {
 
                         if args.base.v2 {
                             match &mut searcher {
-                                SearcherType::Dna(s) => run_batch_v2(
-                                    s,
-                                    &mut results,
-                                    path,
-                                    batch.1,
-                                    &batch.2,
-                                    k,
-                                    args.filter.is_some() && args.base.invert,
-                                ),
-                                SearcherType::Iupac(s) => run_batch_v2(
-                                    s,
-                                    &mut results,
-                                    path,
-                                    batch.1,
-                                    &batch.2,
-                                    k,
-                                    args.filter.is_some() && args.base.invert,
-                                ),
+                                SearcherType::Dna(s) => {
+                                    run_batch_v2(s, &mut results, path, batch.1, &batch.2, k)
+                                }
+                                SearcherType::Iupac(s) => {
+                                    run_batch_v2(s, &mut results, path, batch.1, &batch.2, k)
+                                }
                             }
                         } else {
                             for (i, text) in batch.2.iter().enumerate() {
@@ -678,9 +641,7 @@ impl Args {
                                         .extend(record_matches.into_iter().map(|m| (pattern, m)));
                                 }
 
-                                if batch_matches.is_empty()
-                                    && !(args.filter.is_some() && args.base.invert)
-                                {
+                                if batch_matches.is_empty() {
                                     continue;
                                 }
                                 results.push((path, (batch.2.clone(), i), batch_matches));
@@ -715,11 +676,11 @@ impl Args {
                             for (path, text, matches) in front_results {
                                 args.output(
                                     path,
-                                    alignment_headers.get(path).map(Arc::as_ref),
                                     &text.0[text.1],
                                     matches,
                                     &mut filter_writer,
                                     &mut match_writer,
+                                    sam_header.as_deref(),
                                 );
                             }
                         }
@@ -749,21 +710,31 @@ impl Args {
     fn output(
         &self,
         path: &Path,
-        bam_header: Option<&sam::Header>,
         text: &TextRecord,
         mut matches: Vec<(&PatternRecord, Match)>,
         filter_writer: &mut Option<std::sync::MutexGuard<'_, FilterWriter>>,
         match_writer: &mut Option<std::sync::MutexGuard<'_, Box<dyn Write + Send>>>,
+        header: Option<&noodles::sam::Header>,
     ) {
         matches.sort_by_key(|m| m.1.text_start);
         // 1. Print filter output.
         if self.filter.is_some() {
             let writer = &mut **filter_writer.as_mut().unwrap();
-            if !self.base.invert && !matches.is_empty() {
-                self.print_matching_record(text, &matches, writer);
-            }
-            if self.base.invert && matches.is_empty() {
-                self.print_matching_record(text, &matches, writer);
+
+            if !self.base.invert && !matches.is_empty() | self.base.invert && matches.is_empty() {}
+            match (text, writer) {
+                (TextRecord::Fastx { .. }, FilterWriter::Fastx(writer)) => {
+                    self.print_matching_record(text, writer);
+                }
+                (TextRecord::Sam { record_buf, .. }, FilterWriter::Sam { writer, header }) => {
+                    self.print_matching_alignment_record(record_buf, &matches, header, writer);
+                }
+                (TextRecord::Sam { record_buf, .. }, FilterWriter::Bam { writer, header }) => {
+                    self.print_matching_alignment_record(record_buf, &matches, header, writer);
+                }
+                _ => {
+                    // Should not happen.
+                }
             }
         }
 
@@ -771,7 +742,7 @@ impl Args {
             // 2. If grep, interleave with search output if needed.
             (true, _) => self.print_matches_for_record(
                 path,
-                bam_header,
+                header,
                 text,
                 &matches,
                 match_writer.as_deref_mut(),
@@ -781,7 +752,7 @@ impl Args {
                 for (pattern, m) in &matches {
                     self.print_match_tsv(
                         pattern,
-                        bam_header,
+                        header,
                         text,
                         m,
                         match_writer.as_deref_mut().unwrap(),
@@ -831,67 +802,43 @@ impl Args {
         panic!("No --pattern, --pattern-file, or --pattern-fasta provided!");
     }
 
-    fn print_matching_record(
-        &self,
-        text: &TextRecord,
-        matches: &[(&PatternRecord, Match)],
-        writer: &mut FilterWriter,
-    ) {
-        match writer {
-            FilterWriter::Fastx(writer) => match text {
-                TextRecord::Fastx { id, seq, quality } if !quality.is_empty() => {
-                    writeln!(writer, "@{id}").unwrap();
-                    writeln!(writer, "{}", String::from_utf8_lossy(&seq.text)).unwrap();
-                    writeln!(writer, "+").unwrap();
-                    writeln!(writer, "{}", String::from_utf8_lossy(quality)).unwrap();
-                }
-                TextRecord::Fastx { id, seq, .. } => {
-                    writeln!(writer, ">{id}").unwrap();
-                    writeln!(writer, "{}", String::from_utf8_lossy(&seq.text)).unwrap();
-                }
-                TextRecord::Sam { .. } => panic!("FASTX output requires FASTX input"),
-            },
-            FilterWriter::Bam { writer, header } => {
-                let TextRecord::Sam { record_buf, .. } = text else {
-                    panic!("BAM output requires BAM input");
-                };
-                let mut record = record_buf.clone();
-                if self.annotate && !matches.is_empty() {
-                    crate::sam::annotate_bam_record(
-                        &mut record,
-                        matches,
-                        self.base.alphabet,
-                        self.base.sam,
-                    );
-                }
-                writer
-                    .write_alignment_record(header, &record)
-                    .expect("write BAM record");
-            }
-            FilterWriter::Sam { writer, header } => {
-                let TextRecord::Sam { record_buf, .. } = text else {
-                    panic!("SAM output requires SAM input");
-                };
-                let mut record = record_buf.clone();
-                if self.annotate && !matches.is_empty() {
-                    crate::sam::annotate_bam_record(
-                        &mut record,
-                        matches,
-                        self.base.alphabet,
-                        self.base.sam,
-                    );
-                }
-                writer
-                    .write_alignment_record(header, &record)
-                    .expect("write SAM record");
-            }
+    fn print_matching_record(&self, text: &TextRecord, writer: &mut (dyn std::io::Write + Send)) {
+        if !text.quality().is_empty() {
+            writeln!(writer, "@{}", text.id()).unwrap();
+            writeln!(writer, "{}", String::from_utf8_lossy(&text.seq().text)).unwrap();
+            writeln!(writer, "+").unwrap();
+            writeln!(writer, "{}", String::from_utf8_lossy(&text.quality())).unwrap();
+        } else {
+            writeln!(writer, ">{}", text.id()).unwrap();
+            writeln!(writer, "{}", String::from_utf8_lossy(&text.seq().text)).unwrap();
         }
+    }
+
+    fn print_matching_alignment_record(
+        &self,
+        record_buf: &RecordBuf,
+        matches: &[(&PatternRecord, Match)],
+        header: &Arc<noodles::sam::Header>,
+        writer: &mut (dyn sam::alignment::io::Write),
+    ) {
+        let mut record = record_buf.clone();
+        if self.annotate && !matches.is_empty() {
+            crate::sam::annotate_bam_record(
+                &mut record,
+                matches,
+                self.base.alphabet,
+                self.base.sam,
+            );
+        }
+        writer
+            .write_alignment_record(header, &record)
+            .expect("write alignment record");
     }
 
     fn print_matches_for_record(
         &self,
         path: &Path,
-        bam_header: Option<&sam::Header>,
+        header: Option<&sam::Header>,
         text: &TextRecord,
         matches: &Vec<(&PatternRecord, Match)>,
         mut match_writer: Option<&mut impl std::io::Write>,
@@ -899,14 +846,11 @@ impl Args {
         if matches.is_empty() {
             return;
         }
-        let additional_columns = if self.more_columns.is_empty() {
-            String::new()
-        } else {
-            let TextRecord::Sam { record_buf, .. } = text else {
-                panic!("`--more-columns` can only format BAM records.");
-            };
+        let additional_columns = if !self.more_columns.is_empty()
+            && let TextRecord::Sam { record_buf, .. } = text
+        {
             let fields = crate::sam::sam_fields(
-                bam_header.expect("BAM header metadata is unavailable for this output record"),
+                header.expect("BAM header metadata is unavailable for this output record"),
                 record_buf,
             );
             format!(
@@ -917,6 +861,8 @@ impl Args {
                     .collect::<Vec<_>>()
                     .join("\t")
             )
+        } else {
+            String::new()
         };
         eprintln!(
             "{}",
@@ -929,7 +875,7 @@ impl Args {
         );
         for (pattern, m) in matches {
             if let Some(match_writer) = match_writer.as_mut() {
-                self.print_match_tsv(pattern, bam_header, text, m, match_writer);
+                self.print_match_tsv(pattern, header, text, m, match_writer);
             }
             let s = m.pretty_print(
                 Some(&pattern.id),
@@ -946,7 +892,7 @@ impl Args {
     fn print_match_tsv(
         &self,
         pattern: &PatternRecord,
-        bam_header: Option<&sam::Header>,
+        header: Option<&sam::Header>,
         text: &TextRecord,
         m: &Match,
         writer: &mut impl std::io::Write,
@@ -970,14 +916,11 @@ impl Args {
             "{pat_id}\t{text_id}\t{cost}\t{strand}\t{start}\t{end}\t{match_region}\t{cigar}"
         )
         .unwrap();
-        if !self.more_columns.is_empty() {
-            let TextRecord::Sam { record_buf, .. } = text else {
-                panic!("--more-columns requires BAM input");
-            };
-            let fields = crate::sam::sam_fields(
-                bam_header.expect("BAM batch is missing its SAM header"),
-                record_buf,
-            );
+        if !self.more_columns.is_empty()
+            && let TextRecord::Sam { record_buf, .. } = text
+            && let Some(header) = header
+        {
+            let fields = crate::sam::sam_fields(header, record_buf);
             for column in &self.more_columns {
                 write!(writer, "\t{}", column.value(&fields)).unwrap();
             }
