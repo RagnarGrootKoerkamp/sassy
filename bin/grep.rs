@@ -118,7 +118,7 @@ pub struct BaseArgs {
     sam: bool,
 
     // Positional
-    /// Input FASTX or BAM files. FASTX may be gzipped; BAM is selected by a `.bam` extension.
+    /// Input FASTX or BAM/SAM files. FASTX may be gzipped.
     paths: Vec<PathBuf>,
 }
 
@@ -577,7 +577,7 @@ impl Args {
                 "cigar",
             ];
             columns.extend(args.more_columns.iter().map(String::as_str));
-            let header = format!("{}\n", columns.join("\t")); // TODO: data columns
+            let header = format!("{}\n", columns.join("\t"));
             write!(writer, "{header}").unwrap();
 
             Mutex::new(writer)
@@ -847,15 +847,7 @@ impl Args {
                 &self.more_columns,
                 header.expect("BAM header metadata is unavailable for this output record"),
             );
-            format!(
-                "\t{}",
-                self.more_columns
-                    .iter()
-                    .zip(fields.split('\t'))
-                    .map(|(column, value)| format!("{column}={value}"))
-                    .collect::<Vec<_>>()
-                    .join("\t")
-            )
+            format!("\t{}", fields)
         } else {
             String::new()
         };
