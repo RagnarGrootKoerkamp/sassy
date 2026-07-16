@@ -31,135 +31,22 @@ pub fn is_alignment_path(path: &Path) -> bool {
     is_bam_path(path) || is_sam_path(path)
 }
 
-#[derive(Clone, Copy)]
-/// A SAM field that can be appended to Sassy TSV output.
-pub(crate) enum SamColumn {
-    Qname,
-    Flag,
-    Rname,
-    Pos,
-    Mapq,
-    Cigar,
-    Rnext,
-    Pnext,
-    Tlen,
-    Seq,
-    Qual,
-    /// All optional SAM alignment fields in their standard `TAG:TYPE:VALUE` representation.
-    Data,
-}
+const QNAME: &str = "QNAME";
+const FLAG: &str = "FLAG";
+const RNAME: &str = "RNAME";
+const POS: &str = "POS";
+const MAPQ: &str = "MAPQ";
+const CIGAR: &str = "CIGAR";
+const RNEXT: &str = "RNEXT";
+const PNEXT: &str = "PNEXT";
+const TLEN: &str = "TLEN";
+const SEQ: &str = "SEQ";
+const QUAL: &str = "QUAL";
+const DATA: &str = "DATA";
 
-impl SamColumn {
-    const ALL: [Self; 12] = [
-        Self::Qname,
-        Self::Flag,
-        Self::Rname,
-        Self::Pos,
-        Self::Mapq,
-        Self::Cigar,
-        Self::Rnext,
-        Self::Pnext,
-        Self::Tlen,
-        Self::Seq,
-        Self::Qual,
-        Self::Data,
-    ];
-
-    /// Parses the `--more-columns` value, accepting `all` or mandatory SAM field names.
-    pub fn parse_list(value: Option<&str>) -> Vec<Self> {
-        let Some(value) = value else {
-            return Vec::new();
-        };
-        let fields: Vec<_> = value.split(',').map(str::trim).collect();
-        assert!(
-            !fields.is_empty() && fields.iter().all(|field| !field.is_empty()),
-            "--more-columns must be a non-empty comma-separated list"
-        );
-        if fields.len() == 1 && fields[0].eq_ignore_ascii_case("all") {
-            return Self::ALL.to_vec();
-        }
-        assert!(
-            !fields.iter().any(|field| field.eq_ignore_ascii_case("all")),
-            "`--more-columns=all` cannot be combined with individual SAM fields"
-        );
-        fields
-            .into_iter()
-            .map(|field| match field.to_ascii_uppercase().as_str() {
-                "QNAME" => Self::Qname,
-                "FLAG" => Self::Flag,
-                "RNAME" => Self::Rname,
-                "POS" => Self::Pos,
-                "MAPQ" => Self::Mapq,
-                "CIGAR" => Self::Cigar,
-                "RNEXT" => Self::Rnext,
-                "PNEXT" => Self::Pnext,
-                "TLEN" => Self::Tlen,
-                "SEQ" => Self::Seq,
-                "QUAL" => Self::Qual,
-                "DATA" => Self::Data,
-                _ => panic!(
-                    "Invalid `--more-columns` field `{field}`. Use `all` or one of QNAME, FLAG, RNAME, POS, MAPQ, CIGAR, RNEXT, PNEXT, TLEN, SEQ, QUAL, DATA."
-                ),
-            })
-            .collect()
-    }
-
-    /// Returns the SAM specification field name.
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Qname => "QNAME",
-            Self::Flag => "FLAG",
-            Self::Rname => "RNAME",
-            Self::Pos => "POS",
-            Self::Mapq => "MAPQ",
-            Self::Cigar => "CIGAR",
-            Self::Rnext => "RNEXT",
-            Self::Pnext => "PNEXT",
-            Self::Tlen => "TLEN",
-            Self::Seq => "SEQ",
-            Self::Qual => "QUAL",
-            Self::Data => "DATA",
-        }
-    }
-
-    /// Returns this column's standard SAM representation from a serialized alignment line.
-    ///
-    /// `DATA` joins all optional fields with tabs, matching the SAM alignment-line format
-    /// produced by Noodles' writer.
-    pub fn value(self, fields: &[String]) -> String {
-        match self {
-            Self::Qname => fields[0].clone(),
-            Self::Flag => fields[1].clone(),
-            Self::Rname => fields[2].clone(),
-            Self::Pos => fields[3].clone(),
-            Self::Mapq => fields[4].clone(),
-            Self::Cigar => fields[5].clone(),
-            Self::Rnext => fields[6].clone(),
-            Self::Pnext => fields[7].clone(),
-            Self::Tlen => fields[8].clone(),
-            Self::Seq => fields[9].clone(),
-            Self::Qual => fields[10].clone(),
-            Self::Data => fields[11..].join("\t"),
-        }
-    }
-}
-
-/// Formats a BAM record as SAM and returns its mandatory fields plus any auxiliary fields.
-///
-/// Noodles uses `header` to resolve BAM reference IDs to the textual `RNAME` and `RNEXT` fields.
-pub fn sam_fields(header: &sam::Header, record_buf: &RecordBuf) -> Vec<String> {
-    let mut writer = sam::io::Writer::new(Vec::new());
-    writer
-        .write_alignment_record(header, record_buf)
-        .expect("format SAM record");
-    let line = String::from_utf8(writer.into_inner()).expect("SAM record is UTF-8");
-    let fields: Vec<_> = line.trim_end().split('\t').map(str::to_owned).collect();
-    assert!(
-        fields.len() >= 11,
-        "SAM writer returned fewer than 11 mandatory fields"
-    );
-    fields
-}
+const VALID_ALIGNMENT_COLUMNS: [&str; 12] = [
+    QNAME, FLAG, RNAME, POS, MAPQ, CIGAR, RNEXT, PNEXT, TLEN, SEQ, QUAL, DATA,
+];
 
 /// Adds Sassy's local-use BAM tags to a matching record.
 ///

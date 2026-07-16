@@ -929,11 +929,24 @@ impl Args {
     }
 
     fn format_match_region(&self, slice: &[u8], strand: Strand) -> Vec<u8> {
-        crate::sam::format_match_region(self.base.alphabet, self.base.sam, slice, strand)
+        if strand == Strand::Rc && !self.base.sam {
+            match self.base.alphabet {
+                Alphabet::Dna => <Dna as Profile>::reverse_complement(slice),
+                Alphabet::Iupac => <Iupac as Profile>::reverse_complement(slice),
+            }
+        } else {
+            slice.to_vec()
+        }
     }
 
     fn format_cigar(&self, cigar: &Cigar, strand: Strand) -> String {
-        crate::sam::format_cigar(self.base.sam, cigar, strand)
+        if strand == Strand::Rc && self.base.sam {
+            let mut cigar = cigar.clone();
+            cigar.reverse();
+            cigar.to_string()
+        } else {
+            cigar.to_string()
+        }
     }
 }
 
