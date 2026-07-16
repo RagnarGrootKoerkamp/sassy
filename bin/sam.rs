@@ -1,20 +1,3 @@
-use itertools::Itertools;
-use noodles::sam::{
-    self,
-    alignment::{
-        RecordBuf, io::Write as AlignmentWrite, record::data::field::Tag,
-        record_buf::data::field::Value,
-    },
-};
-use pa_types::Cigar;
-use sassy::{
-    Match, Strand,
-    profiles::{Dna, Iupac, Profile},
-};
-use std::path::Path;
-
-use crate::{grep::Alphabet, input_iterator::PatternRecord};
-
 #[cfg(test)]
 mod tests {
     use super::*;

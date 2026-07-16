@@ -13,7 +13,10 @@ use noodles::{
     bgzf,
     sam::{
         self,
-        alignment::{RecordBuf, io::Write as AlignmentWrite},
+        alignment::{
+            RecordBuf, io::Write as AlignmentWrite, record::data::field::Tag,
+            record_buf::data::field::Value,
+        },
     },
 };
 use pa_types::Cigar;
@@ -24,6 +27,7 @@ use sassy::{
 };
 
 use crate::input_iterator::{InputIterator, PatternRecord, TextBatch, TextRecord};
+use itertools::Itertools;
 
 // TODO: Support ASCII alphabet.
 #[derive(clap::ValueEnum, Default, Clone, Copy, PartialEq)]
