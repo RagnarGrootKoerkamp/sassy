@@ -23,10 +23,7 @@ use sassy::{
     profiles::{Ascii, Dna, Iupac, Profile},
 };
 
-use crate::{
-    input_iterator::{InputIterator, PatternRecord, TextBatch, TextRecord},
-    sam::{SamColumn, is_alignment_path, is_bam_path},
-};
+use crate::input_iterator::{InputIterator, PatternRecord, TextBatch, TextRecord};
 
 // TODO: Support ASCII alphabet.
 #[derive(clap::ValueEnum, Default, Clone, Copy, PartialEq)]
@@ -197,7 +194,7 @@ struct Args {
     grep: bool,
     search: Option<PathBuf>,
     filter: Option<PathBuf>,
-    more_columns: Vec<SamColumn>,
+    more_columns: Vec<String>,
     annotate: bool,
 }
 
@@ -927,29 +924,204 @@ impl Args {
         }
         writeln!(writer).unwrap();
     }
+}
 
-    fn format_match_region(&self, slice: &[u8], strand: Strand) -> Vec<u8> {
-        if strand == Strand::Rc && !self.base.sam {
-            match self.base.alphabet {
-                Alphabet::Dna => <Dna as Profile>::reverse_complement(slice),
-                Alphabet::Iupac => <Iupac as Profile>::reverse_complement(slice),
-            }
-        } else {
-            slice.to_vec()
-        }
-    }
+/// Returns whether `path` selects BAM input using the CLI's `.bam` extension convention.
+pub fn is_bam_path(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("bam"))
+}
 
-    fn format_cigar(&self, cigar: &Cigar, strand: Strand) -> String {
-        if strand == Strand::Rc && self.base.sam {
-            let mut cigar = cigar.clone();
-            cigar.reverse();
-            cigar.to_string()
-        } else {
-            cigar.to_string()
+/// Returns whether `path` selects SAM input using a `.sam` extension.
+pub fn is_sam_path(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("sam"))
+}
+
+/// Returns whether `path` is a BAM or SAM alignment input.
+pub fn is_alignment_path(path: &Path) -> bool {
+    is_bam_path(path) || is_sam_path(path)
+}
+
+const QNAME: &str = "QNAME";
+const FLAG: &str = "FLAG";
+const RNAME: &str = "RNAME";
+const POS: &str = "POS";
+const MAPQ: &str = "MAPQ";
+const CIGAR: &str = "CIGAR";
+const RNEXT: &str = "RNEXT";
+const PNEXT: &str = "PNEXT";
+const TLEN: &str = "TLEN";
+const SEQ: &str = "SEQ";
+const QUAL: &str = "QUAL";
+const DATA: &str = "DATA";
+
+/// Format an alignement record as string to attach to the tsv output.
+/// Uses noodles' built-in IO interface to ensure compliance.
+/// Data fields in the original alignment record is joined by ";" to avoid disrupting the tsv format.
+pub fn format_alignment_record_as_tsv(
+    record: &RecordBuf,
+    more_columns: &[String],
+    header: &noodles::sam::Header,
+) -> String {
+    let mut writer = sam::io::Writer::new(Vec::new());
+    writer
+        .write_alignment_record(header, record)
+        .expect("write SAM record");
+
+    let sam_record_str = String::from_utf8(writer.into_inner()).expect("SAM record is valid UTF-8");
+    let fields = sam_record_str
+        .trim_end_matches('\n')
+        .split('\t')
+        .collect::<Vec<_>>();
+
+    more_columns
+        .iter()
+        .filter_map(|column| match column.as_str() {
+            QNAME => Some(fields[0].to_string()),
+            FLAG => Some(fields[1].to_string()),
+            RNAME => Some(fields[2].to_string()),
+            POS => Some(fields[3].to_string()),
+            MAPQ => Some(fields[4].to_string()),
+            CIGAR => Some(fields[5].to_string()),
+            RNEXT => Some(fields[6].to_string()),
+            PNEXT => Some(fields[7].to_string()),
+            TLEN => Some(fields[8].to_string()),
+            SEQ => Some(fields[9].to_string()),
+            QUAL => Some(fields[10].to_string()),
+            DATA => Some(fields[11..].join(";")),
+            _ => None,
+        })
+        .join("\t")
+}
+
+// tags
+const MATCH_COUNT_TAG: Tag = Tag::new(b's', b'N');
+const MATCH_COST_TAG: Tag = Tag::new(b's', b'C');
+const MATCH_STRAND_TAG: Tag = Tag::new(b's', b'S');
+const FORWARD_STRAND_VALUE: u32 = 0u32;
+const REVERSE_STRAND_VALUE: u32 = 1u32;
+const MATCH_START_TAG: Tag = Tag::new(b's', b'B');
+const MATCH_END_TAG: Tag = Tag::new(b's', b'E');
+const MATCH_PATTERN_ID_TAG: Tag = Tag::new(b's', b'P');
+const MATCH_REGION_TAG: Tag = Tag::new(b's', b'R');
+const MATCH_CIGAR_TAG: Tag = Tag::new(b's', b'G');
+
+/// Annotate Sassy match data to BAM tags.
+pub fn annotate_bam_record(
+    record: &mut RecordBuf,
+    matches: &[(&PatternRecord, Match)],
+    alphabet: Alphabet,
+    sam_output: bool,
+) {
+    let sequence = record.sequence().as_ref().to_owned();
+    let data = record.data_mut();
+
+    data.insert(MATCH_COUNT_TAG, Value::from(matches.len() as u32));
+    data.insert(
+        MATCH_COST_TAG,
+        Value::from(matches.iter().map(|(_, m)| m.cost).collect::<Vec<i32>>()),
+    );
+    data.insert(
+        MATCH_STRAND_TAG,
+        Value::from(
+            matches
+                .iter()
+                .map(|(_, m)| {
+                    if m.strand == Strand::Fwd {
+                        FORWARD_STRAND_VALUE
+                    } else {
+                        REVERSE_STRAND_VALUE
+                    }
+                })
+                .collect::<Vec<_>>(),
+        ),
+    );
+    data.insert(
+        MATCH_START_TAG,
+        Value::from(
+            matches
+                .iter()
+                .map(|(_, m)| m.text_start as u32)
+                .collect::<Vec<_>>(),
+        ),
+    );
+    data.insert(
+        MATCH_END_TAG,
+        Value::from(
+            matches
+                .iter()
+                .map(|(_, m)| m.text_end as u32)
+                .collect::<Vec<_>>(),
+        ),
+    );
+    data.insert(
+        MATCH_PATTERN_ID_TAG,
+        Value::from(
+            matches
+                .iter()
+                .map(|(pattern, _)| pattern.id.clone())
+                .join(","),
+        ),
+    );
+
+    data.insert(
+        MATCH_REGION_TAG,
+        Value::from(
+            matches
+                .iter()
+                .map(|(_, m)| {
+                    let region = format_match_region(
+                        alphabet,
+                        sam_output,
+                        &sequence[m.text_start..m.text_end],
+                        m.strand,
+                    );
+                    String::from_utf8_lossy(&region).into_owned()
+                })
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
+    );
+    data.insert(
+        MATCH_CIGAR_TAG,
+        Value::from(
+            matches
+                .iter()
+                .map(|(_, m)| format_cigar(sam_output, &m.cigar, m.strand))
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
+    );
+}
+
+/// Formats a matching region in Sassy's default or SAM-compatible orientation.
+pub fn format_match_region(
+    alphabet: Alphabet,
+    sam_output: bool,
+    slice: &[u8],
+    strand: Strand,
+) -> Vec<u8> {
+    if strand == Strand::Rc && !sam_output {
+        match alphabet {
+            Alphabet::Dna => <Dna as Profile>::reverse_complement(slice),
+            Alphabet::Iupac => <Iupac as Profile>::reverse_complement(slice),
         }
+    } else {
+        slice.to_vec()
     }
 }
 
+/// Formats a Sassy CIGAR, reversing reverse-complement matches for SAM-compatible output.
+pub fn format_cigar(sam_output: bool, cigar: &Cigar, strand: Strand) -> String {
+    if strand == Strand::Rc && sam_output {
+        let mut cigar = cigar.clone();
+        cigar.reverse();
+        cigar.to_string()
+    } else {
+        cigar.to_string()
+    }
+}
 #[cfg(test)]
 mod test {
     use clap::Parser;
