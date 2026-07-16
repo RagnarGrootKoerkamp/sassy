@@ -1,7 +1,16 @@
+use crate::grep::{is_bam_path, is_sam_path};
 use needletail::{FastxReader, parse_fastx_file, parse_fastx_stdin};
+use noodles::{
+    bam,
+    sam::{self, alignment::RecordBuf},
+};
 use sassy::CachedRev;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex}; //Todo: could use parking_lot mutex - faster
+use std::{
+    fs::File,
+    io::BufReader,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex}, // TODO: could use parking_lot mutex - faster
+};
 
 /// Each batch of text records will be at most this size if possible.
 const DEFAULT_BATCH_BYTES: usize = 1024 * 1024; // 1 MiB
@@ -18,13 +27,46 @@ pub struct PatternRecord {
     pub seq: Vec<u8>,
 }
 
-/// A text to be searched, with ID from fasta file.
-/// TODO: Reduce the number of allocations here.
 #[derive(Debug)]
-pub struct TextRecord {
-    pub id: ID,
-    pub seq: CachedRev<Vec<u8>>,
-    pub quality: Vec<u8>,
+pub enum TextRecord {
+    Fastx {
+        id: ID,
+        seq: CachedRev<Vec<u8>>,
+        quality: Vec<u8>,
+    },
+
+    Sam {
+        id: ID,
+        seq: CachedRev<Vec<u8>>,
+        record_buf: RecordBuf,
+    },
+}
+
+impl TextRecord {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Fastx { id, .. } | Self::Sam { id, .. } => id,
+        }
+    }
+
+    pub fn seq(&self) -> &CachedRev<Vec<u8>> {
+        match self {
+            Self::Fastx { seq, .. } | Self::Sam { seq, .. } => seq,
+        }
+    }
+
+    pub fn seq_mut(&mut self) -> &mut CachedRev<Vec<u8>> {
+        match self {
+            Self::Fastx { seq, .. } | Self::Sam { seq, .. } => seq,
+        }
+    }
+
+    pub fn quality(&self) -> &[u8] {
+        match self {
+            Self::Fastx { quality, .. } => quality,
+            Self::Sam { record_buf, .. } => record_buf.quality_scores().as_ref(),
+        }
+    }
 }
 
 /// A batch of text records of around 1MB by default.
@@ -37,8 +79,7 @@ pub type TextBatch = Arc<Vec<TextRecord>>;
 pub type TaskBatch<'a> = (&'a Path, &'a [PatternRecord], TextBatch);
 
 struct RecordState {
-    /// The current fasta reader.
-    reader: Box<dyn FastxReader + Send>,
+    pub(super) reader: InputReader,
     /// The last batch of text records.
     text_batch: Arc<Vec<TextRecord>>,
     /// The next file index.
@@ -47,6 +88,74 @@ struct RecordState {
     pat_idx: usize,
     /// The next batch id.
     batch_id: usize,
+}
+
+enum InputReader {
+    Fastx(Box<dyn FastxReader + Send>),
+    Bam {
+        reader: bam::io::Reader<noodles::bgzf::io::Reader<File>>,
+        header: Arc<noodles::sam::Header>,
+    },
+    Sam {
+        reader: sam::io::Reader<BufReader<File>>,
+        header: Arc<noodles::sam::Header>,
+    },
+}
+
+impl InputReader {
+    fn next_record(&mut self) -> Option<TextRecord> {
+        match self {
+            Self::Fastx(reader) => match reader.next() {
+                Some(Ok(rec)) => Some(TextRecord::Fastx {
+                    id: String::from_utf8_lossy(rec.id()).into_owned(),
+                    seq: CachedRev::new(rec.seq().into_owned(), false),
+                    quality: rec.qual().unwrap_or(&[]).to_vec(),
+                }),
+                Some(Err(e)) => panic!("Error reading FASTX record: {e}"),
+                None => None,
+            },
+            Self::Bam { reader, header } => {
+                let mut record_buf = RecordBuf::default();
+                let block_size = reader
+                    .read_record_buf(header, &mut record_buf)
+                    .expect("Error reading BAM record");
+                if block_size == 0 {
+                    return None;
+                }
+
+                let id = record_buf
+                    .name()
+                    .map(|name| String::from_utf8_lossy(name.as_ref()).into_owned())
+                    .unwrap_or_else(|| "*".to_string());
+                let seq = CachedRev::new(record_buf.sequence().as_ref().to_vec(), false);
+                Some(TextRecord::Sam {
+                    id,
+                    seq,
+                    record_buf,
+                })
+            }
+            Self::Sam { reader, header } => {
+                let mut record_buf = RecordBuf::default();
+                let bytes_read = reader
+                    .read_record_buf(header, &mut record_buf)
+                    .expect("Failed to read a SAM alignment record");
+                if bytes_read == 0 {
+                    return None;
+                }
+
+                let id = record_buf
+                    .name()
+                    .map(|name| String::from_utf8_lossy(name.as_ref()).into_owned())
+                    .unwrap_or_else(|| "*".to_string());
+                let seq = CachedRev::new(record_buf.sequence().as_ref().to_vec(), false);
+                Some(TextRecord::Sam {
+                    id,
+                    seq,
+                    record_buf,
+                })
+            }
+        }
+    }
 }
 
 /// Thread-safe iterator giving *batches* of (pattern, text) pairs.
@@ -62,11 +171,41 @@ pub struct InputIterator<'a> {
     rev: bool,
 }
 
-fn parse_file(path: &PathBuf) -> Box<dyn FastxReader> {
-    if path == Path::new("") || path == Path::new("-") {
-        parse_fastx_stdin().unwrap()
+fn parse_file(path: &PathBuf) -> (InputReader, Option<Arc<noodles::sam::Header>>) {
+    if is_bam_path(path) {
+        let mut reader = bam::io::Reader::new(
+            File::open(path)
+                .unwrap_or_else(|e| panic!("Failed to open BAM input `{}`: {e}", path.display())),
+        );
+        let header = Arc::new(reader.read_header().unwrap_or_else(|e| {
+            panic!("Failed to read BAM header from `{}`: {e}", path.display())
+        }));
+        (
+            InputReader::Bam {
+                reader,
+                header: header.clone(),
+            },
+            Some(header),
+        )
+    } else if is_sam_path(path) {
+        let mut reader =
+            sam::io::Reader::new(BufReader::new(File::open(path).unwrap_or_else(|e| {
+                panic!("Failed to open SAM input `{}`: {e}", path.display())
+            })));
+        let header = Arc::new(reader.read_header().unwrap_or_else(|e| {
+            panic!("Failed to read SAM header from `{}`: {e}", path.display())
+        }));
+        (
+            InputReader::Sam {
+                reader,
+                header: header.clone(),
+            },
+            Some(header),
+        )
+    } else if path == Path::new("") || path == Path::new("-") {
+        (InputReader::Fastx(parse_fastx_stdin().unwrap()), None)
     } else {
-        parse_fastx_file(path).unwrap()
+        (InputReader::Fastx(parse_fastx_file(path).unwrap()), None)
     }
 }
 
@@ -80,8 +219,8 @@ impl<'a> InputIterator<'a> {
         max_batch_bytes: Option<usize>,
         max_batch_patterns: Option<usize>,
         rev: bool,
-    ) -> Self {
-        let reader = parse_file(&paths[0]);
+    ) -> (Self, Option<Arc<noodles::sam::Header>>) {
+        let (reader, header) = parse_file(&paths[0]);
         // Just empty state when we create the iterator
         let batch_pattern_limit = max_batch_patterns.unwrap_or(DEFAULT_BATCH_PATTERNS);
         let state = RecordState {
@@ -91,14 +230,17 @@ impl<'a> InputIterator<'a> {
             pat_idx: patterns.len() / batch_pattern_limit + 2,
             batch_id: 0,
         };
-        Self {
-            patterns,
-            paths,
-            state: Mutex::new(state),
-            batch_byte_limit: max_batch_bytes.unwrap_or(DEFAULT_BATCH_BYTES),
-            batch_pattern_limit,
-            rev,
-        }
+        (
+            Self {
+                patterns,
+                paths,
+                state: Mutex::new(state),
+                batch_byte_limit: max_batch_bytes.unwrap_or(DEFAULT_BATCH_BYTES),
+                batch_pattern_limit,
+                rev,
+            },
+            header,
+        )
     }
 
     /// Get the next batch, or returns None when done.
@@ -123,19 +265,8 @@ impl<'a> InputIterator<'a> {
             'outer: loop {
                 // Make sure we have a current record, just so we can unwrap
                 let current_record = loop {
-                    match state.reader.next() {
-                        Some(Ok(rec)) => {
-                            let id = String::from_utf8(rec.id().to_vec()).unwrap().to_string();
-                            let seq = rec.seq().into_owned();
-                            // RC is computed later to avoid blocking the reader.
-                            let static_text = CachedRev::new(seq, false);
-                            break TextRecord {
-                                id,
-                                seq: static_text,
-                                quality: rec.qual().unwrap_or(&[]).to_vec(),
-                            };
-                        }
-                        Some(Err(e)) => panic!("Error reading FASTA record: {e}"),
+                    match state.reader.next_record() {
+                        Some(record) => break record,
                         None => {
                             // Return last batch for the current file.
                             if !text_batch.is_empty() {
@@ -149,14 +280,14 @@ impl<'a> InputIterator<'a> {
                                 return None;
                             }
                             // Start reading next file.
-                            state.reader = parse_file(&self.paths[state.file_idx]);
+                            state.reader = parse_file(&self.paths[state.file_idx]).0;
                             continue;
                         }
                     }
                 };
 
                 // We get the ref to the current record we have available
-                let record_len = current_record.seq.text.len();
+                let record_len = current_record.seq().text.len();
                 bytes_in_batch += record_len;
 
                 log::trace!(
@@ -177,7 +308,7 @@ impl<'a> InputIterator<'a> {
 
             if self.rev {
                 for text_record in &mut text_batch {
-                    text_record.seq.initialize_rev();
+                    text_record.seq_mut().initialize_rev();
                 }
             }
 
@@ -250,7 +381,7 @@ mod tests {
 
         // Create the iterator
         let paths = vec![file.path().to_path_buf()];
-        let iter = InputIterator::new(&paths, &patterns, Some(500), None, true);
+        let (iter, _) = InputIterator::new(&paths, &patterns, Some(500), None, true);
 
         // Pull 10 batches
         let mut batch_id = 0;
@@ -261,7 +392,7 @@ mod tests {
                 .1
                 .2
                 .iter()
-                .map(|item| item.seq.text.clone())
+                .map(|item| item.seq().text.clone())
                 .collect::<std::collections::HashSet<_>>();
             let text_len = unique_texts.iter().map(|text| text.len()).sum::<usize>();
             let n_patterns = batch
