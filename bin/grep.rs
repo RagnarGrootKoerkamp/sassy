@@ -453,6 +453,10 @@ impl Args {
             0 => {
                 // No argument. Read from stdin.
                 self.base.paths = vec![PathBuf::from("")];
+                if !self.more_columns.is_empty() {
+                    eprintln!("`--more-columns` applies to SAM/BAM inputs. Ignored for fastx input.");
+                    self.more_columns.clear();
+                }
             }
 
             1 => {
@@ -463,11 +467,10 @@ impl Args {
                         panic!(
                             "`--sam` does not apply to SAM/BAM input to avoid confusion. Remove `--sam`"
                         );
-                    } else if !self.more_columns.is_empty() {
-                        eprintln!(
-                            "`--more-columns` applies to SAM/BAM inputs. Ignored for fastx input."
-                        );
                     }
+                } else if !self.more_columns.is_empty() {
+                    eprintln!("`--more-columns` applies to SAM/BAM inputs. Ignored for fastx input.");
+                    self.more_columns.clear();
                 }
             }
 
@@ -475,6 +478,9 @@ impl Args {
                 // Multiple inputs. Does not support multiple alignment file input.
                 if self.base.paths.iter().any(|path| is_alignment_path(path)) {
                     panic!("Only fastx files are supported as multiple inputs.")
+                } else if !self.more_columns.is_empty() {
+                    eprintln!("`--more-columns` applies to SAM/BAM inputs. Ignored for fastx input.");
+                    self.more_columns.clear();
                 }
             }
         }
@@ -719,19 +725,22 @@ impl Args {
         if self.filter.is_some() {
             let writer = &mut **filter_writer.as_mut().unwrap();
 
-            !self.base.invert && !matches.is_empty() | self.base.invert && matches.is_empty();
-            match (text, writer) {
-                (TextRecord::Fastx { .. }, FilterWriter::Fastx(writer)) => {
-                    self.print_matching_record(text, writer);
-                }
-                (TextRecord::Sam { record_buf, .. }, FilterWriter::Sam { writer, header }) => {
-                    self.print_matching_alignment_record(record_buf, &matches, header, writer);
-                }
-                (TextRecord::Sam { record_buf, .. }, FilterWriter::Bam { writer, header }) => {
-                    self.print_matching_alignment_record(record_buf, &matches, header, writer);
-                }
-                _ => {
-                    // Should not happen.
+            if (!self.base.invert && !matches.is_empty())
+                || (self.base.invert && matches.is_empty())
+            {
+                match (text, writer) {
+                    (TextRecord::Fastx { .. }, FilterWriter::Fastx(writer)) => {
+                        self.print_matching_record(text, writer);
+                    }
+                    (TextRecord::Sam { record_buf, .. }, FilterWriter::Sam { writer, header }) => {
+                        self.print_matching_alignment_record(record_buf, &matches, header, writer);
+                    }
+                    (TextRecord::Sam { record_buf, .. }, FilterWriter::Bam { writer, header }) => {
+                        self.print_matching_alignment_record(record_buf, &matches, header, writer);
+                    }
+                    _ => {
+                        // Should not happen.
+                    }
                 }
             }
         }
@@ -1004,7 +1013,7 @@ pub fn format_alignment_record_as_tsv(
             SEQ => Some(fields[9].to_string()),
             QUAL => Some(fields[10].to_string()),
             DATA => Some(fields[11..].join(";")),
-            _ => None,
+            _ => Some("".to_string()),
         })
         .join("\t")
 }
