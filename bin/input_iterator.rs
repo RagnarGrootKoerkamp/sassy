@@ -1,5 +1,5 @@
-use crate::sam::{is_alignment_path, is_bam_path, is_sam_path};
-use needletail::{FastxReader, parse_fastx_file, parse_fastx_stdin, quality};
+use crate::grep::{is_bam_path, is_sam_path};
+use needletail::{FastxReader, parse_fastx_file, parse_fastx_stdin};
 use noodles::{
     bam,
     sam::{self, alignment::RecordBuf},
@@ -165,7 +165,7 @@ impl InputReader {
 pub struct InputIterator<'a> {
     patterns: &'a [PatternRecord],
     paths: &'a Vec<PathBuf>,
-    pub(super) state: Mutex<RecordState>,
+    state: Mutex<RecordState>,
     batch_byte_limit: usize,
     batch_pattern_limit: usize,
     rev: bool,

@@ -1,6 +1,6 @@
 use crate::{
     input_iterator::{InputIterator, PatternRecord},
-    sam::is_alignment_path,
+    grep::is_alignment_path,
 };
 use sassy::{
     RcSearchAble, Searcher, Strand,

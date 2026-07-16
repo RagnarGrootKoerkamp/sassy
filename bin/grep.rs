@@ -9,8 +9,7 @@ use std::{
 use colored::Colorize;
 use needletail::parse_fastx_file;
 use noodles::{
-    bam::{self, io::reader::header::sam_header},
-    bgzf,
+    bam, bgzf,
     sam::{
         self,
         alignment::{
@@ -229,7 +228,7 @@ impl GrepArgs {
             grep: true,
             search,
             filter,
-            more_columns: SamColumn::parse_list(more_columns.as_deref()),
+            more_columns: parse_alignment_columns(more_columns),
             annotate: false,
         }
         .run()
@@ -381,7 +380,7 @@ impl SearchArgs {
             grep: false,
             search: Some(PathBuf::from("")),
             filter,
-            more_columns: SamColumn::parse_list(more_columns.as_deref()),
+            more_columns: parse_alignment_columns(more_columns),
             annotate: false,
         }
         .run()
@@ -579,7 +578,7 @@ impl Args {
                 "match_region",
                 "cigar",
             ];
-            columns.extend(args.more_columns.iter().map(|column| column.name()));
+            columns.extend(args.more_columns.iter().map(String::as_str));
             let header = format!("{}\n", columns.join("\t")); // TODO: data columns
             write!(writer, "{header}").unwrap();
 
@@ -824,12 +823,7 @@ impl Args {
     ) {
         let mut record = record_buf.clone();
         if self.annotate && !matches.is_empty() {
-            crate::sam::annotate_bam_record(
-                &mut record,
-                matches,
-                self.base.alphabet,
-                self.base.sam,
-            );
+            annotate_alignment_record(&mut record, matches, self.base.alphabet, self.base.sam);
         }
         writer
             .write_alignment_record(header, &record)
@@ -850,15 +844,17 @@ impl Args {
         let additional_columns = if !self.more_columns.is_empty()
             && let TextRecord::Sam { record_buf, .. } = text
         {
-            let fields = crate::sam::sam_fields(
-                header.expect("BAM header metadata is unavailable for this output record"),
+            let fields = format_alignment_record_as_tsv(
                 record_buf,
+                &self.more_columns,
+                header.expect("BAM header metadata is unavailable for this output record"),
             );
             format!(
                 "\t{}",
                 self.more_columns
                     .iter()
-                    .map(|column| format!("{}={}", column.name(), column.value(&fields)))
+                    .zip(fields.split('\t'))
+                    .map(|(column, value)| format!("{column}={value}"))
                     .collect::<Vec<_>>()
                     .join("\t")
             )
@@ -902,12 +898,12 @@ impl Args {
         let start = m.text_start;
         let end = m.text_end;
         let slice = &text.seq().text[start..end];
-        let match_region = self.format_match_region(slice, m.strand);
+        let match_region = format_match_region(self.base.alphabet, self.base.sam, slice, m.strand);
         let match_region = String::from_utf8_lossy(&match_region);
 
         let pat_id = &pattern.id;
         let text_id = text.id();
-        let cigar = self.format_cigar(&m.cigar, m.strand);
+        let cigar = format_cigar(self.base.sam, &m.cigar, m.strand);
         let strand = match m.strand {
             Strand::Fwd => "+",
             Strand::Rc => "-",
@@ -921,10 +917,8 @@ impl Args {
             && let TextRecord::Sam { record_buf, .. } = text
             && let Some(header) = header
         {
-            let fields = crate::sam::sam_fields(header, record_buf);
-            for column in &self.more_columns {
-                write!(writer, "\t{}", column.value(&fields)).unwrap();
-            }
+            let fields = format_alignment_record_as_tsv(record_buf, &self.more_columns, header);
+            write!(writer, "\t{fields}").unwrap();
         }
         writeln!(writer).unwrap();
     }
@@ -959,6 +953,32 @@ const TLEN: &str = "TLEN";
 const SEQ: &str = "SEQ";
 const QUAL: &str = "QUAL";
 const DATA: &str = "DATA";
+
+const ALIGNMENT_COLUMNS: [&str; 12] = [
+    QNAME, FLAG, RNAME, POS, MAPQ, CIGAR, RNEXT, PNEXT, TLEN, SEQ, QUAL, DATA,
+];
+
+fn parse_alignment_columns(columns: Option<String>) -> Vec<String> {
+    columns
+        .into_iter()
+        .flat_map(|columns| {
+            columns
+                .split(',')
+                .map(str::trim)
+                .map(str::to_ascii_uppercase)
+                .collect::<Vec<_>>()
+        })
+        .flat_map(|column| {
+            if column == "ALL" {
+                ALIGNMENT_COLUMNS.iter().map(ToString::to_string).collect()
+            } else if column.is_empty() {
+                Vec::new()
+            } else {
+                vec![column]
+            }
+        })
+        .collect()
+}
 
 /// Format an alignement record as string to attach to the tsv output.
 /// Uses noodles' built-in IO interface to ensure compliance.
@@ -1012,7 +1032,7 @@ const MATCH_REGION_TAG: Tag = Tag::new(b's', b'R');
 const MATCH_CIGAR_TAG: Tag = Tag::new(b's', b'G');
 
 /// Annotate Sassy match data to BAM tags.
-pub fn annotate_bam_record(
+pub fn annotate_alignment_record(
     record: &mut RecordBuf,
     matches: &[(&PatternRecord, Match)],
     alphabet: Alphabet,
@@ -1129,11 +1149,11 @@ pub fn format_cigar(sam_output: bool, cigar: &Cigar, strand: Strand) -> String {
 #[cfg(test)]
 mod test {
     use clap::Parser;
-    use pa_types::Cigar;
+    use noodles::sam::alignment::record_buf::data::field::Value;
+    use pa_types::{Cigar, CigarElem, CigarOp};
     use sassy::profiles::{Dna, Profile};
 
-    use super::{Args, GrepArgs, SearchArgs};
-    use sassy::Strand;
+    use super::*;
 
     #[test]
     fn amplicon_crash() {
@@ -1172,20 +1192,32 @@ mod test {
         // In SAM mode, RC matches are still in text direction.
         let slice = b"AAGT";
         assert_eq!(
-            args_dft.format_match_region(slice, Strand::Rc),
+            format_match_region(args_dft.base.alphabet, args_dft.base.sam, slice, Strand::Rc),
             Dna::reverse_complement(slice)
         );
         assert_eq!(
-            args_sam.format_match_region(slice, Strand::Rc),
+            format_match_region(args_sam.base.alphabet, args_sam.base.sam, slice, Strand::Rc),
             b"AAGT".to_vec()
         );
 
         // In SAM mode, RC cigars are still in text direction.
         let cigar = Cigar::from_string("2=1X3D");
-        assert_eq!(args_dft.format_cigar(&cigar, Strand::Rc), "2=1X3D");
-        assert_eq!(args_sam.format_cigar(&cigar, Strand::Rc), "3D1X2=");
-        assert_eq!(args_sam.format_cigar(&cigar, Strand::Fwd), "2=1X3D");
-        assert_eq!(args_dft.format_cigar(&cigar, Strand::Fwd), "2=1X3D");
+        assert_eq!(
+            format_cigar(args_dft.base.sam, &cigar, Strand::Rc),
+            "2=1X3D"
+        );
+        assert_eq!(
+            format_cigar(args_sam.base.sam, &cigar, Strand::Rc),
+            "3D1X2="
+        );
+        assert_eq!(
+            format_cigar(args_sam.base.sam, &cigar, Strand::Fwd),
+            "2=1X3D"
+        );
+        assert_eq!(
+            format_cigar(args_dft.base.sam, &cigar, Strand::Fwd),
+            "2=1X3D"
+        );
     }
 
     fn test_args(sam: bool) -> Args {
@@ -1209,5 +1241,111 @@ mod test {
             more_columns: Vec::new(),
             annotate: false,
         }
+    }
+
+    #[test]
+    fn format_alignment_record_as_tsv_formats_requested_columns() {
+        let (header, record) = {
+            let data = b"@HD\tVN:1.6\n@SQ\tSN:chr20\tLN:1000\nr1\t0\tchr20\t1\t60\t4M\t*\t0\t0\tACGT\t!!!!\tNM:i:0\n";
+            let mut reader = sam::io::Reader::new(&data[..]);
+            let header = reader.read_header().unwrap();
+            let record = reader.record_bufs(&header).next().unwrap().unwrap();
+            (header, record)
+        };
+        let columns = [
+            QNAME, FLAG, RNAME, POS, MAPQ, CIGAR, RNEXT, PNEXT, TLEN, SEQ, QUAL, DATA,
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            format_alignment_record_as_tsv(&record, &columns, &header),
+            "r1\t0\tchr20\t1\t60\t4M\t*\t0\t0\tACGT\t!!!!\tNM:i:0",
+        );
+    }
+
+    #[test]
+    fn annotate_bam_record_writes_and_replaces_sassy_tags() {
+        let mut record = {
+            let data = b"@HD\tVN:1.6\n@SQ\tSN:chr20\tLN:1000\nr1\t0\tchr20\t1\t60\t4M\t*\t0\t0\tACGT\t!!!!\tNM:i:0\n";
+            let mut reader = sam::io::Reader::new(&data[..]);
+            let header = reader.read_header().unwrap();
+            let record = reader.record_bufs(&header).next().unwrap().unwrap();
+            record
+        };
+        record.data_mut().insert(Tag::from(*b"sN"), Value::from(99));
+        let patterns = [
+            PatternRecord {
+                id: "foo/bar".into(),
+                seq: b"AC".to_vec(),
+            },
+            PatternRecord {
+                id: "rev".into(),
+                seq: b"AC".to_vec(),
+            },
+        ];
+
+        let matches = [
+            (
+                &patterns[0],
+                Match {
+                    pattern_idx: 0,
+                    text_idx: 0,
+                    text_start: 0,
+                    text_end: 2,
+                    pattern_start: 0,
+                    pattern_end: 2,
+                    cost: 0,
+                    strand: Strand::Fwd,
+                    cigar: Cigar {
+                        ops: vec![CigarElem::new(CigarOp::Match, 2)],
+                    },
+                },
+            ),
+            (
+                &patterns[1],
+                Match {
+                    pattern_idx: 1,
+                    text_idx: 0,
+                    text_start: 2,
+                    text_end: 4,
+                    pattern_start: 0,
+                    pattern_end: 2,
+                    cost: 1,
+                    strand: Strand::Rc,
+                    cigar: Cigar {
+                        ops: vec![CigarElem::new(CigarOp::Match, 2)],
+                    },
+                },
+            ),
+        ];
+
+        annotate_alignment_record(&mut record, &matches, Alphabet::Dna, false);
+
+        let data = record.data();
+        assert_eq!(data.get(&Tag::from(*b"sN")), Some(&Value::from(2u32)));
+        assert_eq!(
+            data.get(&Tag::from(*b"sC")),
+            Some(&Value::from(vec![0i32, 1]))
+        );
+        assert_eq!(
+            data.get(&Tag::from(*b"sS")),
+            Some(&Value::from(vec![0u32, 1]))
+        );
+        assert_eq!(
+            data.get(&Tag::from(*b"sB")),
+            Some(&Value::from(vec![0u32, 2]))
+        );
+        assert_eq!(
+            data.get(&Tag::from(*b"sE")),
+            Some(&Value::from(vec![2u32, 4]))
+        );
+        assert_eq!(
+            data.get(&Tag::from(*b"sP")),
+            Some(&Value::from("foo/bar,rev"))
+        );
+        assert_eq!(data.get(&Tag::from(*b"sR")), Some(&Value::from("AC,AC")));
+        assert_eq!(data.get(&Tag::from(*b"sG")), Some(&Value::from("2=,2=")));
     }
 }
