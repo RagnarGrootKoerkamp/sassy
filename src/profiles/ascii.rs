@@ -82,8 +82,8 @@ pub fn ascii_u64_search(seq: &[u8; 64], bases: &[u8], out: &mut [u64]) {
             let m = u8x32::splat(base);
             let eq0 = chunk0.simd_eq(m);
             let eq1 = chunk1.simd_eq(m);
-            let low = eq0.to_bitmask() as u32 as u64;
-            let high = eq1.to_bitmask() as u32 as u64;
+            let low = eq0.to_bitmask() as u64;
+            let high = eq1.to_bitmask() as u64;
             *out.get_unchecked_mut(i) = (high << 32) | low;
         }
     }
@@ -111,8 +111,8 @@ fn ascii_u64_search_case_insensitive(seq: &[u8; 64], bases: &[u8], out: &mut [u6
             let m = u8x32::splat(base | 0x20);
             let eq0 = lower0.simd_eq(m);
             let eq1 = lower1.simd_eq(m);
-            let low = eq0.to_bitmask() as u32 as u64;
-            let high = eq1.to_bitmask() as u32 as u64;
+            let low = eq0.to_bitmask() as u64;
+            let high = eq1.to_bitmask() as u64;
             *out.get_unchecked_mut(i) = (high << 32) | low;
         }
     }

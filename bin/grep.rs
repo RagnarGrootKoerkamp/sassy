@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     fs::File,
     io::{BufRead, Read, Write},
     path::{Path, PathBuf},
@@ -463,12 +463,10 @@ impl Args {
                         panic!(
                             "`--sam` does not apply to SAM/BAM input to avoid confusion. Remove `--sam`"
                         );
-                    } else {
-                        if !self.more_columns.is_empty() {
-                            eprintln!(
-                                "`--more-columns` applies to SAM/BAM inputs. Ignored for fastx input."
-                            );
-                        }
+                    } else if !self.more_columns.is_empty() {
+                        eprintln!(
+                            "`--more-columns` applies to SAM/BAM inputs. Ignored for fastx input."
+                        );
                     }
                 }
             }
@@ -721,7 +719,7 @@ impl Args {
         if self.filter.is_some() {
             let writer = &mut **filter_writer.as_mut().unwrap();
 
-            if !self.base.invert && !matches.is_empty() | self.base.invert && matches.is_empty() {}
+            !self.base.invert && !matches.is_empty() | self.base.invert && matches.is_empty();
             match (text, writer) {
                 (TextRecord::Fastx { .. }, FilterWriter::Fastx(writer)) => {
                     self.print_matching_record(text, writer);
@@ -807,7 +805,7 @@ impl Args {
             writeln!(writer, "@{}", text.id()).unwrap();
             writeln!(writer, "{}", String::from_utf8_lossy(&text.seq().text)).unwrap();
             writeln!(writer, "+").unwrap();
-            writeln!(writer, "{}", String::from_utf8_lossy(&text.quality())).unwrap();
+            writeln!(writer, "{}", String::from_utf8_lossy(text.quality())).unwrap();
         } else {
             writeln!(writer, ">{}", text.id()).unwrap();
             writeln!(writer, "{}", String::from_utf8_lossy(&text.seq().text)).unwrap();
@@ -819,7 +817,7 @@ impl Args {
         record_buf: &RecordBuf,
         matches: &[(&PatternRecord, Match)],
         header: &Arc<noodles::sam::Header>,
-        writer: &mut (dyn sam::alignment::io::Write),
+        writer: &mut dyn sam::alignment::io::Write,
     ) {
         let mut record = record_buf.clone();
         if self.annotate && !matches.is_empty() {
