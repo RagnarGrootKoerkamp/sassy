@@ -22,18 +22,21 @@ jobs:
             target: aarch64-unknown-linux-gnu
           - os: macos-14
             target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      # - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-multivers
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'x86_64-pc-windows-msvc'
         run: cargo install --version '>=0.12.0' cargo-multivers
-      - name: Build & test & rename
+      - name: Build & test
         run: |
+          rm .cargo/config.toml
           mv .cargo/config-portable.toml .cargo/config.toml
 
           # Test base configuration
@@ -44,13 +47,22 @@ jobs:
           # Output artifact directory
           mkdir -p artifacts
 
+      - name: Non-windows Multivers build
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
           # For x86-64, use cargo-multivers to build a AVX2+AVX-512 combined binary.
-          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-gnu" ]; then
-            cargo multivers --profile dist
-            mv target/cargo-multivers/${{ matrix.target }}/release/sassy artifacts/sassy-${{ matrix.target }}
-          else
-            mv target/dist/sassy artifacts/sassy-${{ matrix.target }}
-          fi
+          cargo multivers --profile dist
+          mv target/cargo-multivers/${{ matrix.target }}/release/sassy artifacts/sassy-${{ matrix.target }}
+      - name: Windows Multivers build
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: |
+          # For x86-64, use cargo-multivers to build a AVX2+AVX-512 combined binary.
+          cargo multivers --profile dist
+          mv target/cargo-multivers/${{ matrix.target }}/release/sassy.exe artifacts/sassy-${{ matrix.target }}.exe
+      - name: Rename artifact
+        if: matrix.target != 'x86_64-unknown-linux-gnu' && matrix.target != 'x86_64-pc-windows-msvc'
+        run: |
+          mv target/dist/sassy artifacts/sassy-${{ matrix.target }}
 
       - uses: actions/upload-artifact@v6
         with:
