@@ -16,12 +16,14 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-22.04
+          # - os: ubuntu-22.04
+          #   target: x86_64-unknown-linux-gnu
+          # - os: ubuntu-22.04-arm
+          #   target: aarch64-unknown-linux-gnu
+          # - os: macos-14
+          #   target: aarch64-apple-darwin
+          - os: windows-latest
             target: x86_64-unknown-linux-gnu
-          - os: ubuntu-22.04-arm
-            target: aarch64-unknown-linux-gnu
-          - os: macos-14
-            target: aarch64-apple-darwin
 
     runs-on: ${{ matrix.os }}
 
@@ -32,7 +34,7 @@ jobs:
       - name: Install cargo-multivers
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo install --version '>=0.12.0' cargo-multivers
-      - name: Build & test & rename
+      - name: Build & test
         run: |
           mv .cargo/config-portable.toml .cargo/config.toml
 
@@ -44,13 +46,16 @@ jobs:
           # Output artifact directory
           mkdir -p artifacts
 
+      - name: Rename artifact
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
           # For x86-64, use cargo-multivers to build a AVX2+AVX-512 combined binary.
-          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-gnu" ]; then
-            cargo multivers --profile dist
-            mv target/cargo-multivers/${{ matrix.target }}/release/sassy artifacts/sassy-${{ matrix.target }}
-          else
-            mv target/dist/sassy artifacts/sassy-${{ matrix.target }}
-          fi
+          cargo multivers --profile dist
+          mv target/cargo-multivers/${{ matrix.target }}/release/sassy artifacts/sassy-${{ matrix.target }}
+      - name: Rename artifact
+        if: matrix.target != 'x86_64-unknown-linux-gnu'
+        run: |
+          mv target/dist/sassy artifacts/sassy-${{ matrix.target }}
 
       - uses: actions/upload-artifact@v6
         with:
