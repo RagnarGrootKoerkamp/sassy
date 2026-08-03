@@ -3,11 +3,21 @@ use std::{
     fs::File,
     io::{BufRead, Read, Write},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 use colored::Colorize;
 use needletail::parse_fastx_file;
+use noodles::{
+    bam, bgzf,
+    sam::{
+        self,
+        alignment::{
+            RecordBuf, io::Write as AlignmentWrite, record::data::field::Tag,
+            record_buf::data::field::Value,
+        },
+    },
+};
 use pa_types::Cigar;
 use sassy::{
     Match, Searcher, Strand,
@@ -16,10 +26,11 @@ use sassy::{
 };
 
 use crate::input_iterator::{InputIterator, PatternRecord, TextBatch, TextRecord};
+use itertools::Itertools;
 
 // TODO: Support ASCII alphabet.
 #[derive(clap::ValueEnum, Default, Clone, Copy, PartialEq)]
-enum Alphabet {
+pub(crate) enum Alphabet {
     Dna,
     #[default]
     Iupac,
@@ -107,7 +118,7 @@ pub struct BaseArgs {
     sam: bool,
 
     // Positional
-    /// Input Fastx files. May be gzipped.
+    /// Input FASTX or BAM/SAM files. FASTX may be gzipped.
     paths: Vec<PathBuf>,
 }
 
@@ -127,6 +138,10 @@ pub struct GrepArgs {
     /// Filtered output file. Empty or "-" for stdout.
     #[arg(long, default_missing_value = "-", num_args(0..=1))]
     filter: Option<PathBuf>,
+
+    /// Extra SAM fields to append to TSV output for SAM/BAM input.
+    #[arg(long, value_name = "FIELDS")]
+    more_columns: Option<String>,
 }
 
 /// Thin mirror of `GrepArgs` for lightweight `agrep` subcommand.
@@ -154,6 +169,10 @@ pub struct SearchArgs {
     /// Filtered output file. Empty or "-" for stdout.
     #[arg(long, default_missing_value = "-", num_args(0..=1))]
     filter: Option<PathBuf>,
+
+    /// Extra SAM fields to append to TSV output for SAM/BAM input.
+    #[arg(long, value_name = "FIELDS")]
+    more_columns: Option<String>,
 }
 
 #[derive(clap::Parser, Clone)]
@@ -164,6 +183,10 @@ pub struct FilterArgs {
     /// TSV output file to write all matches. Empty or "-" for stdout.
     #[arg(long, default_missing_value = "-", num_args(0..=1))]
     search: Option<PathBuf>,
+
+    /// Add Sassy match data as local-use SAM/BAM tags when filtering alignment input.
+    #[arg(long)]
+    annotate: bool,
 }
 
 struct Args {
@@ -174,6 +197,20 @@ struct Args {
     grep: bool,
     search: Option<PathBuf>,
     filter: Option<PathBuf>,
+    more_columns: Vec<String>,
+    annotate: bool,
+}
+
+enum FilterWriter {
+    Fastx(Box<dyn Write + Send>),
+    Bam {
+        writer: bam::io::Writer<bgzf::io::Writer<Box<dyn Write + Send>>>,
+        header: std::sync::Arc<sam::Header>,
+    },
+    Sam {
+        writer: sam::io::Writer<Box<dyn Write + Send>>,
+        header: Arc<sam::Header>,
+    },
 }
 
 impl GrepArgs {
@@ -183,6 +220,7 @@ impl GrepArgs {
             context,
             search,
             filter,
+            more_columns,
         } = self;
         Args {
             base,
@@ -190,6 +228,8 @@ impl GrepArgs {
             grep: true,
             search,
             filter,
+            more_columns: parse_alignment_columns(more_columns),
+            annotate: false,
         }
         .run()
     }
@@ -329,13 +369,19 @@ fn print_statistics(hist: &[usize]) {
 
 impl SearchArgs {
     pub fn run(self) {
-        let SearchArgs { base, filter } = self;
+        let SearchArgs {
+            base,
+            filter,
+            more_columns,
+        } = self;
         Args {
             base,
             context: 0,
             grep: false,
             search: Some(PathBuf::from("")),
             filter,
+            more_columns: parse_alignment_columns(more_columns),
+            annotate: false,
         }
         .run()
     }
@@ -343,13 +389,19 @@ impl SearchArgs {
 
 impl FilterArgs {
     pub fn run(self) {
-        let FilterArgs { base, search } = self;
+        let FilterArgs {
+            base,
+            search,
+            annotate,
+        } = self;
         Args {
             base,
             context: 0,
             grep: false,
             search,
             filter: Some(PathBuf::from("")),
+            more_columns: Vec::new(),
+            annotate,
         }
         .run()
     }
@@ -357,7 +409,6 @@ impl FilterArgs {
 
 fn run_batch_v2<'a, P: Profile>(
     searcher: &mut Searcher<P>,
-    //fixme: simpler return?
     results: &mut Vec<(
         &'a Path,
         (TextBatch, usize),
@@ -371,7 +422,7 @@ fn run_batch_v2<'a, P: Profile>(
     let patterns_vec: Vec<Vec<u8>> = patterns.iter().map(|p| p.seq.clone()).collect();
     let encoded = searcher.encode_patterns(&patterns_vec);
     for (i, text) in text_batch.iter().enumerate() {
-        let record_matches = searcher.search_encoded_patterns(&encoded, &text.seq.text, k);
+        let record_matches = searcher.search_encoded_patterns(&encoded, &text.seq().text, k);
         let batch_matches: Vec<_> = record_matches
             .iter()
             .cloned()
@@ -388,7 +439,7 @@ fn run_batch_v2<'a, P: Profile>(
 }
 
 impl Args {
-    fn run(mut self) {
+    fn validate_args(&mut self) {
         if self.base.invert && self.filter.is_none() {
             eprintln!(
                 "{}",
@@ -398,9 +449,45 @@ impl Args {
             );
         }
 
-        if self.base.paths.is_empty() {
-            self.base.paths = vec![PathBuf::from("")];
+        match self.base.paths.len() {
+            0 => {
+                // No argument. Read from stdin.
+                self.base.paths = vec![PathBuf::from("")];
+                if !self.more_columns.is_empty() {
+                    eprintln!("`--more-columns` applies to SAM/BAM inputs. Ignored for fastx input.");
+                    self.more_columns.clear();
+                }
+            }
+
+            1 => {
+                // One input file. Can be fast or alignment
+                let path = &self.base.paths[0];
+                if is_alignment_path(path) {
+                    if self.base.sam {
+                        panic!(
+                            "`--sam` does not apply to SAM/BAM input to avoid confusion. Remove `--sam`"
+                        );
+                    }
+                } else if !self.more_columns.is_empty() {
+                    eprintln!("`--more-columns` applies to SAM/BAM inputs. Ignored for fastx input.");
+                    self.more_columns.clear();
+                }
+            }
+
+            _ => {
+                // Multiple inputs. Does not support multiple alignment file input.
+                if self.base.paths.iter().any(|path| is_alignment_path(path)) {
+                    panic!("Only fastx files are supported as multiple inputs.")
+                } else if !self.more_columns.is_empty() {
+                    eprintln!("`--more-columns` applies to SAM/BAM inputs. Ignored for fastx input.");
+                    self.more_columns.clear();
+                }
+            }
         }
+    }
+    fn run(mut self) {
+        self.validate_args();
+
         let args = &self;
 
         let patterns = args.get_patterns();
@@ -411,13 +498,14 @@ impl Args {
             && !args.base.no_rc;
 
         let num_threads = args.base.threads.unwrap_or_else(num_cpus::get);
-        let task_iterator = &InputIterator::new(
+        let (task_iterator, sam_header) = InputIterator::new(
             &args.base.paths,
             &patterns,
             None,
             args.base.pattern_batch_size,
             rc,
         );
+        let task_iterator = &task_iterator;
 
         let output = Mutex::new((
             0,
@@ -442,7 +530,27 @@ impl Args {
                 filter_to_stdout = true;
                 Box::new(std::io::stdout()) as Box<dyn std::io::Write + Send>
             };
-            Mutex::new(writer)
+
+            if let Some(header) = sam_header.clone() {
+                // Input is an alignment file
+                if is_bam_path(path) {
+                    let mut bam_writer = bam::io::Writer::new(writer);
+                    bam_writer.write_header(&header).expect("write BAM header");
+                    Mutex::new(FilterWriter::Bam {
+                        writer: bam_writer,
+                        header,
+                    })
+                } else {
+                    let mut sam_writer = sam::io::Writer::new(writer);
+                    sam_writer.write_header(&header).expect("write SAM header");
+                    Mutex::new(FilterWriter::Sam {
+                        writer: sam_writer,
+                        header,
+                    })
+                }
+            } else {
+                Mutex::new(FilterWriter::Fastx(writer))
+            }
         });
 
         // Match writer
@@ -464,10 +572,18 @@ impl Args {
                 );
             }
 
-            let header = format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-                "pat_id", "text_id", "cost", "strand", "start", "end", "match_region", "cigar"
-            );
+            let mut columns = vec![
+                "pat_id",
+                "text_id",
+                "cost",
+                "strand",
+                "start",
+                "end",
+                "match_region",
+                "cigar",
+            ];
+            columns.extend(args.more_columns.iter().map(String::as_str));
+            let header = format!("{}\n", columns.join("\t"));
             write!(writer, "{header}").unwrap();
 
             Mutex::new(writer)
@@ -479,6 +595,7 @@ impl Args {
                 let global_histogram = &global_histogram;
                 let filter_writer = filter_writer.as_ref();
                 let match_writer = match_writer.as_ref();
+                let sam_header = sam_header.clone();
                 s.spawn(move || {
                     enum SearcherType {
                         Dna(Searcher<Dna>),
@@ -518,10 +635,10 @@ impl Args {
                                 for pattern in batch.1 {
                                     let record_matches = match &mut searcher {
                                         SearcherType::Dna(s) => {
-                                            s.search(&pattern.seq, &text.seq, k)
+                                            s.search(&pattern.seq, text.seq(), k)
                                         }
                                         SearcherType::Iupac(s) => {
-                                            s.search(&pattern.seq, &text.seq, k)
+                                            s.search(&pattern.seq, text.seq(), k)
                                         }
                                     };
                                     batch_matches
@@ -567,6 +684,7 @@ impl Args {
                                     matches,
                                     &mut filter_writer,
                                     &mut match_writer,
+                                    sam_header.as_deref(),
                                 );
                             }
                         }
@@ -581,6 +699,13 @@ impl Args {
             }
         });
 
+        if let Some(filter_writer) = filter_writer {
+            let mut filter_writer = filter_writer.into_inner().unwrap();
+            if let FilterWriter::Bam { writer, .. } = &mut filter_writer {
+                writer.try_finish().expect("finish BAM output");
+            }
+        }
+
         print_statistics(&global_histogram.into_inner().unwrap());
         assert!(output.into_inner().unwrap().1.is_empty());
     }
@@ -591,30 +716,54 @@ impl Args {
         path: &Path,
         text: &TextRecord,
         mut matches: Vec<(&PatternRecord, Match)>,
-        filter_writer: &mut Option<std::sync::MutexGuard<'_, Box<dyn Write + Send>>>,
+        filter_writer: &mut Option<std::sync::MutexGuard<'_, FilterWriter>>,
         match_writer: &mut Option<std::sync::MutexGuard<'_, Box<dyn Write + Send>>>,
+        header: Option<&noodles::sam::Header>,
     ) {
         matches.sort_by_key(|m| m.1.text_start);
         // 1. Print filter output.
         if self.filter.is_some() {
             let writer = &mut **filter_writer.as_mut().unwrap();
-            if !self.base.invert && !matches.is_empty() {
-                self.print_matching_record(text, writer);
-            }
-            if self.base.invert && matches.is_empty() {
-                self.print_matching_record(text, writer);
+
+            if (!self.base.invert && !matches.is_empty())
+                || (self.base.invert && matches.is_empty())
+            {
+                match (text, writer) {
+                    (TextRecord::Fastx { .. }, FilterWriter::Fastx(writer)) => {
+                        self.print_matching_record(text, writer);
+                    }
+                    (TextRecord::Sam { record_buf, .. }, FilterWriter::Sam { writer, header }) => {
+                        self.print_matching_alignment_record(record_buf, &matches, header, writer);
+                    }
+                    (TextRecord::Sam { record_buf, .. }, FilterWriter::Bam { writer, header }) => {
+                        self.print_matching_alignment_record(record_buf, &matches, header, writer);
+                    }
+                    _ => {
+                        // Should not happen.
+                    }
+                }
             }
         }
 
         match (self.grep, self.search.is_some()) {
             // 2. If grep, interleave with search output if needed.
-            (true, _) => {
-                self.print_matches_for_record(path, text, &matches, match_writer.as_deref_mut())
-            }
+            (true, _) => self.print_matches_for_record(
+                path,
+                header,
+                text,
+                &matches,
+                match_writer.as_deref_mut(),
+            ),
             // 3. Just write the search output.
             (false, true) => {
                 for (pattern, m) in &matches {
-                    self.print_match_tsv(pattern, text, m, match_writer.as_deref_mut().unwrap());
+                    self.print_match_tsv(
+                        pattern,
+                        header,
+                        text,
+                        m,
+                        match_writer.as_deref_mut().unwrap(),
+                    );
                 }
             }
             (false, false) => {}
@@ -661,20 +810,37 @@ impl Args {
     }
 
     fn print_matching_record(&self, text: &TextRecord, writer: &mut (dyn std::io::Write + Send)) {
-        if !text.quality.is_empty() {
-            writeln!(writer, "@{}", text.id).unwrap();
-            writeln!(writer, "{}", String::from_utf8_lossy(&text.seq.text)).unwrap();
+        if !text.quality().is_empty() {
+            writeln!(writer, "@{}", text.id()).unwrap();
+            writeln!(writer, "{}", String::from_utf8_lossy(&text.seq().text)).unwrap();
             writeln!(writer, "+").unwrap();
-            writeln!(writer, "{}", String::from_utf8_lossy(&text.quality)).unwrap();
+            writeln!(writer, "{}", String::from_utf8_lossy(text.quality())).unwrap();
         } else {
-            writeln!(writer, ">{}", text.id).unwrap();
-            writeln!(writer, "{}", String::from_utf8_lossy(&text.seq.text)).unwrap();
+            writeln!(writer, ">{}", text.id()).unwrap();
+            writeln!(writer, "{}", String::from_utf8_lossy(&text.seq().text)).unwrap();
         }
+    }
+
+    fn print_matching_alignment_record(
+        &self,
+        record_buf: &RecordBuf,
+        matches: &[(&PatternRecord, Match)],
+        header: &Arc<noodles::sam::Header>,
+        writer: &mut dyn sam::alignment::io::Write,
+    ) {
+        let mut record = record_buf.clone();
+        if self.annotate && !matches.is_empty() {
+            annotate_alignment_record(&mut record, matches, self.base.alphabet, self.base.sam);
+        }
+        writer
+            .write_alignment_record(header, &record)
+            .expect("write alignment record");
     }
 
     fn print_matches_for_record(
         &self,
         path: &Path,
+        header: Option<&sam::Header>,
         text: &TextRecord,
         matches: &Vec<(&PatternRecord, Match)>,
         mut match_writer: Option<&mut impl std::io::Write>,
@@ -682,23 +848,35 @@ impl Args {
         if matches.is_empty() {
             return;
         }
+        let additional_columns = if !self.more_columns.is_empty()
+            && let TextRecord::Sam { record_buf, .. } = text
+        {
+            let fields = format_alignment_record_as_tsv(
+                record_buf,
+                &self.more_columns,
+                header.expect("BAM header metadata is unavailable for this output record"),
+            );
+            format!("\t{}", fields)
+        } else {
+            String::new()
+        };
         eprintln!(
             "{}",
             format!(
-                "{}>{}",
+                "{}>{}{additional_columns}",
                 path.display().to_string().cyan().bold(),
-                text.id.bold()
+                text.id().bold()
             )
             .bold()
         );
         for (pattern, m) in matches {
             if let Some(match_writer) = match_writer.as_mut() {
-                self.print_match_tsv(pattern, text, m, match_writer);
+                self.print_match_tsv(pattern, header, text, m, match_writer);
             }
             let s = m.pretty_print(
                 Some(&pattern.id),
                 &pattern.seq,
-                &text.seq.text,
+                &text.seq().text,
                 PrettyPrintDirection::Text,
                 self.context,
                 PrettyPrintStyle::Full,
@@ -710,6 +888,7 @@ impl Args {
     fn print_match_tsv(
         &self,
         pattern: &PatternRecord,
+        header: Option<&sam::Header>,
         text: &TextRecord,
         m: &Match,
         writer: &mut impl std::io::Write,
@@ -717,54 +896,263 @@ impl Args {
         let cost = m.cost;
         let start = m.text_start;
         let end = m.text_end;
-        let slice = &text.seq.text[start..end];
-        let match_region = self.format_match_region(slice, m.strand);
+        let slice = &text.seq().text[start..end];
+        let match_region = format_match_region(self.base.alphabet, self.base.sam, slice, m.strand);
         let match_region = String::from_utf8_lossy(&match_region);
 
         let pat_id = &pattern.id;
-        let text_id = &text.id;
-        let cigar = self.format_cigar(&m.cigar, m.strand);
+        let text_id = text.id();
+        let cigar = format_cigar(self.base.sam, &m.cigar, m.strand);
         let strand = match m.strand {
             Strand::Fwd => "+",
             Strand::Rc => "-",
         };
-        writeln!(
+        write!(
             writer,
             "{pat_id}\t{text_id}\t{cost}\t{strand}\t{start}\t{end}\t{match_region}\t{cigar}"
         )
         .unwrap();
-    }
-
-    fn format_match_region(&self, slice: &[u8], strand: Strand) -> Vec<u8> {
-        if strand == Strand::Rc && !self.base.sam {
-            match self.base.alphabet {
-                Alphabet::Dna => <Dna as Profile>::reverse_complement(slice),
-                Alphabet::Iupac => <Iupac as Profile>::reverse_complement(slice),
-            }
-        } else {
-            slice.to_vec()
+        if !self.more_columns.is_empty()
+            && let TextRecord::Sam { record_buf, .. } = text
+            && let Some(header) = header
+        {
+            let fields = format_alignment_record_as_tsv(record_buf, &self.more_columns, header);
+            write!(writer, "\t{fields}").unwrap();
         }
-    }
-
-    fn format_cigar(&self, cigar: &Cigar, strand: Strand) -> String {
-        if strand == Strand::Rc && self.base.sam {
-            let mut cigar = cigar.clone();
-            cigar.reverse();
-            cigar.to_string()
-        } else {
-            cigar.to_string()
-        }
+        writeln!(writer).unwrap();
     }
 }
 
+/// Returns whether `path` selects BAM input using the CLI's `.bam` extension convention.
+pub fn is_bam_path(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("bam"))
+}
+
+/// Returns whether `path` selects SAM input using a `.sam` extension.
+pub fn is_sam_path(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("sam"))
+}
+
+/// Returns whether `path` is a BAM or SAM alignment input.
+pub fn is_alignment_path(path: &Path) -> bool {
+    is_bam_path(path) || is_sam_path(path)
+}
+
+const QNAME: &str = "QNAME";
+const FLAG: &str = "FLAG";
+const RNAME: &str = "RNAME";
+const POS: &str = "POS";
+const MAPQ: &str = "MAPQ";
+const CIGAR: &str = "CIGAR";
+const RNEXT: &str = "RNEXT";
+const PNEXT: &str = "PNEXT";
+const TLEN: &str = "TLEN";
+const SEQ: &str = "SEQ";
+const QUAL: &str = "QUAL";
+const DATA: &str = "DATA";
+
+const ALIGNMENT_COLUMNS: [&str; 12] = [
+    QNAME, FLAG, RNAME, POS, MAPQ, CIGAR, RNEXT, PNEXT, TLEN, SEQ, QUAL, DATA,
+];
+
+fn parse_alignment_columns(columns: Option<String>) -> Vec<String> {
+    columns
+        .into_iter()
+        .flat_map(|columns| {
+            columns
+                .split(',')
+                .map(str::trim)
+                .map(str::to_ascii_uppercase)
+                .collect::<Vec<_>>()
+        })
+        .flat_map(|column| {
+            if column == "ALL" {
+                ALIGNMENT_COLUMNS.iter().map(ToString::to_string).collect()
+            } else if column.is_empty() {
+                Vec::new()
+            } else {
+                vec![column]
+            }
+        })
+        .collect()
+}
+
+/// Format an alignement record as string to attach to the tsv output.
+/// Uses noodles' built-in IO interface to ensure compliance.
+/// Data fields in the original alignment record is joined by ";" to avoid disrupting the tsv format.
+pub fn format_alignment_record_as_tsv(
+    record: &RecordBuf,
+    more_columns: &[String],
+    header: &noodles::sam::Header,
+) -> String {
+    let mut writer = sam::io::Writer::new(Vec::new());
+    writer
+        .write_alignment_record(header, record)
+        .expect("write SAM record");
+
+    let sam_record_str = String::from_utf8(writer.into_inner()).expect("SAM record is valid UTF-8");
+    let fields = sam_record_str
+        .trim_end_matches('\n')
+        .split('\t')
+        .collect::<Vec<_>>();
+
+    more_columns
+        .iter()
+        .filter_map(|column| match column.as_str() {
+            QNAME => Some(fields[0].to_string()),
+            FLAG => Some(fields[1].to_string()),
+            RNAME => Some(fields[2].to_string()),
+            POS => Some(fields[3].to_string()),
+            MAPQ => Some(fields[4].to_string()),
+            CIGAR => Some(fields[5].to_string()),
+            RNEXT => Some(fields[6].to_string()),
+            PNEXT => Some(fields[7].to_string()),
+            TLEN => Some(fields[8].to_string()),
+            SEQ => Some(fields[9].to_string()),
+            QUAL => Some(fields[10].to_string()),
+            DATA => Some(fields[11..].join(";")),
+            _ => Some("".to_string()),
+        })
+        .join("\t")
+}
+
+// tags
+const MATCH_COUNT_TAG: Tag = Tag::new(b's', b'N');
+const MATCH_COST_TAG: Tag = Tag::new(b's', b'C');
+const MATCH_STRAND_TAG: Tag = Tag::new(b's', b'S');
+const FORWARD_STRAND_VALUE: u32 = 0u32;
+const REVERSE_STRAND_VALUE: u32 = 1u32;
+const MATCH_START_TAG: Tag = Tag::new(b's', b'B');
+const MATCH_END_TAG: Tag = Tag::new(b's', b'E');
+const MATCH_PATTERN_ID_TAG: Tag = Tag::new(b's', b'P');
+const MATCH_REGION_TAG: Tag = Tag::new(b's', b'R');
+const MATCH_CIGAR_TAG: Tag = Tag::new(b's', b'G');
+
+/// Annotate Sassy match data to BAM tags.
+pub fn annotate_alignment_record(
+    record: &mut RecordBuf,
+    matches: &[(&PatternRecord, Match)],
+    alphabet: Alphabet,
+    sam_output: bool,
+) {
+    let sequence = record.sequence().as_ref().to_owned();
+    let data = record.data_mut();
+
+    data.insert(MATCH_COUNT_TAG, Value::from(matches.len() as u32));
+    data.insert(
+        MATCH_COST_TAG,
+        Value::from(matches.iter().map(|(_, m)| m.cost).collect::<Vec<i32>>()),
+    );
+    data.insert(
+        MATCH_STRAND_TAG,
+        Value::from(
+            matches
+                .iter()
+                .map(|(_, m)| {
+                    if m.strand == Strand::Fwd {
+                        FORWARD_STRAND_VALUE
+                    } else {
+                        REVERSE_STRAND_VALUE
+                    }
+                })
+                .collect::<Vec<_>>(),
+        ),
+    );
+    data.insert(
+        MATCH_START_TAG,
+        Value::from(
+            matches
+                .iter()
+                .map(|(_, m)| m.text_start as u32)
+                .collect::<Vec<_>>(),
+        ),
+    );
+    data.insert(
+        MATCH_END_TAG,
+        Value::from(
+            matches
+                .iter()
+                .map(|(_, m)| m.text_end as u32)
+                .collect::<Vec<_>>(),
+        ),
+    );
+    data.insert(
+        MATCH_PATTERN_ID_TAG,
+        Value::from(
+            matches
+                .iter()
+                .map(|(pattern, _)| pattern.id.clone())
+                .join(","),
+        ),
+    );
+
+    data.insert(
+        MATCH_REGION_TAG,
+        Value::from(
+            matches
+                .iter()
+                .map(|(_, m)| {
+                    let region = format_match_region(
+                        alphabet,
+                        sam_output,
+                        &sequence[m.text_start..m.text_end],
+                        m.strand,
+                    );
+                    String::from_utf8_lossy(&region).into_owned()
+                })
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
+    );
+    data.insert(
+        MATCH_CIGAR_TAG,
+        Value::from(
+            matches
+                .iter()
+                .map(|(_, m)| format_cigar(sam_output, &m.cigar, m.strand))
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
+    );
+}
+
+/// Formats a matching region in Sassy's default or SAM-compatible orientation.
+pub fn format_match_region(
+    alphabet: Alphabet,
+    sam_output: bool,
+    slice: &[u8],
+    strand: Strand,
+) -> Vec<u8> {
+    if strand == Strand::Rc && !sam_output {
+        match alphabet {
+            Alphabet::Dna => <Dna as Profile>::reverse_complement(slice),
+            Alphabet::Iupac => <Iupac as Profile>::reverse_complement(slice),
+        }
+    } else {
+        slice.to_vec()
+    }
+}
+
+/// Formats a Sassy CIGAR, reversing reverse-complement matches for SAM-compatible output.
+pub fn format_cigar(sam_output: bool, cigar: &Cigar, strand: Strand) -> String {
+    if strand == Strand::Rc && sam_output {
+        let mut cigar = cigar.clone();
+        cigar.reverse();
+        cigar.to_string()
+    } else {
+        cigar.to_string()
+    }
+}
 #[cfg(test)]
 mod test {
     use clap::Parser;
-    use pa_types::Cigar;
+    use noodles::sam::alignment::record_buf::data::field::Value;
+    use pa_types::{Cigar, CigarElem, CigarOp};
     use sassy::profiles::{Dna, Profile};
 
-    use super::{Args, GrepArgs, SearchArgs};
-    use sassy::Strand;
+    use super::*;
 
     #[test]
     fn amplicon_crash() {
@@ -803,20 +1191,32 @@ mod test {
         // In SAM mode, RC matches are still in text direction.
         let slice = b"AAGT";
         assert_eq!(
-            args_dft.format_match_region(slice, Strand::Rc),
+            format_match_region(args_dft.base.alphabet, args_dft.base.sam, slice, Strand::Rc),
             Dna::reverse_complement(slice)
         );
         assert_eq!(
-            args_sam.format_match_region(slice, Strand::Rc),
+            format_match_region(args_sam.base.alphabet, args_sam.base.sam, slice, Strand::Rc),
             b"AAGT".to_vec()
         );
 
         // In SAM mode, RC cigars are still in text direction.
         let cigar = Cigar::from_string("2=1X3D");
-        assert_eq!(args_dft.format_cigar(&cigar, Strand::Rc), "2=1X3D");
-        assert_eq!(args_sam.format_cigar(&cigar, Strand::Rc), "3D1X2=");
-        assert_eq!(args_sam.format_cigar(&cigar, Strand::Fwd), "2=1X3D");
-        assert_eq!(args_dft.format_cigar(&cigar, Strand::Fwd), "2=1X3D");
+        assert_eq!(
+            format_cigar(args_dft.base.sam, &cigar, Strand::Rc),
+            "2=1X3D"
+        );
+        assert_eq!(
+            format_cigar(args_sam.base.sam, &cigar, Strand::Rc),
+            "3D1X2="
+        );
+        assert_eq!(
+            format_cigar(args_sam.base.sam, &cigar, Strand::Fwd),
+            "2=1X3D"
+        );
+        assert_eq!(
+            format_cigar(args_dft.base.sam, &cigar, Strand::Fwd),
+            "2=1X3D"
+        );
     }
 
     fn test_args(sam: bool) -> Args {
@@ -829,6 +1229,7 @@ mod test {
             context,
             search,
             filter,
+            more_columns: _,
         } = GrepArgs::try_parse_from(argv).unwrap();
         Args {
             base,
@@ -836,6 +1237,114 @@ mod test {
             grep: true,
             search,
             filter,
+            more_columns: Vec::new(),
+            annotate: false,
         }
+    }
+
+    #[test]
+    fn format_alignment_record_as_tsv_formats_requested_columns() {
+        let (header, record) = {
+            let data = b"@HD\tVN:1.6\n@SQ\tSN:chr20\tLN:1000\nr1\t0\tchr20\t1\t60\t4M\t*\t0\t0\tACGT\t!!!!\tNM:i:0\n";
+            let mut reader = sam::io::Reader::new(&data[..]);
+            let header = reader.read_header().unwrap();
+            let record = reader.record_bufs(&header).next().unwrap().unwrap();
+            (header, record)
+        };
+        let columns = [
+            QNAME, FLAG, RNAME, POS, MAPQ, CIGAR, RNEXT, PNEXT, TLEN, SEQ, QUAL, DATA,
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            format_alignment_record_as_tsv(&record, &columns, &header),
+            "r1\t0\tchr20\t1\t60\t4M\t*\t0\t0\tACGT\t!!!!\tNM:i:0",
+        );
+    }
+
+    #[test]
+    fn annotate_bam_record_writes_and_replaces_sassy_tags() {
+        let mut record = {
+            let data = b"@HD\tVN:1.6\n@SQ\tSN:chr20\tLN:1000\nr1\t0\tchr20\t1\t60\t4M\t*\t0\t0\tACGT\t!!!!\tNM:i:0\n";
+            let mut reader = sam::io::Reader::new(&data[..]);
+            let header = reader.read_header().unwrap();
+            let record = reader.record_bufs(&header).next().unwrap().unwrap();
+            record
+        };
+        record.data_mut().insert(Tag::from(*b"sN"), Value::from(99));
+        let patterns = [
+            PatternRecord {
+                id: "foo/bar".into(),
+                seq: b"AC".to_vec(),
+            },
+            PatternRecord {
+                id: "rev".into(),
+                seq: b"AC".to_vec(),
+            },
+        ];
+
+        let matches = [
+            (
+                &patterns[0],
+                Match {
+                    pattern_idx: 0,
+                    text_idx: 0,
+                    text_start: 0,
+                    text_end: 2,
+                    pattern_start: 0,
+                    pattern_end: 2,
+                    cost: 0,
+                    strand: Strand::Fwd,
+                    cigar: Cigar {
+                        ops: vec![CigarElem::new(CigarOp::Match, 2)],
+                    },
+                },
+            ),
+            (
+                &patterns[1],
+                Match {
+                    pattern_idx: 1,
+                    text_idx: 0,
+                    text_start: 2,
+                    text_end: 4,
+                    pattern_start: 0,
+                    pattern_end: 2,
+                    cost: 1,
+                    strand: Strand::Rc,
+                    cigar: Cigar {
+                        ops: vec![CigarElem::new(CigarOp::Match, 2)],
+                    },
+                },
+            ),
+        ];
+
+        annotate_alignment_record(&mut record, &matches, Alphabet::Dna, false);
+
+        let data = record.data();
+        assert_eq!(data.get(&Tag::from(*b"sN")), Some(&Value::from(2u32)));
+        assert_eq!(
+            data.get(&Tag::from(*b"sC")),
+            Some(&Value::from(vec![0i32, 1]))
+        );
+        assert_eq!(
+            data.get(&Tag::from(*b"sS")),
+            Some(&Value::from(vec![0u32, 1]))
+        );
+        assert_eq!(
+            data.get(&Tag::from(*b"sB")),
+            Some(&Value::from(vec![0u32, 2]))
+        );
+        assert_eq!(
+            data.get(&Tag::from(*b"sE")),
+            Some(&Value::from(vec![2u32, 4]))
+        );
+        assert_eq!(
+            data.get(&Tag::from(*b"sP")),
+            Some(&Value::from("foo/bar,rev"))
+        );
+        assert_eq!(data.get(&Tag::from(*b"sR")), Some(&Value::from("AC,AC")));
+        assert_eq!(data.get(&Tag::from(*b"sG")), Some(&Value::from("2=,2=")));
     }
 }

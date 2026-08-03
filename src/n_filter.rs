@@ -27,10 +27,10 @@ fn check_n_fraction(
         .iter()
         .filter(|&&c| c.eq_ignore_ascii_case(&b'N'))
         .count();
-    let denominator = denominator.unwrap_or_else(|| slice.len());
+    let denominator = denominator.unwrap_or(slice.len());
     let n_frac = n_count as f32 / (denominator as f32);
-    let passed = n_frac <= max_n_frac;
-    passed
+    
+    n_frac <= max_n_frac
 }
 
 /// Returns `true` if `m` has an alignment that *may* satisfy `max_n_frac`.

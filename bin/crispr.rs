@@ -1,4 +1,7 @@
-use crate::input_iterator::{InputIterator, PatternRecord};
+use crate::{
+    grep::is_alignment_path,
+    input_iterator::{InputIterator, PatternRecord},
+};
 use sassy::{
     RcSearchAble, Searcher, Strand,
     profiles::{Iupac, Profile},
@@ -143,6 +146,10 @@ pub fn matching_seq<P: Profile>(seq1: &[u8], seq2: &[u8]) -> bool {
 }
 
 pub fn crispr(args: &CrisprArgs) {
+    assert!(
+        !is_alignment_path(&args.path),
+        "`crispr` does not support BAM input. Provide a FASTA/FASTQ file instead."
+    );
     let guide_sequences = read_guide_sequences(&args.guide);
     println!("[GUIDES] Found {} guides", guide_sequences.len());
 
@@ -182,7 +189,7 @@ pub fn crispr(args: &CrisprArgs) {
 
     // Shared iterator that pairs each query with every FASTA record in a batched fashion
     let paths = vec![args.path.clone()];
-    let task_iter = InputIterator::new(&paths, &queries, None, None, true);
+    let (task_iter, _) = InputIterator::new(&paths, &queries, None, None, true);
 
     let start = Instant::now();
     std::thread::scope(|scope| {
@@ -211,8 +218,8 @@ pub fn crispr(args: &CrisprArgs) {
                             let guide_string = String::from_utf8_lossy(guide_sequence);
                             let id_text = &text;
 
-                            let id = &id_text.id;
-                            let text = &id_text.seq;
+                            let id = id_text.id();
+                            let text = id_text.seq();
 
                             let matches = if !args.allow_pam_edits {
                                 searcher.search_with_fn(guide_sequence, text, args.k, true, filter_fn)
