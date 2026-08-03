@@ -401,7 +401,7 @@ impl<P: Profile> Searcher<P> {
         self
     }
 
-    pub fn encode_patterns(&mut self, patterns: &[Vec<u8>]) -> EncodedPatterns<P> {
+    pub fn encode_patterns(&self, patterns: &[Vec<u8>]) -> EncodedPatterns<P> {
         self.pattern_tiling_searcher.encode(patterns, self.rc)
     }
 
