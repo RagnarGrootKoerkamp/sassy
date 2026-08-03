@@ -48,7 +48,9 @@ fn main() {
         .map(|_| (0..m).map(|_| b"ACGT"[rng.random_range(0..4)]).collect())
         .collect();
 
-    let searcher = Searcher::<Iupac>::new_rc().without_trace();
+    let searcher = Searcher::<Iupac>::new_rc()
+        .without_trace()
+        .with_max_n_frac(0.25);
     let encoded_patterns = searcher.encode_patterns(&patterns);
 
     let reading = AtomicU64::new(0);
