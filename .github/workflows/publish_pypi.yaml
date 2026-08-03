@@ -32,11 +32,6 @@ jobs:
       - name: Install build dependencies
         run: pip install "packaging>=24.2"
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
       - name: Initialize portable config
         run: mv .cargo/config-portable.toml .cargo/config.toml
 
