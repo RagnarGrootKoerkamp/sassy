@@ -15,16 +15,20 @@ struct Args {
     /// Text files to search
     text_paths: Vec<PathBuf>,
 
+    /// Text files to search
+    #[clap(long = "patterns")]
+    pattern_path: Option<PathBuf>,
+
     /// max edits
     #[clap(short)]
     k: usize,
 
     // Params for generating random patterns
     /// pattern len
-    #[clap(short)]
+    #[clap(short, default_value_t = 0)]
     m: usize,
     /// #patterns
-    #[clap(short)]
+    #[clap(short, default_value_t = 150)]
     p: usize,
 
     /// #patterns
@@ -35,18 +39,32 @@ struct Args {
 fn main() {
     let Args {
         k,
+        pattern_path,
         text_paths,
         m,
         p,
         threads,
     } = Args::parse();
 
-    // let reads = read_path(&patterns_path);
-
+    eprintln!(
+        "NOTE: Returns matches for edit distance; filtering for hamming distance is missing for now."
+    );
     let mut rng = rand::rng();
-    let patterns: Vec<Vec<u8>> = (0..p)
-        .map(|_| (0..m).map(|_| b"ACGT"[rng.random_range(0..4)]).collect())
-        .collect();
+    let patterns: Vec<Vec<u8>> = if let Some(pattern_path) = pattern_path {
+        let mut patterns = read_path(&pattern_path);
+        eprintln!(
+            "Found {} patterns in {}",
+            patterns.len(),
+            pattern_path.display()
+        );
+        eprintln!("NOTE: Resizing all patterns to length 32 for now.");
+        patterns.iter_mut().for_each(|p| p.resize(32, b'N'));
+        patterns
+    } else {
+        (0..p)
+            .map(|_| (0..m).map(|_| b"ACGT"[rng.random_range(0..4)]).collect())
+            .collect()
+    };
 
     let searcher = Searcher::<Iupac>::new_rc()
         .without_trace()
@@ -91,7 +109,7 @@ fn main() {
             let done = files_done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let total_matches = total_matches.fetch_add(num_matches as u64, std::sync::atomic::Ordering::Relaxed);
             eprintln!(
-                "Done {:>4}/{:>4} [{:>8.3} Gbp / {:7.3} M matches]: {:>8.3} Gbp {:>9} matches, reading: {:>7.3}s, searching: {:>7.3}s",
+                "Done {:>4}/{:>4} [total {:>8.3} Gbp / {:7.3} M matches]: {:>8.3} Gbp {:>9} matches, reading: {:>7.3}s, searching: {:>7.3}s",
                 done + 1,
                 text_paths.len(),
                 input_bp as f64 / 1_000_000_000.0,
@@ -101,10 +119,6 @@ fn main() {
                 reading.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1000.0,
                 searching.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1000.0,
             );
-            if input_bp > 105_000_000_000 {
-                eprintln!("Stopping early after 105 Gbp");
-                std::process::exit(0);
-            }
         });
     eprintln!("Total matches: {}", total_matches.into_inner());
 }
