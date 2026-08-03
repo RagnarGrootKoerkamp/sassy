@@ -26,6 +26,10 @@ struct Args {
     /// #patterns
     #[clap(short)]
     p: usize,
+
+    /// #patterns
+    #[clap(short = 'j', default_value_t = 64)]
+    threads: usize,
 }
 
 fn main() {
@@ -34,6 +38,7 @@ fn main() {
         text_paths,
         m,
         p,
+        threads,
     } = Args::parse();
 
     // let reads = read_path(&patterns_path);
@@ -51,6 +56,12 @@ fn main() {
     let input_bp = AtomicU64::new(0);
     let files_done = AtomicU64::new(0);
     let total_matches = AtomicU64::new(0);
+
+    // set parallellism
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build_global()
+        .unwrap();
 
     text_paths
         .par_iter()
