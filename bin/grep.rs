@@ -74,7 +74,7 @@ pub struct BaseArgs {
     )]
     alphabet: Alphabet,
 
-    /// Cost per base of overhang alignment, where the pattern extends beyond the text in [0,1]. Default disabled.
+    /// Cost per base of overhang alignment in 0..1, where the pattern extends beyond the text. Default disabled.
     #[arg(long)]
     overhang: Option<f32>,
 
@@ -82,13 +82,16 @@ pub struct BaseArgs {
     #[arg(long)]
     no_rc: bool,
 
-    /// Allow at most max_n_frac of N bases in the target sequence. Values must be in the
+    /// Allow at most max_n_frac of N bases in the target sequence.
+    ///
+    /// Values must be in the
     /// range [0, 1].  A value of 0 will allow only hits where the target sequence contains no
     /// Ns. A value of 0.1-0.2 will allow for matches that include a small number of Ns.
     #[arg(long, default_value_t = 0.2)]
     max_n_frac: f32,
 
     /// Use Sassy v2 encoded search (faster for many equal-length patterns).
+    ///
     /// Note: results can differ slightly from V1 due to the difference in reverse complement searching.
     #[arg(long)]
     v2: bool,
@@ -102,6 +105,7 @@ pub struct BaseArgs {
     invert: bool,
 
     /// SAM-compatible output: print the `match_region` and `cigar` in text direction.
+    ///
     /// (By default, sassy outputs these in the _pattern_ direction, and reverse complements the `match_region` and `cigar` for rc matches.)
     #[arg(long)]
     sam: bool,
