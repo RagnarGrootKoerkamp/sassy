@@ -124,13 +124,13 @@ pub struct GrepArgs {
     #[arg(short = 'C', long, default_value_t = 20)]
     context: usize,
 
-    /// TSV output file to write all matches. Empty or "-" for stdout.
+    /// Optional .tsv output path for matches. Empty or "-" for stdout.
     #[arg(long, default_missing_value = "-", num_args(0..=1))]
-    search: Option<PathBuf>,
+    matches: Option<PathBuf>,
 
-    /// Filtered output file. Empty or "-" for stdout.
-    #[arg(long, default_missing_value = "-", num_args(0..=1))]
-    filter: Option<PathBuf>,
+    /// Optional .fa output path for matching records. Empty or "-" for stdout.
+    #[arg(short='o', long, default_missing_value = "-", num_args(0..=1))]
+    output: Option<PathBuf>,
 }
 
 /// Thin mirror of `GrepArgs` for lightweight `agrep` subcommand.
@@ -155,9 +155,13 @@ pub struct SearchArgs {
     #[command(flatten)]
     base: BaseArgs,
 
-    /// Filtered output file. Empty or "-" for stdout.
+    /// Optional .tsv output path for matches. Default stdout.
     #[arg(long, default_missing_value = "-", num_args(0..=1))]
-    filter: Option<PathBuf>,
+    matches: Option<PathBuf>,
+
+    /// Optional .fa output path for matching records. Empty or "-" for stdout.
+    #[arg(short='o', long, default_missing_value = "-", num_args(0..=1))]
+    output: Option<PathBuf>,
 }
 
 #[derive(clap::Parser, Clone)]
@@ -165,9 +169,13 @@ pub struct FilterArgs {
     #[command(flatten)]
     base: BaseArgs,
 
-    /// TSV output file to write all matches. Empty or "-" for stdout.
+    /// Optional .tsv output path for matches. Empty or "-" for stdout.
     #[arg(long, default_missing_value = "-", num_args(0..=1))]
-    search: Option<PathBuf>,
+    matches: Option<PathBuf>,
+
+    /// Optional .fa output path for matching records. Default stdout.
+    #[arg(short='o', long, default_missing_value = "-", num_args(0..=1))]
+    output: Option<PathBuf>,
 }
 
 struct Args {
@@ -185,8 +193,8 @@ impl GrepArgs {
         let GrepArgs {
             base,
             context,
-            search,
-            filter,
+            matches: search,
+            output: filter,
         } = self;
         Args {
             base,
@@ -333,13 +341,17 @@ fn print_statistics(hist: &[usize]) {
 
 impl SearchArgs {
     pub fn run(self) {
-        let SearchArgs { base, filter } = self;
+        let SearchArgs {
+            base,
+            matches,
+            output,
+        } = self;
         Args {
             base,
             context: 0,
             grep: false,
-            search: Some(PathBuf::from("")),
-            filter,
+            search: matches.or(Some(PathBuf::from(""))),
+            filter: output,
         }
         .run()
     }
@@ -347,13 +359,17 @@ impl SearchArgs {
 
 impl FilterArgs {
     pub fn run(self) {
-        let FilterArgs { base, search } = self;
+        let FilterArgs {
+            base,
+            matches,
+            output,
+        } = self;
         Args {
             base,
             context: 0,
             grep: false,
-            search,
-            filter: Some(PathBuf::from("")),
+            search: matches,
+            filter: output.or(Some(PathBuf::from(""))),
         }
         .run()
     }
@@ -832,8 +848,8 @@ mod test {
         let GrepArgs {
             base,
             context,
-            search,
-            filter,
+            matches: search,
+            output: filter,
         } = GrepArgs::try_parse_from(argv).unwrap();
         Args {
             base,
