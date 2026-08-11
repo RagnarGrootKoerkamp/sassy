@@ -28,7 +28,7 @@ use crate::pattern_tiling::general::Searcher as PatterntilingSearcher;
 /// `text_start` and `text_end` are indices into the _forward_ text, as given by the user.
 /// Thus, the pattern will match `rc(&text[text_start..text_end])`.
 /// In this case, the CIGAR tells the differences between `pattern` and `rc(&text[text_start..text_end])`.
-/// Follows SAM format: https://samtools.github.io/hts-specs/SAMv1.pdf (page 8)
+/// Follows SAM format: <https://samtools.github.io/hts-specs/SAMv1.pdf> (page 8)
 #[derive(derivative::Derivative, Clone, PartialEq, Eq)]
 #[derivative(PartialOrd, Ord)]
 #[cfg_attr(feature = "python", pyo3::pyclass(module = "sassy", from_py_object))]
@@ -680,7 +680,7 @@ impl<P: Profile> Searcher<P> {
     /// Returns a match for *all* end positions with score <=k.
     ///
     /// Searches the forward text, and optionally the reverse complement of the text.
-    /// Only use this instead of [`search`] if you know what you are doing,
+    /// Only use this instead of [`Searcher::search`] if you know what you are doing,
     /// which typically means there is some postprocessing step to filter overlapping matches.
     pub fn search_all<I: RcSearchAble + ?Sized>(
         &mut self,
