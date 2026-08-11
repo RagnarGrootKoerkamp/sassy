@@ -526,6 +526,8 @@ impl<P: Profile> Searcher<P> {
 
     /// Search each given pattern in each given text, using the algorithms given by `mode` (see [`SearchMode`]).
     ///
+    /// [`Match::pattern_idx`] and [`Match::text_idx`] contain the corresponding index of the pattern and text of each match.
+    ///
     /// By default, just use `num_threads = 0` for rayon's global thread pool, which defaults to 1 thread per logical core.
     /// Otherwise, a local thread pool is built per call.
     pub fn search_many<PAT: AsRef<[u8]> + Sync, I: RcSearchAble + Sync>(
@@ -609,7 +611,7 @@ impl<P: Profile> Searcher<P> {
     ///
     /// Consider sorting the texts by length beforehand.
     ///
-    /// Returns a vector of (text index, match).
+    /// [`Match::text_idx`] contains the corresponding index the text of each match.
     ///
     /// Use `early_break_below` to return the best values as soon as a match is at least that good.
     pub fn search_texts<I: RcSearchAble>(
@@ -642,7 +644,7 @@ impl<P: Profile> Searcher<P> {
     ///
     /// Consider sorting the patterns by length beforehand.
     ///
-    /// Returns a vector of (pattern index, match).
+    /// [`Match::pattern_idx`] contains the corresponding index the pattern of each match.
     ///
     /// Use `early_break_below` to return the best values as soon as a match is at least that good.
     pub fn search_patterns<I: RcSearchAble + ?Sized, PT: AsRef<[u8]>>(
