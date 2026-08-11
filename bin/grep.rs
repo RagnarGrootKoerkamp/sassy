@@ -528,7 +528,8 @@ impl Args {
                                         .extend(record_matches.into_iter().map(|m| (pattern, m)));
                                 }
 
-                                if batch_matches.is_empty() {
+                                // Don't skip when outputting non-matching records.
+                                if !self.base.invert && batch_matches.is_empty() {
                                     continue;
                                 }
                                 results.push((path, (batch.2.clone(), i), batch_matches));
