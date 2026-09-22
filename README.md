@@ -32,7 +32,7 @@ Feature highlights:
 - Support for (case-insensitive) ASCII, DNA (`ACGT`), and
   [IUPAC](https://www.bioinformatics.org/sms/iupac.html) (=`ACGT+NYR...`) alphabets.
 - Rust library (`cargo add sassy`), binary (`cargo install sassy`, see details below), Python
-  bindings (`pip install sassy-rs`), R bindings ([`Rsassy`](https://github.com/sounkou-bioinfo/Rsassy)),
+  bindings (`pip install sassy-rs`), `duckdb` extension/`R` bindings ([`ducksassy`](https://github.com/Rgenomicsetl/ducksassy)),
   and C bindings (see below).
 
 See [the detailed docs on docs.rs](https://docs.rs/sassy/latest/sassy/),
@@ -318,10 +318,33 @@ for m in matches:
 
 See [python/README.md](python/README.md) for more details.
 
-### 3. R bindings
+### 3. Duckdb extension/ R bindings
 
-Third-party R bindings can be found at [`Rsassy`](https://github.com/sounkou-bioinfo/Rsassy).
-See the [Rsassy package site](https://sounkou-bioinfo.github.io/Rsassy/) for installation and examples.
+Third-party DuckDB extension and R bindings can be found at [`ducksassy`](https://github.com/RgenomicsETL/ducksassy).
+
+``` sql
+WITH guides(guide_id, guide, pam_length) AS (
+    VALUES ('g1', 'ACGTNGG', 3), ('g2', 'ACGTAGG', 2)
+)
+SELECT r.name AS reference_name, g.guide_id,
+       hit.text_start, hit.text_end, hit.strand
+FROM guides AS g
+CROSS JOIN read_fasta('test/data/references.fasta', scan_mode := 'sequential') AS r
+CROSS JOIN LATERAL unnest(sassy_crispr_matches(g.guide, r.sequence, 0,
+    pam_length := g.pam_length)) AS matches(hit)
+ORDER BY reference_name, guide_id, hit.text_start, hit.text_end, hit.strand;
+```
+
+| reference_name | guide_id | text_start | text_end | strand |
+|----------------|----------|-----------:|---------:|--------|
+| forward        | g1       |          2 |        9 | \+     |
+| forward        | g2       |          2 |        9 | \+     |
+| masked         | g1       |          2 |        9 | \+     |
+| masked         | g2       |          2 |        9 | \+     |
+| reverse        | g1       |          2 |        9 | \-     |
+| reverse        | g2       |          2 |        9 | \-     |
+
+See the [Rsassy package site](https://sounkou-bioinfo.github.io/Rsassy/) for installation and more examples.
 
 ### 4. C library
 
