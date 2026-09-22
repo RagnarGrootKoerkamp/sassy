@@ -344,7 +344,6 @@ ORDER BY reference_name, guide_id, hit.text_start, hit.text_end, hit.strand;
 | reverse        | g1       |          2 |        9 | \-     |
 | reverse        | g2       |          2 |        9 | \-     |
 
-See the [Rsassy package site](https://sounkou-bioinfo.github.io/Rsassy/) for installation and more examples.
 
 ### 4. C library
 
