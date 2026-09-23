@@ -322,29 +322,6 @@ See [python/README.md](python/README.md) for more details.
 
 Third-party DuckDB extension and R bindings can be found at [`ducksassy`](https://github.com/RgenomicsETL/ducksassy).
 
-``` sql
-WITH guides(guide_id, guide, pam_length) AS (
-    VALUES ('g1', 'ACGTNGG', 3), ('g2', 'ACGTAGG', 2)
-)
-SELECT r.name AS reference_name, g.guide_id,
-       hit.text_start, hit.text_end, hit.strand
-FROM guides AS g
-CROSS JOIN read_fasta('test/data/references.fasta', scan_mode := 'sequential') AS r
-CROSS JOIN LATERAL unnest(sassy_crispr_matches(g.guide, r.sequence, 0,
-    pam_length := g.pam_length)) AS matches(hit)
-ORDER BY reference_name, guide_id, hit.text_start, hit.text_end, hit.strand;
-```
-
-| reference_name | guide_id | text_start | text_end | strand |
-|----------------|----------|-----------:|---------:|--------|
-| forward        | g1       |          2 |        9 | \+     |
-| forward        | g2       |          2 |        9 | \+     |
-| masked         | g1       |          2 |        9 | \+     |
-| masked         | g2       |          2 |        9 | \+     |
-| reverse        | g1       |          2 |        9 | \-     |
-| reverse        | g2       |          2 |        9 | \-     |
-
-
 ### 4. C library
 
 See [c/README.md](c/README.md) for details. Quick example:
