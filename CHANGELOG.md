@@ -15,6 +15,10 @@
  ([#79](https://github.com/RagnarGrootKoerkamp/sassy/pull/79))
 - Small documentation improvements.
  ([#78](https://github.com/RagnarGrootKoerkamp/sassy/pull/78))
+- Append `pattern_start`, `pattern_end`, and `pattern_match_region` columns to
+  the TSV output of `sassy search`, reporting the matched region of the pattern.
+  ([#82](https://github.com/RagnarGrootKoerkamp/sassy/pull/82))
+
 
 
 ## 0.2.6

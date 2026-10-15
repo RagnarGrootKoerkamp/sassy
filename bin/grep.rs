@@ -485,8 +485,18 @@ impl Args {
             }
 
             let header = format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-                "pat_id", "text_id", "cost", "strand", "start", "end", "match_region", "cigar"
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "pat_id",
+                "text_id",
+                "cost",
+                "strand",
+                "start",
+                "end",
+                "match_region",
+                "cigar",
+                "pattern_start",
+                "pattern_end",
+                "pattern_match_region"
             );
             write!(writer, "{header}").unwrap();
 
@@ -741,6 +751,10 @@ impl Args {
         let slice = &text.seq.text[start..end];
         let match_region = self.format_match_region(slice, m.strand);
         let match_region = String::from_utf8_lossy(&match_region);
+        let pattern_start = m.pattern_start;
+        let pattern_end = m.pattern_end;
+        let pattern_match_region =
+            String::from_utf8_lossy(&pattern.seq[pattern_start..pattern_end]);
 
         let pat_id = &pattern.id;
         let text_id = &text.id;
@@ -751,7 +765,7 @@ impl Args {
         };
         writeln!(
             writer,
-            "{pat_id}\t{text_id}\t{cost}\t{strand}\t{start}\t{end}\t{match_region}\t{cigar}"
+            "{pat_id}\t{text_id}\t{cost}\t{strand}\t{start}\t{end}\t{match_region}\t{cigar}\t{pattern_start}\t{pattern_end}\t{pattern_match_region}"
         )
         .unwrap();
     }
