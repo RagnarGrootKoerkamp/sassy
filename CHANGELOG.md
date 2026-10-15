@@ -3,6 +3,8 @@
 <!-- next-header -->
 
 ## git
+
+## 0.3.0
 - The v1 search now also automatically uses AVX-512 when available on the target hardware, not just
   when explicitly requested using the `avx512` feature flag.
   The v2 batched pattern search already was using AVX-512.
