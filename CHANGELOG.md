@@ -9,7 +9,7 @@
   ([#68](https://github.com/RagnarGrootKoerkamp/sassy/pull/68))
 - `Searcher::search_many` takes `num_threads = 0` to reuse the global thread
   pool ([#69](https://github.com/RagnarGrootKoerkamp/sassy/pull/69))
-- Update `wide` to `1.5.0` and cleanup the wrapper types in `backend.rs` accordingly.
+- Update `wide` to `1.7.1` and cleanup the wrapper types in `backend.rs` accordingly.
 - Build windows binaries in release CI. ([#77](https://github.com/RagnarGrootKoerkamp/sassy/pull/77))
 - Cleanup output-path arguments; it's now `{grep,search,filter} [--output [path.fa]] [--matches [path.tsv]]`.
  ([#79](https://github.com/RagnarGrootKoerkamp/sassy/pull/79))
@@ -18,8 +18,6 @@
 - Append `pattern_start`, `pattern_end`, and `pattern_match_region` columns to
   the TSV output of `sassy search`, reporting the matched region of the pattern.
   ([#82](https://github.com/RagnarGrootKoerkamp/sassy/pull/82))
-
-
 
 ## 0.2.6
 - Support `max_n_frac` directly in the `Searcher` API, rather than only in the CLI. A small breaking change removes the `max_n_frac` argument from `Searcher::search_all_alignents`. ([#66](https://github.com/RagnarGrootKoerkamp/sassy/pull/66), [#67](https://github.com/RagnarGrootKoerkamp/sassy/pull/67))
