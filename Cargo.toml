@@ -58,7 +58,7 @@ wide = "1.7.1"
 ensure_simd = "0.1.0"
 rayon = "1.11.0"
 itertools = "0.15.0"
-derivative = "2.2.0"
+derive-where = "1.7.0"
 memchr = "2.8.1"
 arrayvec = "0.7.6"
 
