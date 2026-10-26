@@ -2,7 +2,7 @@ use crate::n_filter::{satisfy_n_endpoint_filter, traced_satisfy_n_frac};
 use std::cmp::Reverse;
 use std::fmt::Debug;
 use std::hint::assert_unchecked;
-
+use derive_where::derive_where;
 use crate::alignment_iterator::Continuation;
 use crate::delta_encoding::H;
 use crate::minima::prefix_min;
@@ -29,8 +29,8 @@ use crate::pattern_tiling::general::Searcher as PatterntilingSearcher;
 /// Thus, the pattern will match `rc(&text[text_start..text_end])`.
 /// In this case, the CIGAR tells the differences between `pattern` and `rc(&text[text_start..text_end])`.
 /// Follows SAM format: <https://samtools.github.io/hts-specs/SAMv1.pdf> (page 8)
-#[derive(derivative::Derivative, Clone, PartialEq, Eq)]
-#[derivative(PartialOrd, Ord)]
+#[derive(Clone)]
+#[derive_where(PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(feature = "python", pyo3::pyclass(module = "sassy", from_py_object))]
 pub struct Match {
     /// index of the pattern (when multiple patterns are given)
@@ -56,8 +56,9 @@ pub struct Match {
     /// `X`: mismatch
     /// `I`: extra in pattern/query, not in text/ref
     /// `D`: extra in text/ref, not in pattern/query
-    #[derivative(PartialOrd = "ignore")]
-    #[derivative(Ord = "ignore")]
+    ///
+    /// This field is not included in the equality comparison.
+    #[derive_where(skip(EqHashOrd))]
     pub cigar: Cigar,
 }
 
