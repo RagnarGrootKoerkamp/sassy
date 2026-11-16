@@ -72,7 +72,7 @@ fn parse_file(path: &PathBuf) -> Box<dyn FastxReader> {
 
 impl<'a> InputIterator<'a> {
     /// Create a new iterator over `fasta_path`, going through `patterns`.
-    /// `max_batch_bytes` (default 1MB) controls how much input text is in a batch.
+    /// `max_batch_bytes` (default 1MB) controls how much input text is in a batch, but long (chromosome) records are not split.
     /// `max_batch_patterns` (default 64) controls how many patterns are in a batch.
     pub fn new(
         paths: &'a Vec<PathBuf>,
