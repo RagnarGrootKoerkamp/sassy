@@ -3,6 +3,15 @@
 <!-- next-header -->
 
 ## git
+Some bugs found by `sol`:
+- **Breaking**: in `search --v2` output, the CIGAR string output was not in the
+  direction of the pattern (as v1 does it). Fix that.
+  ([#95](https://github.com/RagnarGrootKoerkamp/sassy/pull/95))
+- Fix double-counting matches in `sassy crispr`
+  ([#93](https://github.com/RagnarGrootKoerkamp/sassy/pull/93))
+- Avoid allocating/caching the reverse-complement text for `--v2` searches
+  ([#92](https://github.com/RagnarGrootKoerkamp/sassy/pull/92))
+
 
 ## 0.3.0
 - The v1 search now also automatically uses AVX-512 when available on the target hardware, not just

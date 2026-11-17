@@ -766,6 +766,11 @@ mod tests {
 
                 let mut all_matches = fwd_matches;
 
+                // v2 searches  rc(pattern) in fwd(text),
+                // v1 searches fwd(pattern) in  rc(text).
+                // Thus, as a baseline, we call the fwd v1 search to search rc(pattern) in rc(text),
+                // so that it becomes fwd(rc(pattern))=rc(pattern) in rc(rc(text))=fwd(text), so that it matches v1.
+                // We reverse-complement the returned matches as well.
                 if include_rc {
                     let pattern_rc = crate::profiles::iupac::reverse_complement(pattern);
                     let mut rc_matches = if filter_local_pattern_tilingma {
@@ -775,6 +780,10 @@ mod tests {
                     };
                     rc_matches.iter_mut().for_each(|m| {
                         m.strand = crate::Strand::Rc;
+                        let rc_pattern_start = m.pattern_start;
+                        m.pattern_start = pattern.len() - m.pattern_end;
+                        m.pattern_end = pattern.len() - rc_pattern_start;
+                        m.cigar.reverse();
                     });
                     all_matches.extend(rc_matches);
                 }

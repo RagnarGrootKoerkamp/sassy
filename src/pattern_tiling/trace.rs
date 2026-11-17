@@ -443,6 +443,12 @@ fn traceback_single<B: SimdBackend, P: Profile>(
 
     m.pattern_idx = original_pattern_idx % t_queries.n_original_queries;
     m.strand = if original_pattern_idx >= t_queries.n_original_queries {
+        // The v2 search uses rc(pattern) against the forward text, but matches are always
+        // returned in the fwd(pattern) direction, so reverse-complement them.
+        let rc_pattern_start = m.pattern_start;
+        m.pattern_start = pattern.len() - m.pattern_end;
+        m.pattern_end = pattern.len() - rc_pattern_start;
+        m.cigar.reverse();
         Strand::Rc
     } else {
         Strand::Fwd
