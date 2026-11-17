@@ -426,6 +426,12 @@ impl Args {
         let patterns = args.get_patterns();
         assert!(!patterns.is_empty(), "No pattern sequences found");
 
+        let mut v2 = args.base.v2;
+        if !v2 && should_suggest_v2(&patterns) {
+            eprintln!("All patterns have equal length; using the --v2 backend.");
+            v2 = true;
+        };
+
         let k = args.base.k;
         let rc = (args.base.alphabet == Alphabet::Dna || args.base.alphabet == Alphabet::Iupac)
             && !args.base.no_rc;
@@ -437,7 +443,7 @@ impl Args {
             None,
             args.base.pattern_batch_size,
             // V2 encodes reverse-complemented patterns and only reads forward text.
-            rc && !args.base.v2,
+            rc && !v2,
         );
 
         let output = Mutex::new((
@@ -534,7 +540,7 @@ impl Args {
                     while let Some((batch_id, batch)) = task_iterator.next_batch() {
                         let path = batch.0;
 
-                        if args.base.v2 {
+                        if v2 {
                             match &mut searcher {
                                 SearcherType::Dna(s) => {
                                     run_batch_v2(s, &mut results, path, batch.1, &batch.2, k)
@@ -791,6 +797,24 @@ impl Args {
             cigar.to_string()
         }
     }
+}
+
+/// Whether an input batch is large and regular enough to benefit from v2's
+/// encoded-pattern search. Pattern batches are encoded independently.
+fn should_suggest_v2(patterns: &[PatternRecord]) -> bool {
+    if patterns.len() <= 8 {
+        return false;
+    }
+
+    let Some(first) = patterns.first() else {
+        return false;
+    };
+    let l = first.seq.len();
+    if l > 64 {
+        return false;
+    }
+
+    patterns.iter().all(|pattern| pattern.seq.len() == l)
 }
 
 #[cfg(test)]
