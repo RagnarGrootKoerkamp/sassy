@@ -1,17 +1,17 @@
-use crate::n_filter::{satisfy_n_endpoint_filter, traced_satisfy_n_frac};
-use std::cmp::Reverse;
-use std::fmt::Debug;
-use std::hint::assert_unchecked;
-use derive_where::derive_where;
 use crate::alignment_iterator::Continuation;
 use crate::delta_encoding::H;
 use crate::minima::prefix_min;
+use crate::n_filter::{satisfy_n_endpoint_filter, traced_satisfy_n_frac};
 use crate::profiles::Profile;
 use crate::trace::{CostMatrix, fill, get_trace, simd_fill, simd_fill_multipattern};
 use crate::{LANES, S};
 use crate::{bitpacking::compute_block_simd, delta_encoding::V};
+use derive_where::derive_where;
 use pa_types::{Cigar, CigarOp, Cost, Pos};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use std::cmp::Reverse;
+use std::fmt::Debug;
+use std::hint::assert_unchecked;
 
 // pattern_tiling imports
 use crate::pattern_tiling::general::EncodedPatterns;
@@ -399,6 +399,12 @@ impl<P: Profile> Searcher<P> {
     pub fn with_overhang(mut self, alpha: f32) -> Self {
         Self::_overhang_check(alpha);
         self.alpha = Some(alpha);
+        self
+    }
+
+    /// Set whether to search for reverse-complement matches.
+    pub fn with_rc(mut self, rc: bool) -> Self {
+        self.rc = rc;
         self
     }
 
