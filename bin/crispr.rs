@@ -232,7 +232,6 @@ pub fn crispr(args: &CrisprArgs) {
                                 let end = m.text_end;
                                 let text = text.text();
                                 let slice = &text.as_ref()[start..end];
-                                total_found.fetch_add(1, Ordering::Relaxed);
 
                                 let match_region = if m.strand == Strand::Rc {
                                     let rc = <Iupac as Profile>::reverse_complement(slice);
