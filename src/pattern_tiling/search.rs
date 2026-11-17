@@ -25,7 +25,7 @@ pub struct Myers<B: SimdBackend, P: Profile> {
     pub(crate) positions: Vec<Vec<usize>>,
     pub(crate) alpha_pattern: u64,
     pub(crate) alpha: f32,
-    pub(crate) history: Vec<PatternHistory<B::Simd>>,
+    pub(crate) history: Vec<PatternHistory<B::Scalar>>,
     pub(crate) hit_ranges: Vec<HitRange>,
     pub(crate) max_overhang: Option<usize>,
     pub(crate) active_ranges: Vec<isize>,

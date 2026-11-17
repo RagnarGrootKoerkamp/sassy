@@ -10,7 +10,7 @@ use crate::trace::{CostLookup, get_trace};
 use pa_types::Cost;
 
 pub struct PatternHistory<S: Copy> {
-    pub steps: Vec<SimdHistoryStep<S>>,
+    pub steps: Vec<HistoryStep<S>>,
 }
 
 impl<S: Copy> Default for PatternHistory<S> {
@@ -19,7 +19,8 @@ impl<S: Copy> Default for PatternHistory<S> {
     }
 }
 
-pub struct SimdHistoryStep<S: Copy> {
+/// One lane's Myers vertical-positive and vertical-negative masks for a step.
+pub struct HistoryStep<S: Copy> {
     pub vp: S,
     pub vn: S,
 }
@@ -106,8 +107,8 @@ impl<B: SimdBackend, P: Profile> CostLookup for V2CostLookup<'_, B, P> {
             (self.searcher.alpha_pattern & mask).count_ones() as Cost
         } else {
             let step_data = &self.searcher.history[self.lane_idx].steps[step_idx as usize];
-            let vp_bits = extract_simd_lane::<B>(step_data.vp, self.lane_idx);
-            let vn_bits = extract_simd_lane::<B>(step_data.vn, self.lane_idx);
+            let vp_bits = B::scalar_to_u64(step_data.vp);
+            let vn_bits = B::scalar_to_u64(step_data.vn);
             let pos = (vp_bits & mask).count_ones() as Cost;
             let neg = (vn_bits & mask).count_ones() as Cost;
             pos - neg
@@ -137,10 +138,12 @@ fn handle_suffix_overhangs<B: SimdBackend, P: Profile>(
                 last_bit_shift,
                 last_bit_mask,
             );
+            let vp_lanes = B::to_array(vp_out);
+            let vn_lanes = B::to_array(vn_out);
             for lane in 0..batch_size {
-                searcher.history[lane].steps.push(SimdHistoryStep {
-                    vp: vp_out,
-                    vn: vn_out,
+                searcher.history[lane].steps.push(HistoryStep {
+                    vp: vp_lanes.as_ref()[lane],
+                    vn: vn_lanes.as_ref()[lane],
                 });
             }
             block.vp = vp_out;
@@ -371,12 +374,14 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
             let cost_masked = (cost_new & keep_mask) | (block.cost & freeze_mask);
             let freeze_arr = B::to_array(freeze_mask);
             let freeze_slice = freeze_arr.as_ref();
+            let vp_arr = B::to_array(vp_masked);
+            let vn_arr = B::to_array(vn_masked);
             for lane in 0..batch_size {
                 let is_frozen = B::scalar_to_u64(freeze_slice[lane]) != 0;
                 if !is_frozen {
-                    searcher.history[lane].steps.push(SimdHistoryStep {
-                        vp: vp_masked,
-                        vn: vn_masked,
+                    searcher.history[lane].steps.push(HistoryStep {
+                        vp: vp_arr.as_ref()[lane],
+                        vn: vn_arr.as_ref()[lane],
                     });
                 }
             }
@@ -399,12 +404,6 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
     }
 
     trace_passing_alignments(batch_size, buffer, searcher, t_queries, text, k, post);
-}
-
-#[inline(always)]
-fn extract_simd_lane<B: SimdBackend>(simd_val: B::Simd, lane: usize) -> u64 {
-    let arr = B::to_array(simd_val);
-    B::scalar_to_u64(arr.as_ref()[lane])
 }
 
 #[inline(always)]
