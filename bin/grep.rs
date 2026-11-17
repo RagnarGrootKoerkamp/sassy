@@ -436,7 +436,8 @@ impl Args {
             &patterns,
             None,
             args.base.pattern_batch_size,
-            rc,
+            // V2 encodes reverse-complemented patterns and only reads forward text.
+            rc && !args.base.v2,
         );
 
         let output = Mutex::new((
