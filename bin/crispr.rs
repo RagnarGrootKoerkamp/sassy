@@ -154,12 +154,15 @@ pub fn crispr(args: &CrisprArgs) {
         return;
     }
 
-    if args.v2 {
-        let guide_len = guide_sequences[0].len();
-        assert!(
-            guide_sequences.iter().all(|guide| guide.len() == guide_len),
-            "All guide sequences must have the same length for --v2"
-        );
+    let guide_len = guide_sequences[0].len();
+    let equal_length = guide_sequences.iter().all(|guide| guide.len() == guide_len);
+    let v2 = args.v2 || (equal_length && guide_len <= 64);
+    assert!(
+        !v2 || equal_length,
+        "All guide sequences must have the same length for --v2"
+    );
+    if v2 && !args.v2 {
+        eprintln!("All guides have equal length; using the --v2 backend.");
     }
 
     // Read the first record from the FASTA file for benchmarking
@@ -211,7 +214,7 @@ pub fn crispr(args: &CrisprArgs) {
         let total_found = &total_found;
         for _ in 0..num_threads {
             s.spawn(move || {
-                let mut searcher = if args.v2 || args.no_rc {
+                let mut searcher = if v2 || args.no_rc {
                     Searcher::<Iupac>::new_fwd().with_max_n_frac(max_n_frac)
                 } else {
                     Searcher::<Iupac>::new_rc().with_max_n_frac(max_n_frac)
@@ -230,7 +233,7 @@ pub fn crispr(args: &CrisprArgs) {
                 };
 
                 while let Some((_batch_id, batch)) = input_reader.next_batch() {
-                    let encoded = args.v2.then(|| {
+                    let encoded = v2.then(|| {
                         let patterns: Vec<_> = batch.1.iter().map(|p| p.seq.clone()).collect();
                         let forward = searcher.encode_patterns(&patterns);
                         // Like v1, complement the patterns and reverse the text.
