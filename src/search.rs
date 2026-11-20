@@ -1321,6 +1321,7 @@ impl<P: Profile> Searcher<P> {
         } else {
             text_len
         };
+        let block_end = (base_pos + 64).min(max_pos);
 
         let mut cost = cur_cost;
         let mut prev_cost = self.add_overshoot_cost(cur_cost, base_pos, text_len);
@@ -1372,7 +1373,16 @@ impl<P: Profile> Searcher<P> {
                     consecutive_ns = None;
                 }
 
-                if total_cost <= k && consecutive_ns.unwrap_or(0) <= lookbehind {
+                let n_run_len = consecutive_ns.unwrap_or(0);
+                // Check once, at the first rejected endpoint. Keep processing if
+                // the block reaches padding, since those endpoints can still match.
+                if n_run_len == lookbehind + 1
+                    && block_end <= text_len
+                    && text[pos..block_end].iter().all(|&b| b == b'N' || b == b'n')
+                {
+                    break;
+                }
+                if total_cost <= k && n_run_len <= lookbehind {
                     log::debug!("MATCH: lane {lane} push {prev_pos} {prev_cost}");
                     self.lanes[lane].matches.push((pos, total_cost));
                 }
