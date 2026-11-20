@@ -227,7 +227,7 @@ pub fn crispr(args: &CrisprArgs) {
                             } else {
                                 searcher.search_all(guide_sequence, sequence, args.k)
                             };
-                            matches.retain(|m| text.owns_match(m, pattern));
+                            matches.retain(|m| text.owns_match(m));
                             if matches.is_empty() {
                                 continue;
                             }

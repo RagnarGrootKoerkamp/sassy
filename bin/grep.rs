@@ -395,7 +395,7 @@ fn run_batch_v2<'a, P: Profile>(
         let batch_matches: Vec<_> = record_matches
             .iter()
             .cloned()
-            .filter(|m| text.owns_match(m, &patterns[m.pattern_idx]))
+            .filter(|m| text.owns_match(m))
             .map(|m| {
                 let pattern = &patterns[m.pattern_idx];
                 (pattern, m)
@@ -567,7 +567,7 @@ impl Args {
                                     batch_matches.extend(
                                         record_matches
                                             .into_iter()
-                                            .filter(|m| text.owns_match(m, pattern))
+                                            .filter(|m| text.owns_match(m))
                                             .map(|m| (pattern, m)),
                                     );
                                 }

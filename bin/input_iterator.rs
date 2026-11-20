@@ -20,7 +20,7 @@ pub struct PatternRecord {
 }
 
 /// A text to be searched, with ID from fasta file.
-/// TODO: Reduce the number of allocations here.
+/// It overlaps `overlap` bases with both a preceding and following text chunk.
 #[derive(Debug)]
 pub struct TextRecord {
     pub id: ID,
@@ -30,25 +30,16 @@ pub struct TextRecord {
     pub record_offset: usize,
     /// First position in this chunk belonging to its non-overlapping region.
     pub first_real_position: usize,
-    pub is_first_chunk: bool,
-    pub is_last_chunk: bool,
+    /// Last exclusive endpoint owned by this chunk, or the chunk length if last.
+    pub last_real_position: usize,
 }
 
 impl TextRecord {
-    /// A match is owned by the chunk that contains its last character.
-    pub fn owns_match(&self, m: &Match, pattern: &PatternRecord) -> bool {
-        let text_len = self.seq.text.len();
-        // `text_end` is exclusive, so a match ending exactly at the first real
-        // position contains no real base from this chunk and belongs to the prior one.
-        if !self.is_first_chunk && m.text_end <= self.first_real_position {
-            return false;
-        }
-        // Right overhang is represented by a match ending at the text boundary
-        // without consuming the full pattern.
-        if !self.is_last_chunk && m.text_end >= text_len && m.pattern_end < pattern.seq.len() {
-            return false;
-        }
-        true
+    /// A match is owned by the chunk containing its rightmost forward-text base.
+    pub fn owns_match(&self, m: &Match) -> bool {
+        // The first chunk also owns matches ending at position zero.
+        (self.record_offset == 0 || m.text_end > self.first_real_position)
+            && m.text_end <= self.last_real_position
     }
 }
 
@@ -120,15 +111,34 @@ impl<'a> InputIterator<'a> {
         overlap: usize,
         chunk_long_records: bool,
     ) -> Self {
-        let max_text_chunk_bytes = if chunk_long_records {
-            assert!(
-                overlap < MAX_TEXT_CHUNK_BYTES,
-                "match overlap must be smaller than the 1 MiB text chunk size"
-            );
+        let chunk_size = if chunk_long_records {
             MAX_TEXT_CHUNK_BYTES
         } else {
             usize::MAX
         };
+        Self::new_with_chunk_size(
+            paths,
+            patterns,
+            max_batch_bytes,
+            max_batch_patterns,
+            rev,
+            overlap,
+            chunk_size,
+        )
+    }
+
+    /// Construct an iterator with an explicit maximum size for each text chunk.
+    /// Use `usize::MAX` to disable chunking.
+    pub fn new_with_chunk_size(
+        paths: &'a Vec<PathBuf>,
+        patterns: &'a [PatternRecord],
+        max_batch_bytes: Option<usize>,
+        max_batch_patterns: Option<usize>,
+        rev: bool,
+        overlap: usize,
+        max_text_chunk_bytes: usize,
+    ) -> Self {
+        assert!(max_text_chunk_bytes > overlap.saturating_mul(2));
         let reader = parse_file(&paths[0]);
         // Just empty state when we create the iterator
         let batch_pattern_limit = max_batch_patterns.unwrap_or(DEFAULT_BATCH_PATTERNS);
@@ -177,14 +187,14 @@ impl<'a> InputIterator<'a> {
                     if let Some(pending) = state.pending_record.as_mut() {
                         if pending.seq.len() <= self.max_text_chunk_bytes {
                             let pending = state.pending_record.take().unwrap();
+                            let record_len = pending.seq.len();
                             break TextRecord {
                                 id: pending.id,
                                 seq: CachedRev::new(pending.seq, false),
                                 quality: pending.quality,
                                 record_offset: 0,
                                 first_real_position: 0,
-                                is_first_chunk: true,
-                                is_last_chunk: true,
+                                last_real_position: record_len,
                             };
                         }
 
@@ -195,6 +205,12 @@ impl<'a> InputIterator<'a> {
                         let is_first_chunk = offset == 0;
                         let is_last_chunk = end == pending.seq.len();
                         let first_real_position = if is_first_chunk { 0 } else { self.overlap };
+                        let chunk_len = end - offset;
+                        let last_real_position = if is_last_chunk {
+                            chunk_len
+                        } else {
+                            chunk_len - self.overlap
+                        };
                         let chunk = pending.seq[offset..end].to_vec();
                         let quality = if pending.quality.is_empty() {
                             Vec::new()
@@ -207,13 +223,12 @@ impl<'a> InputIterator<'a> {
                             quality,
                             record_offset: offset,
                             first_real_position,
-                            is_first_chunk,
-                            is_last_chunk,
+                            last_real_position,
                         };
                         if is_last_chunk {
                             state.pending_record = None;
                         } else {
-                            pending.next_chunk_start = end - self.overlap;
+                            pending.next_chunk_start = end - 2 * self.overlap;
                         }
                         break text_record;
                     }
@@ -300,7 +315,8 @@ impl<'a> InputIterator<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::RngExt;
+    use rand::{RngExt, SeedableRng};
+    use sassy::{Searcher, profiles::Dna};
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -343,7 +359,7 @@ mod tests {
         // Create the iterator
         let paths = vec![file.path().to_path_buf()];
         let overlap = patterns.iter().map(|p| p.seq.len()).max().unwrap_or(0);
-        let iter = InputIterator::new(&paths, &patterns, Some(500), None, true, overlap, true);
+        let iter = InputIterator::new(&paths, &patterns, Some(500), None, true, overlap, false);
 
         // Pull 10 batches
         let mut batch_id = 0;
@@ -370,5 +386,140 @@ mod tests {
             );
         }
         drop(file);
+    }
+
+    #[test]
+    fn fuzz_short_chunks_match_unchunked_search() {
+        fn search(
+            path: &Path,
+            pattern: &PatternRecord,
+            k: usize,
+            chunk_size: usize,
+            overlap: usize,
+        ) -> Vec<(usize, usize, i32, u8, String)> {
+            let paths = vec![path.to_path_buf()];
+            let patterns = std::slice::from_ref(pattern);
+            let iter = InputIterator::new_with_chunk_size(
+                &paths, patterns, None, None, true, overlap, chunk_size,
+            );
+            let mut searcher = Searcher::<Dna>::new_rc();
+            let mut found = Vec::new();
+            while let Some((_, (_, _, texts))) = iter.next_batch() {
+                for text in texts.iter() {
+                    let mut matches = searcher.search(&pattern.seq, &text.seq, k);
+                    matches.retain(|m| text.owns_match(m));
+                    found.extend(matches.into_iter().map(|m| {
+                        (
+                            text.record_offset + m.text_start,
+                            text.record_offset + m.text_end,
+                            m.cost,
+                            m.strand as u8,
+                            m.cigar.to_string(),
+                        )
+                    }));
+                }
+            }
+            found.sort();
+            found
+        }
+
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0x5a55_79);
+        for case in 0..100 {
+            let pattern_len = rng.random_range(5..=19);
+            let pattern_seq: Vec<u8> = (0..pattern_len)
+                .map(|_| *b"ACGT".get(rng.random_range(0..4)).unwrap())
+                .collect();
+            let k = rng.random_range(0..=2);
+            let overlap = pattern_len + k;
+            let chunk_size = rng.random_range((2 * overlap + 1)..=(2 * overlap + 30));
+            let mut sequence: Vec<u8> = (0..250)
+                .map(|_| *b"ACGT".get(rng.random_range(0..4)).unwrap())
+                .collect();
+            let pos = rng.random_range(0..=(sequence.len() - pattern_len));
+            sequence[pos..pos + pattern_len].copy_from_slice(&pattern_seq);
+
+            let mut file = NamedTempFile::new().unwrap();
+            writeln!(file, ">case_{case}").unwrap();
+            file.write_all(&sequence).unwrap();
+            writeln!(file).unwrap();
+            file.flush().unwrap();
+
+            let pattern = PatternRecord {
+                id: "p".into(),
+                seq: pattern_seq,
+            };
+            let chunked = search(file.path(), &pattern, k, chunk_size, overlap);
+            let unchunked = search(file.path(), &pattern, k, usize::MAX, overlap);
+            assert_eq!(
+                chunked, unchunked,
+                "fuzz case {case}, chunk size {chunk_size}"
+            );
+        }
+
+        let pattern = PatternRecord {
+            id: "boundary".into(),
+            seq: b"ACGCATCACAGCACATCAG".to_vec(),
+        };
+        let reverse_complement = b"CTGATGTGCTGTGATGCGT";
+        let mut sequence: Vec<u8> = (0..500).map(|i| b"ACGT"[i % 4]).collect();
+        for (position, value) in [
+            (28, pattern.seq.as_slice()),
+            (49, pattern.seq.as_slice()),
+            (77, reverse_complement.as_slice()),
+            (101, pattern.seq.as_slice()),
+            (149, reverse_complement.as_slice()),
+            (199, pattern.seq.as_slice()),
+            (248, reverse_complement.as_slice()),
+            (299, pattern.seq.as_slice()),
+            (347, reverse_complement.as_slice()),
+            (401, pattern.seq.as_slice()),
+            (450, reverse_complement.as_slice()),
+        ] {
+            sequence[position..position + value.len()].copy_from_slice(value);
+        }
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, ">boundary").unwrap();
+        file.write_all(&sequence).unwrap();
+        writeln!(file).unwrap();
+        file.flush().unwrap();
+        let overlap = pattern.seq.len() + 2;
+        assert_eq!(
+            search(file.path(), &pattern, 2, 50, overlap),
+            search(file.path(), &pattern, 2, usize::MAX, overlap),
+            "fixed chunk-boundary regression"
+        );
+    }
+
+    #[test]
+    fn chunk_ownership_uses_forward_text_end_for_both_strands() {
+        let text = TextRecord {
+            id: "record".into(),
+            seq: CachedRev::new(vec![b'A'; 50], false),
+            quality: Vec::new(),
+            record_offset: 30,
+            first_real_position: 20,
+            last_real_position: 40,
+        };
+        let m = |strand, start, end, pattern_start, pattern_end| Match {
+            pattern_idx: 0,
+            text_idx: 0,
+            text_start: start,
+            text_end: end,
+            pattern_start,
+            pattern_end,
+            cost: 0,
+            strand,
+            cigar: pa_types::Cigar::default(),
+        };
+
+        assert!(!text.owns_match(&m(sassy::Strand::Fwd, 10, 20, 0, 10)));
+        assert!(text.owns_match(&m(sassy::Strand::Fwd, 10, 21, 0, 10)));
+        assert!(!text.owns_match(&m(sassy::Strand::Rc, 19, 20, 0, 10)));
+        assert!(text.owns_match(&m(sassy::Strand::Rc, 19, 21, 0, 10)));
+        assert!(text.owns_match(&m(sassy::Strand::Fwd, 30, 40, 0, 10)));
+        assert!(!text.owns_match(&m(sassy::Strand::Fwd, 30, 41, 0, 10)));
+
+        assert!(!text.owns_match(&m(sassy::Strand::Fwd, 40, 50, 0, 9)));
+        assert!(!text.owns_match(&m(sassy::Strand::Rc, 40, 50, 1, 10)));
     }
 }
