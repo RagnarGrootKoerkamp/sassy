@@ -1,6 +1,6 @@
 use crate::input_iterator::{BufferedInputIterator, InputIterator, PatternRecord};
 use sassy::{
-    RcSearchAble, Searcher, Strand,
+    CachedRev, EncodedPatterns, Match, RcSearchAble, Searcher, Strand,
     profiles::{Iupac, Profile},
 };
 use std::fs::File;
@@ -51,6 +51,10 @@ pub struct CrisprArgs {
     /// Disable reverse complement search.
     #[arg(long)]
     no_rc: bool,
+
+    /// Use the v2 encoded search. All guides must have the same length.
+    #[arg(long)]
+    v2: bool,
 
     /// Fasta file to search. May be gzipped.
     path: PathBuf,
@@ -150,6 +154,14 @@ pub fn crispr(args: &CrisprArgs) {
         return;
     }
 
+    if args.v2 {
+        let guide_len = guide_sequences[0].len();
+        assert!(
+            guide_sequences.iter().all(|guide| guide.len() == guide_len),
+            "All guide sequences must have the same length for --v2"
+        );
+    }
+
     // Read the first record from the FASTA file for benchmarking
     let writer = &Mutex::new(get_output_writer(args));
 
@@ -187,7 +199,7 @@ pub fn crispr(args: &CrisprArgs) {
         &queries,
         None,
         None,
-        true,
+        !args.no_rc,
         guide_sequences.iter().map(Vec::len).max().unwrap_or(0) + args.k,
         false,
     );
@@ -199,14 +211,16 @@ pub fn crispr(args: &CrisprArgs) {
         let total_found = &total_found;
         for _ in 0..num_threads {
             s.spawn(move || {
-                // Searcher, IUPAC and always reverse complement
-                let mut searcher = if args.no_rc {
+                let mut searcher = if args.v2 || args.no_rc {
                     Searcher::<Iupac>::new_fwd().with_max_n_frac(max_n_frac)
                 } else {
                     Searcher::<Iupac>::new_rc().with_max_n_frac(max_n_frac)
                 };
 
-                let filter_fn = |_q: &[u8], text_up_to_end: &[u8], strand: Strand| {
+                let matches_pam = |text_up_to_end: &[u8], strand: Strand| {
+                    if text_up_to_end.len() < args.pam_length {
+                        return false;
+                    }
                     let pam_slice = &text_up_to_end[text_up_to_end.len() - args.pam_length..];
                     if strand == Strand::Fwd {
                         matching_seq::<Iupac>(pam_slice, pam)
@@ -216,17 +230,40 @@ pub fn crispr(args: &CrisprArgs) {
                 };
 
                 while let Some((_batch_id, batch)) = input_reader.next_batch() {
+                    let encoded = args.v2.then(|| {
+                        let patterns: Vec<_> = batch.1.iter().map(|p| p.seq.clone()).collect();
+                        let forward = searcher.encode_patterns(&patterns);
+                        // Like v1, complement the patterns and reverse the text.
+                        // This preserves the direction of the alignment and its CIGAR.
+                        let reverse = (!args.no_rc).then(|| {
+                            let complements: Vec<_> =
+                                patterns.iter().map(|p| Iupac::complement(p)).collect();
+                            searcher.encode_patterns(&complements)
+                        });
+                        (forward, reverse)
+                    });
                     for text in &*batch.2 {
                         let sequence = &text.seq;
-                        for pattern in batch.1 {
+                        let mut v2_matches = encoded.as_ref().map(|(forward, reverse)| {
+                            search_v2(
+                                &mut searcher, forward, reverse.as_ref(), sequence,
+                                batch.1.len(), args.k,
+                                |prefix, strand| args.allow_pam_edits || matches_pam(prefix, strand),
+                            )
+                        });
+                        for (idx, pattern) in batch.1.iter().enumerate() {
                             let guide_sequence = &pattern.seq;
                             let guide_string = String::from_utf8_lossy(guide_sequence);
                             let id_text = &text;
 
                             let id = &id_text.id;
 
-                            let mut matches = if !args.allow_pam_edits {
-                                searcher.search_with_fn(guide_sequence, sequence, args.k, true, filter_fn)
+                            let mut matches = if let Some(matches) = &mut v2_matches {
+                                std::mem::take(&mut matches[idx])
+                            } else if !args.allow_pam_edits {
+                                searcher.search_with_fn(guide_sequence, sequence, args.k, true, |_, prefix, strand| {
+                                    matches_pam(prefix, strand)
+                                })
                             } else {
                                 searcher.search_all(guide_sequence, sequence, args.k)
                             };
@@ -279,6 +316,41 @@ pub fn crispr(args: &CrisprArgs) {
         total_found.load(Ordering::Relaxed)
     );
     println!("  Time taken: {:?}", start.elapsed());
+}
+
+fn search_v2(
+    searcher: &mut Searcher<Iupac>,
+    forward: &EncodedPatterns<Iupac>,
+    reverse: Option<&EncodedPatterns<Iupac>>,
+    sequence: &CachedRev<Vec<u8>>,
+    num_guides: usize,
+    k: usize,
+    accepts_endpoint: impl Fn(&[u8], Strand) -> bool,
+) -> Vec<Vec<Match>> {
+    let mut matches = vec![Vec::new(); num_guides];
+    let len = sequence.text.len();
+    if len == 0 {
+        return matches;
+    }
+
+    let orientations = std::iter::once((forward, sequence.text.as_slice(), Strand::Fwd)).chain(
+        reverse
+            .into_iter()
+            .map(|encoded| (encoded, sequence.rev.as_deref().unwrap(), Strand::Rc)),
+    );
+    for (encoded, text, strand) in orientations {
+        for m in searcher.search_all_encoded_patterns(encoded, text, k) {
+            if accepts_endpoint(&text[..m.text_end], strand) {
+                let mut m = m.clone();
+                if strand == Strand::Rc {
+                    (m.text_start, m.text_end) = (len - m.text_end, len - m.text_start);
+                    m.strand = Strand::Rc;
+                }
+                matches[m.pattern_idx].push(m);
+            }
+        }
+    }
+    matches
 }
 
 #[cfg(test)]
@@ -342,6 +414,7 @@ mod test {
             pam_length: 3,
             allow_pam_edits: true,
             no_rc: false,
+            v2: false,
             path: target_file.path().to_path_buf(),
         };
         crispr(&args);
@@ -371,5 +444,49 @@ mod test {
         crispr(&args);
         let found_counts = get_counts_from_output(&tmp_output.path().to_path_buf());
         assert_eq!(found_counts.n_frac, 0);
+    }
+
+    #[test]
+    fn v2_crispr_maps_reversed_text_hits_back_to_forward_coordinates() {
+        let mut guide_file = NamedTempFile::new().unwrap();
+        let guide = "TAGCATCAGCTACGNGG";
+        let second_guide = "CTTCTTCTTCTTCTNGG";
+        writeln!(guide_file, "{guide}\n{second_guide}").unwrap();
+        let region = "TAGCATCAGCTACGAGG";
+        let reverse_region = Iupac::reverse_complement(region.as_bytes());
+        let reverse_region = std::str::from_utf8(&reverse_region).unwrap();
+        let mut target_file = NamedTempFile::new().unwrap();
+        writeln!(
+            target_file,
+            ">forward\n{region}\n>reverse\nAAAAA{reverse_region}TT"
+        )
+        .unwrap();
+        let output = NamedTempFile::new().unwrap();
+
+        let mut args = CrisprArgs {
+            guide: guide_file.path().to_string_lossy().into_owned(),
+            k: 0,
+            output: Some(output.path().to_path_buf()),
+            max_n_frac: 0.0,
+            threads: Some(1),
+            pam_length: 3,
+            allow_pam_edits: false,
+            no_rc: false,
+            v2: true,
+            path: target_file.path().to_path_buf(),
+        };
+        crispr(&args);
+        let results = fs::read_to_string(output.path()).unwrap();
+        let len = region.len();
+        let forward = format!("{guide}\tforward\t0\t+\t0\t{len}\t{region}\t{len}=");
+        let reverse = format!("{guide}\treverse\t0\t-\t5\t{}\t{region}\t{len}=", 5 + len);
+        assert!(results.lines().any(|line| line == forward));
+        assert!(results.lines().any(|line| line == reverse));
+
+        args.no_rc = true;
+        crispr(&args);
+        let results = fs::read_to_string(output.path()).unwrap();
+        assert!(results.lines().any(|line| line == forward));
+        assert!(results.lines().skip(1).all(|line| !line.contains("\t-\t")));
     }
 }
