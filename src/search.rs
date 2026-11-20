@@ -1186,7 +1186,7 @@ impl<P: Profile> Searcher<P> {
                             v,
                             cost,
                             k,
-                            t.len(),
+                            t,
                             pattern_len,
                             base_pos,
                             lane,
@@ -1297,12 +1297,18 @@ impl<P: Profile> Searcher<P> {
         v: V,
         cur_cost: Cost,
         k: Cost,
-        text_len: usize,
+        text: &[u8],
         pattern_len: usize,
         base_pos: usize,
         lane: usize,
         all_minima: bool,
     ) {
+        let text_len = text.len();
+        let lookbehind = pattern_len + k as usize;
+        // The all_minima branch can skip endpoints deep inside an all-N run.
+        let skip_n_runs = self.max_n_frac.is_some_and(|fraction| fraction < 1.0);
+        let mut consecutive_ns = None;
+
         let (p, m) = v.pm();
         let max_pos = if self.alpha.is_some() {
             text_len
@@ -1342,7 +1348,31 @@ impl<P: Profile> Searcher<P> {
             let total_cost = self.add_overshoot_cost(cost, pos, text_len);
 
             if all_minima {
-                if total_cost <= k {
+                // Skip minima in long N regions, after finding 2 consecutive cost-0 matches.
+                if skip_n_runs && total_cost == 0 && prev_cost == 0 && pos <= text_len {
+                    let base = text[pos - 1];
+                    consecutive_ns = Some(if base == b'N' || base == b'n' {
+                        consecutive_ns.map_or_else(
+                            // Seed the count at the start of a zero-cost stretch,
+                            // including when that stretch crosses a block boundary.
+                            || {
+                                text[..pos]
+                                    .iter()
+                                    .rev()
+                                    .take(lookbehind + 1)
+                                    .take_while(|&&b| b == b'N' || b == b'n')
+                                    .count()
+                            },
+                            |count| count + 1,
+                        )
+                    } else {
+                        0
+                    });
+                } else {
+                    consecutive_ns = None;
+                }
+
+                if total_cost <= k && consecutive_ns.unwrap_or(0) <= lookbehind {
                     log::debug!("MATCH: lane {lane} push {prev_pos} {prev_cost}");
                     self.lanes[lane].matches.push((pos, total_cost));
                 }
