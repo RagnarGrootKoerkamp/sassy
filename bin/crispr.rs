@@ -1,4 +1,4 @@
-use crate::input_iterator::{InputIterator, PatternRecord};
+use crate::input_iterator::{BufferedInputIterator, InputIterator, PatternRecord};
 use sassy::{
     RcSearchAble, Searcher, Strand,
     profiles::{Iupac, Profile},
@@ -182,7 +182,7 @@ pub fn crispr(args: &CrisprArgs) {
 
     // Shared iterator that pairs each query with every FASTA record in a batched fashion
     let paths = vec![args.path.clone()];
-    let task_iter = InputIterator::new(
+    let input_batch_iter = InputIterator::new(
         &paths,
         &queries,
         None,
@@ -191,11 +191,14 @@ pub fn crispr(args: &CrisprArgs) {
         guide_sequences.iter().map(Vec::len).max().unwrap_or(0) + args.k,
         true,
     );
-
+    let input_reader = &BufferedInputIterator::new(4);
     let start = Instant::now();
-    std::thread::scope(|scope| {
+    std::thread::scope(|s| {
+        input_reader.start_reader(s, &input_batch_iter);
+
+        let total_found = &total_found;
         for _ in 0..num_threads {
-            scope.spawn(|| {
+            s.spawn(move || {
                 // Searcher, IUPAC and always reverse complement
                 let mut searcher = if args.no_rc {
                     Searcher::<Iupac>::new_fwd().with_max_n_frac(max_n_frac)
@@ -212,7 +215,7 @@ pub fn crispr(args: &CrisprArgs) {
                     }
                 };
 
-                while let Some((_batch_id, batch)) = task_iter.next_batch() {
+                while let Some((_batch_id, batch)) = input_reader.next_batch() {
                     for text in &*batch.2 {
                         let sequence = &text.seq;
                         for pattern in batch.1 {

@@ -1,7 +1,11 @@
 use needletail::{FastxReader, parse_fastx_file, parse_fastx_stdin};
 use sassy::{CachedRev, Match};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex}; //Todo: could use parking_lot mutex - faster
+use std::sync::{
+    Arc, Mutex,
+    mpsc::{Receiver, SyncSender, sync_channel},
+};
+use std::thread::Scope;
 
 /// Each batch of text records will be at most this size if possible.
 const DEFAULT_BATCH_BYTES: usize = 1024 * 1024; // 1 MiB
@@ -51,6 +55,48 @@ pub type TextBatch = Arc<Vec<TextRecord>>;
 ///
 /// Each task represents searching _all_ patterns against _all_ text records.
 pub type TaskBatch<'a> = (&'a Path, &'a [PatternRecord], TextBatch);
+
+/// Input batches produced by one reader thread and consumed by search workers.
+pub struct BufferedInputIterator<'a> {
+    sender: Mutex<Option<SyncSender<(usize, TaskBatch<'a>)>>>,
+    receiver: Mutex<Receiver<(usize, TaskBatch<'a>)>>,
+}
+
+impl<'a> BufferedInputIterator<'a> {
+    pub fn new(capacity: usize) -> Self {
+        let (sender, receiver) = sync_channel(capacity);
+        Self {
+            sender: Mutex::new(Some(sender)),
+            receiver: Mutex::new(receiver),
+        }
+    }
+
+    pub fn start_reader<'scope, 'env>(
+        &self,
+        scope: &'scope Scope<'scope, 'env>,
+        input: &'scope InputIterator<'a>,
+    ) where
+        'a: 'scope,
+    {
+        let sender = self
+            .sender
+            .lock()
+            .unwrap()
+            .take()
+            .expect("buffered input reader already started");
+        scope.spawn(move || {
+            while let Some(batch) = input.next_batch() {
+                if sender.send(batch).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
+    pub fn next_batch(&self) -> Option<(usize, TaskBatch<'a>)> {
+        self.receiver.lock().unwrap().recv().ok()
+    }
+}
 
 struct RecordState {
     /// The current fasta reader.

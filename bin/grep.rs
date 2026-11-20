@@ -15,7 +15,9 @@ use sassy::{
     profiles::{Ascii, Dna, Iupac, Profile},
 };
 
-use crate::input_iterator::{InputIterator, PatternRecord, TextBatch, TextRecord};
+use crate::input_iterator::{
+    BufferedInputIterator, InputIterator, PatternRecord, TextBatch, TextRecord,
+};
 
 // TODO: Support ASCII alphabet.
 #[derive(clap::ValueEnum, Default, Clone, Copy, PartialEq)]
@@ -438,7 +440,7 @@ impl Args {
             && !args.base.no_rc;
 
         let num_threads = args.base.threads.unwrap_or_else(num_cpus::get);
-        let task_iterator = &InputIterator::new(
+        let input_iterator = &InputIterator::new(
             &args.base.paths,
             &patterns,
             None,
@@ -513,7 +515,11 @@ impl Args {
             Mutex::new(writer)
         });
 
+        let input_reader = &BufferedInputIterator::new(4);
+
         std::thread::scope(|s| {
+            input_reader.start_reader(s, input_iterator);
+
             for _ in 0..num_threads {
                 let output = &output;
                 let global_histogram = &global_histogram;
@@ -540,7 +546,7 @@ impl Args {
                     let mut results = vec![];
                     let mut local_histogram = vec![0usize; k + 1];
 
-                    while let Some((batch_id, batch)) = task_iterator.next_batch() {
+                    while let Some((batch_id, batch)) = input_reader.next_batch() {
                         let path = batch.0;
 
                         if v2 {
