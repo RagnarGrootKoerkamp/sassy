@@ -1305,7 +1305,6 @@ impl<P: Profile> Searcher<P> {
     ) {
         let text_len = text.len();
         let lookbehind = pattern_len + k as usize;
-        // The all_minima branch can skip endpoints deep inside an all-N run.
         let skip_n_runs = self.max_n_frac.is_some_and(|fraction| fraction < 1.0);
         let mut consecutive_ns = None;
 
@@ -1348,40 +1347,48 @@ impl<P: Profile> Searcher<P> {
 
             let total_cost = self.add_overshoot_cost(cost, pos, text_len);
 
-            if all_minima {
-                // Skip minima in long N regions, after finding 2 consecutive cost-0 matches.
-                if skip_n_runs && total_cost == 0 && prev_cost == 0 && pos <= text_len {
-                    let base = text[pos - 1];
-                    consecutive_ns = Some(if base == b'N' || base == b'n' {
-                        consecutive_ns.map_or_else(
-                            // Seed the count at the start of a zero-cost stretch,
-                            // including when that stretch crosses a block boundary.
-                            || {
-                                text[..pos]
-                                    .iter()
-                                    .rev()
-                                    .take(lookbehind + 1)
-                                    .take_while(|&&b| b == b'N' || b == b'n')
-                                    .count()
-                            },
-                            |count| count + 1,
-                        )
-                    } else {
-                        0
-                    });
+            // Skip minima in long N regions, after finding 2 consecutive cost-0 matches.
+            if skip_n_runs && total_cost == 0 && prev_cost == 0 && pos <= text_len {
+                let base = text[pos - 1];
+                consecutive_ns = Some(if base == b'N' || base == b'n' {
+                    consecutive_ns.map_or_else(
+                        // Seed the count at the start of a zero-cost stretch,
+                        // including when that stretch crosses a block boundary.
+                        || {
+                            text[..pos]
+                                .iter()
+                                .rev()
+                                .take(lookbehind + 1)
+                                .take_while(|&&b| b == b'N' || b == b'n')
+                                .count()
+                        },
+                        |count| count + 1,
+                    )
                 } else {
-                    consecutive_ns = None;
-                }
+                    0
+                });
+            } else {
+                consecutive_ns = None;
+            }
 
-                let n_run_len = consecutive_ns.unwrap_or(0);
-                // Check once, at the first rejected endpoint. Keep processing if
-                // the block reaches padding, since those endpoints can still match.
-                if n_run_len == lookbehind + 1
-                    && block_end <= text_len
-                    && text[pos..block_end].iter().all(|&b| b == b'N' || b == b'n')
-                {
-                    break;
-                }
+            let n_run_len = consecutive_ns.unwrap_or(0);
+            // Check once at the first rejected endpoint. Local minima can skip
+            // only a flat stretch, and still use its rightmost position.
+            // Each bit of p adds 1 to the score and each bit of m subtracts 1,
+            // so a set bit in p ^ m marks a score change. Shift to the current
+            // bit and require a zero for it and every remaining bit in the block.
+            if n_run_len == lookbehind + 1
+                && block_end <= text_len
+                && (all_minima
+                    || ((p ^ m) >> (bit - 1)).trailing_zeros() as usize > block_end - pos)
+                && text[pos..block_end].iter().all(|&b| b == b'N' || b == b'n')
+            {
+                prev_cost = total_cost;
+                prev_pos = block_end;
+                break;
+            }
+
+            if all_minima {
                 if total_cost <= k && n_run_len <= lookbehind {
                     log::debug!("MATCH: lane {lane} push {prev_pos} {prev_cost}");
                     self.lanes[lane].matches.push((pos, total_cost));
@@ -2229,6 +2236,28 @@ mod tests {
             );
             assert_consistent_with_search_all(&mut fwd_searcher, &pattern, &text, k);
             assert_consistent_with_search_all(&mut rc_searcher, &pattern, &text, k);
+        }
+    }
+
+    #[test]
+    fn local_minima_keep_the_rightmost_endpoint_across_n_blocks() {
+        let pattern = b"AAAAAAAAAAAAAAAAAAAA";
+        let mut text = pattern.to_vec();
+        text.extend([b'N'; 256]);
+        text.extend_from_slice(pattern);
+
+        let mut searcher = Searcher::<Iupac>::new_fwd();
+        for text in [&text[..276], text.as_slice()] {
+            searcher.set_max_n_frac(1.0);
+            let unfiltered = searcher.search(pattern, text, 0);
+            assert_eq!(unfiltered.last().unwrap().text_end, text.len());
+            let expected: Vec<_> = unfiltered
+                .into_iter()
+                .filter(|m| traced_satisfy_n_frac(m, text, 0.1))
+                .collect();
+
+            searcher.set_max_n_frac(0.1);
+            assert_eq!(searcher.search(pattern, text, 0), expected);
         }
     }
 
