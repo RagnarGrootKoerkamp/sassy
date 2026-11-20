@@ -38,7 +38,7 @@ macro_rules! dispatch_encoded {
 }
 
 macro_rules! run_hierarchical {
-    ($self:ident, $full_tq:expr, $suffix_opt:expr, $prefilter_searcher:ident, $full_searcher:ident, $text:expr, $k:expr, $post:expr, $suffix_name:expr) => {{
+    ($self:ident, $full_tq:expr, $suffix_opt:expr, $prefilter_searcher:ident, $full_searcher:ident, $text:expr, $k:expr, $post:expr, $max_n_frac:expr, $suffix_name:expr) => {{
         let suffix_tq = $suffix_opt
             .as_ref()
             .expect(concat!($suffix_name, " suffix should be pre-encoded"));
@@ -50,6 +50,7 @@ macro_rules! run_hierarchical {
             $text,
             $k,
             $post,
+            $max_n_frac,
             &mut $self.alignments_buf,
             &mut $self.trace_buffer,
         )
@@ -65,13 +66,24 @@ pub fn hierarchical_search<S, F, P: Profile>(
     text: &[u8],
     k: u32,
     post: TracePostProcess,
+    max_n_frac: Option<f32>,
     out: &mut Vec<Match>,
     trace_buffer: &mut TraceBuffer,
 ) where
     S: SimdBackend,
     F: SimdBackend,
 {
+    let pattern_len = full_tqueries.pattern_length;
+
     let suffix_ranges = suffix_searcher.search_ranges(suffix_tqueries, text, k, true, true);
+    let filtered_ranges;
+    let suffix_ranges = if let Some(max_n_frac) = max_n_frac {
+        filtered_ranges =
+            filter_endpoint_ranges(suffix_ranges, text, pattern_len, k as usize, max_n_frac);
+        &filtered_ranges
+    } else {
+        suffix_ranges
+    };
 
     full_searcher.ensure_capacity(full_tqueries.n_simd_blocks, full_tqueries.n_queries);
     full_searcher.search_prep(
@@ -93,12 +105,64 @@ pub fn hierarchical_search<S, F, P: Profile>(
             batch_slice,
             k,
             post,
+            max_n_frac,
             Some(full_searcher.alpha),
             full_searcher.max_overhang,
             trace_buffer,
         );
         out.extend_from_slice(&trace_buffer.filtered_alignments);
     }
+}
+
+fn filter_endpoint_ranges(
+    ranges: &[HitRange],
+    text: &[u8],
+    pattern_len: usize,
+    k: usize,
+    max_n_frac: f32,
+) -> Vec<HitRange> {
+    assert!(max_n_frac < 1.0, "max_n_frac must reject all-N matches");
+    let lookbehind = pattern_len + k;
+    let mut filtered = Vec::new();
+    for range in ranges {
+        let scan_start = (range.start.max(0) as usize).min(text.len());
+        let scan_end = ((range.end + 1).max(0) as usize).min(text.len());
+        let mut start = range.start;
+        let mut offset = scan_start;
+        while offset < scan_end {
+            let Some(first_n) = memchr::memchr2(b'N', b'n', &text[offset..scan_end]) else {
+                break;
+            };
+            let run_start = offset + first_n;
+            let run_end = text[run_start..scan_end]
+                .iter()
+                .position(|&b| b | (b'N' ^ b'n') != b'N' | (b'N' ^ b'n'))
+                .map_or(scan_end, |len| run_start + len);
+            offset = run_end;
+
+            // Keep the first pattern_len + k inclusive positions of the run as a buffer.
+            let gap_start = run_start + lookbehind;
+            if gap_start < run_end {
+                let gap_start = gap_start as isize;
+                if start < gap_start {
+                    filtered.push(HitRange {
+                        pattern_idx: range.pattern_idx,
+                        start,
+                        end: gap_start - 1,
+                    });
+                }
+                start = run_end as isize;
+            }
+        }
+        if start <= range.end {
+            filtered.push(HitRange {
+                pattern_idx: range.pattern_idx,
+                start,
+                end: range.end,
+            });
+        }
+    }
+    filtered
 }
 
 #[inline(always)]
@@ -109,6 +173,7 @@ fn trace_ranges_backend<S: SimdBackend, P: Profile>(
     ranges: &[HitRange],
     k: u32,
     post: TracePostProcess,
+    max_n_frac: Option<f32>,
     out: &mut Vec<Match>,
     trace_buffer: &mut TraceBuffer,
 ) {
@@ -121,6 +186,7 @@ fn trace_ranges_backend<S: SimdBackend, P: Profile>(
             chunk,
             k,
             post,
+            max_n_frac,
             Some(searcher.alpha),
             searcher.max_overhang,
             trace_buffer,
@@ -320,14 +386,15 @@ impl<P: Profile> Searcher<P> {
         k: u32,
         prefilter: PrefilterBackend,
         post: TracePostProcess,
+        max_n_frac: Option<f32>,
     ) {
         match (prefilter, full_queries) {
-            (PrefilterBackend::U8, EncodedPatterns::U16 { full, suffix_u8 }) => run_hierarchical!(self, full, suffix_u8, suffix_searcher_u8, searcher_u16, text, k, post, "U8"),
-            (PrefilterBackend::U8, EncodedPatterns::U32 { full, suffix_u8, .. }) => run_hierarchical!(self, full, suffix_u8, suffix_searcher_u8, searcher_u32, text, k, post, "U8"),
-            (PrefilterBackend::U8, EncodedPatterns::U64 { full, suffix_u8, .. }) => run_hierarchical!(self, full, suffix_u8, suffix_searcher_u8, searcher_u64, text, k, post, "U8"),
-            (PrefilterBackend::U16, EncodedPatterns::U32 { full, suffix_u16, .. }) => run_hierarchical!(self, full, suffix_u16, suffix_searcher_u16, searcher_u32, text, k, post, "U16"),
-            (PrefilterBackend::U16, EncodedPatterns::U64 { full, suffix_u16, .. }) => run_hierarchical!(self, full, suffix_u16, suffix_searcher_u16, searcher_u64, text, k, post, "U16"),
-            (PrefilterBackend::U32, EncodedPatterns::U64 { full, suffix_u32, .. }) => run_hierarchical!(self, full, suffix_u32, suffix_searcher_u32, searcher_u64, text, k, post, "U32"),
+            (PrefilterBackend::U8, EncodedPatterns::U16 { full, suffix_u8 }) => run_hierarchical!(self, full, suffix_u8, suffix_searcher_u8, searcher_u16, text, k, post, max_n_frac, "U8"),
+            (PrefilterBackend::U8, EncodedPatterns::U32 { full, suffix_u8, .. }) => run_hierarchical!(self, full, suffix_u8, suffix_searcher_u8, searcher_u32, text, k, post, max_n_frac, "U8"),
+            (PrefilterBackend::U8, EncodedPatterns::U64 { full, suffix_u8, .. }) => run_hierarchical!(self, full, suffix_u8, suffix_searcher_u8, searcher_u64, text, k, post, max_n_frac, "U8"),
+            (PrefilterBackend::U16, EncodedPatterns::U32 { full, suffix_u16, .. }) => run_hierarchical!(self, full, suffix_u16, suffix_searcher_u16, searcher_u32, text, k, post, max_n_frac, "U16"),
+            (PrefilterBackend::U16, EncodedPatterns::U64 { full, suffix_u16, .. }) => run_hierarchical!(self, full, suffix_u16, suffix_searcher_u16, searcher_u64, text, k, post, max_n_frac, "U16"),
+            (PrefilterBackend::U32, EncodedPatterns::U64 { full, suffix_u32, .. }) => run_hierarchical!(self, full, suffix_u32, suffix_searcher_u32, searcher_u64, text, k, post, max_n_frac, "U32"),
             _ => panic!("Invalid prefilter backend combination"),
         }
     }
@@ -377,12 +444,23 @@ impl<P: Profile> Searcher<P> {
     ) -> &[Match] {
         if let Some(prefilter) = Self::should_use_hierarchical(encoded_queries, k, use_hierarchical)
         {
-            self.hierarchical_search_with_prefilter(encoded_queries, text, k, prefilter, post);
+            self.hierarchical_search_with_prefilter(
+                encoded_queries,
+                text,
+                k,
+                prefilter,
+                post,
+                max_n_frac,
+            );
         } else {
             dispatch_encoded!(self, encoded_queries, |searcher, tq| {
                 // Find matching ranges
-                let ranges: Vec<HitRange> =
-                    searcher.search_ranges(tq, text, k, true, true).to_vec();
+                let ranges = searcher.search_ranges(tq, text, k, true, true);
+                let ranges = if let Some(max_n_frac) = max_n_frac {
+                    filter_endpoint_ranges(ranges, text, tq.pattern_length, k as usize, max_n_frac)
+                } else {
+                    ranges.to_vec()
+                };
                 // Trace each of the ranges, accumulating into alignments_buf
                 trace_ranges_backend(
                     searcher,
@@ -391,6 +469,7 @@ impl<P: Profile> Searcher<P> {
                     ranges.as_slice(),
                     k,
                     post,
+                    max_n_frac,
                     &mut self.alignments_buf,
                     &mut self.trace_buffer,
                 );
@@ -407,5 +486,93 @@ impl<P: Profile> Searcher<P> {
 impl<P: Profile> Default for Searcher<P> {
     fn default() -> Self {
         Self::new(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::profiles::Iupac;
+
+    #[test]
+    fn endpoint_ranges_split_only_at_all_n_windows() {
+        let text = b"AAAAAAAAAAAAAAAANNNNnnnnNNNNnnnnAAAAAAAA";
+        let ranges = [
+            HitRange {
+                pattern_idx: 0,
+                start: 0,
+                end: text.len() as isize - 1,
+            },
+            HitRange {
+                pattern_idx: 1,
+                start: 25,
+                end: 31,
+            },
+        ];
+        let filtered = filter_endpoint_ranges(&ranges, text, 4, 1, 0.0);
+        let bounds: Vec<_> = filtered.iter().map(|r| (r.start, r.end)).collect();
+        assert_eq!(bounds, [(0, 20), (32, 39), (25, 29)]);
+    }
+
+    #[test]
+    fn hierarchical_search_preserves_matches_immediately_outside_a_long_n_run() {
+        // An all-A pattern ties with shifted endpoints inside the N run.
+        let pattern = b"AAAAAAAAAAAAAAAAAAAA";
+        let mut text = vec![b'N'; 100_000];
+        text[..pattern.len()].copy_from_slice(pattern);
+        text.extend_from_slice(pattern);
+
+        let mut searcher = Searcher::<Iupac>::new(None);
+        let encoded = searcher.encode(&[pattern.to_vec()], false);
+        let matches = searcher.search(&encoded, &text, 0, Some(0.0));
+        let spans: Vec<_> = matches.iter().map(|m| m.text_start..m.text_end).collect();
+        assert_eq!(spans, [0..pattern.len(), 100_000..text.len()]);
+    }
+
+    #[test]
+    fn hierarchical_search_preserves_matches_overlapping_both_edges_of_an_n_run() {
+        let pattern = b"ACGTACGTACGTACGTACGT";
+        let overlap = 2;
+        let mut text = pattern[..pattern.len() - overlap].to_vec();
+        text.resize(text.len() + 256, b'N');
+        let right_start = text.len() - overlap;
+        text.extend_from_slice(&pattern[overlap..]);
+
+        let max_n_frac = Some(overlap as f32 / pattern.len() as f32);
+        let mut searcher = Searcher::<Iupac>::new(None);
+        let encoded = searcher.encode(&[pattern.to_vec()], false);
+        let expected = [0..pattern.len(), right_start..text.len()];
+        let matches = searcher.search(&encoded, &text, 0, max_n_frac);
+        let spans: Vec<_> = matches.iter().map(|m| m.text_start..m.text_end).collect();
+        assert_eq!(spans, expected);
+
+        let matches = searcher.search_all(&encoded, &text, 0, max_n_frac);
+        let spans: Vec<_> = matches.iter().map(|m| m.text_start..m.text_end).collect();
+        assert_eq!(spans, expected);
+    }
+
+    #[test]
+    fn all_matches_exclude_only_the_all_n_window_at_high_n_fraction() {
+        let mut searcher = Searcher::<Iupac>::new(None);
+        let encoded = searcher.encode(&[b"AAAA".to_vec()], false);
+        let text = b"AAAANNNN";
+        let max_n_frac = Some(0.9);
+
+        let matches = searcher.search_all(&encoded, text, 0, max_n_frac);
+        let spans: Vec<_> = matches.iter().map(|m| m.text_start..m.text_end).collect();
+        assert_eq!(spans, [0..4, 1..5, 2..6, 3..7]);
+
+        let matches = searcher.search(&encoded, text, 0, max_n_frac);
+        let spans: Vec<_> = matches.iter().map(|m| m.text_start..m.text_end).collect();
+        assert_eq!(spans, [3..7]);
+    }
+
+    #[test]
+    #[should_panic(expected = "to require a non-N base in the mandatory suffix")]
+    fn hierarchical_search_rejects_threshold_allowing_all_n_suffix() {
+        let mut searcher = Searcher::<Iupac>::new(None);
+        let encoded = searcher.encode(&[vec![b'A'; 20]], false);
+        // The U16 suffix must consume at least 16 - 3 bases.
+        searcher.search(&encoded, &[b'N'; 40], 3, Some(13.0 / 23.0));
     }
 }

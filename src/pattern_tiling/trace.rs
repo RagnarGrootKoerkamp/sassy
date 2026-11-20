@@ -1,3 +1,4 @@
+use crate::n_filter::satisfy_n_endpoint_filter;
 use crate::pattern_tiling::backend::SimdBackend;
 use crate::pattern_tiling::minima::{TracePostProcess, local_minima_indices};
 use crate::pattern_tiling::search::{HitRange, Myers};
@@ -185,6 +186,7 @@ fn trace_passing_alignments<B: SimdBackend, P: Profile>(
     text: &[u8],
     k: u32,
     post: TracePostProcess,
+    max_n_frac: Option<f32>,
 ) {
     let text_len = text.len();
     let pattern_length = t_queries.pattern_length;
@@ -236,6 +238,26 @@ fn trace_passing_alignments<B: SimdBackend, P: Profile>(
                 );
             }
             TracePostProcess::LocalMinima => {
+                // Make sure that AAAA matches AAAANNNN in position 0..4,
+                if let Some(max_n_frac) = max_n_frac {
+                    // Throw away positions that don't satisfy the N
+                    // filter, so that local minima just before those positions are preserved.
+                    //
+                    // This makes sure that searching AAAA in AAAANNNN returns
+                    // ANNN at the rightmost local-minimum match, rather than nothing.
+                    buffer.pos_cost_buffer.retain(|&(pos, _)| {
+                        let end = (pos + 1) as usize;
+                        (searcher.alpha != 1.0
+                            && (end < pattern_length + k as usize || end > text_len))
+                            || satisfy_n_endpoint_filter(
+                                end,
+                                text,
+                                pattern_length,
+                                k as usize,
+                                max_n_frac,
+                            )
+                    });
+                }
                 local_minima_indices(&buffer.pos_cost_buffer, &mut buffer.minima_indices_buffer);
                 // Build subset of pos_cost pairs for local minima only
                 buffer.temp_pos_cost.clear();
@@ -269,6 +291,7 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
     ranges: &[HitRange],
     k: u32,
     post: TracePostProcess,
+    max_n_frac: Option<f32>,
     alpha: Option<f32>,
     max_overhang: Option<usize>,
     buffer: &mut TraceBuffer,
@@ -403,7 +426,9 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
         );
     }
 
-    trace_passing_alignments(batch_size, buffer, searcher, t_queries, text, k, post);
+    trace_passing_alignments(
+        batch_size, buffer, searcher, t_queries, text, k, post, max_n_frac,
+    );
 }
 
 #[inline(always)]

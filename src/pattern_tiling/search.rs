@@ -512,6 +512,7 @@ mod tests {
             &ranges,
             k,
             post,
+            None,
             Some(searcher.alpha),
             searcher.max_overhang,
             &mut buffer,
