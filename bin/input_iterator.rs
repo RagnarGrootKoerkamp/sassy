@@ -1,10 +1,11 @@
 use needletail::{FastxReader, parse_fastx_file, parse_fastx_stdin};
-use sassy::CachedRev;
+use sassy::{CachedRev, Match};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex}; //Todo: could use parking_lot mutex - faster
 
 /// Each batch of text records will be at most this size if possible.
 const DEFAULT_BATCH_BYTES: usize = 1024 * 1024; // 1 MiB
+const MAX_TEXT_CHUNK_BYTES: usize = 1024 * 1024;
 /// Each batch of patterns will be at most this size.
 const DEFAULT_BATCH_PATTERNS: usize = 64;
 
@@ -25,6 +26,30 @@ pub struct TextRecord {
     pub id: ID,
     pub seq: CachedRev<Vec<u8>>,
     pub quality: Vec<u8>,
+    /// Offset of this chunk in the original FASTA record.
+    pub record_offset: usize,
+    /// First position in this chunk belonging to its non-overlapping region.
+    pub first_real_position: usize,
+    pub is_first_chunk: bool,
+    pub is_last_chunk: bool,
+}
+
+impl TextRecord {
+    /// A match is owned by the chunk that contains its last character.
+    pub fn owns_match(&self, m: &Match, pattern: &PatternRecord) -> bool {
+        let text_len = self.seq.text.len();
+        // `text_end` is exclusive, so a match ending exactly at the first real
+        // position contains no real base from this chunk and belongs to the prior one.
+        if !self.is_first_chunk && m.text_end <= self.first_real_position {
+            return false;
+        }
+        // Right overhang is represented by a match ending at the text boundary
+        // without consuming the full pattern.
+        if !self.is_last_chunk && m.text_end >= text_len && m.pattern_end < pattern.seq.len() {
+            return false;
+        }
+        true
+    }
 }
 
 /// A batch of text records of around 1MB by default.
@@ -47,6 +72,15 @@ struct RecordState {
     pat_idx: usize,
     /// The next batch id.
     batch_id: usize,
+    pending_record: Option<PendingRecord>,
+}
+
+/// The current record, when it's being emitted in chunks.
+struct PendingRecord {
+    id: ID,
+    seq: Vec<u8>,
+    quality: Vec<u8>,
+    next_chunk_start: usize,
 }
 
 /// Thread-safe iterator giving *batches* of (pattern, text) pairs.
@@ -60,6 +94,8 @@ pub struct InputIterator<'a> {
     batch_byte_limit: usize,
     batch_pattern_limit: usize,
     rev: bool,
+    overlap: usize,
+    max_text_chunk_bytes: usize,
 }
 
 fn parse_file(path: &PathBuf) -> Box<dyn FastxReader> {
@@ -72,15 +108,27 @@ fn parse_file(path: &PathBuf) -> Box<dyn FastxReader> {
 
 impl<'a> InputIterator<'a> {
     /// Create a new iterator over `fasta_path`, going through `patterns`.
-    /// `max_batch_bytes` (default 1MB) controls how much input text is in a batch, but long (chromosome) records are not split.
+    /// `max_batch_bytes` (default 1MB) controls the target batch size.
     /// `max_batch_patterns` (default 64) controls how many patterns are in a batch.
+    /// `overlap` is the maximum reference span of a match, including edits.
     pub fn new(
         paths: &'a Vec<PathBuf>,
         patterns: &'a [PatternRecord],
         max_batch_bytes: Option<usize>,
         max_batch_patterns: Option<usize>,
         rev: bool,
+        overlap: usize,
+        chunk_long_records: bool,
     ) -> Self {
+        let max_text_chunk_bytes = if chunk_long_records {
+            assert!(
+                overlap < MAX_TEXT_CHUNK_BYTES,
+                "match overlap must be smaller than the 1 MiB text chunk size"
+            );
+            MAX_TEXT_CHUNK_BYTES
+        } else {
+            usize::MAX
+        };
         let reader = parse_file(&paths[0]);
         // Just empty state when we create the iterator
         let batch_pattern_limit = max_batch_patterns.unwrap_or(DEFAULT_BATCH_PATTERNS);
@@ -90,6 +138,7 @@ impl<'a> InputIterator<'a> {
             file_idx: 0,
             pat_idx: patterns.len() / batch_pattern_limit + 2,
             batch_id: 0,
+            pending_record: None,
         };
         Self {
             patterns,
@@ -98,6 +147,8 @@ impl<'a> InputIterator<'a> {
             batch_byte_limit: max_batch_bytes.unwrap_or(DEFAULT_BATCH_BYTES),
             batch_pattern_limit,
             rev,
+            overlap,
+            max_text_chunk_bytes,
         }
     }
 
@@ -123,17 +174,58 @@ impl<'a> InputIterator<'a> {
             'outer: loop {
                 // Make sure we have a current record, just so we can unwrap
                 let current_record = loop {
+                    if let Some(pending) = state.pending_record.as_mut() {
+                        if pending.seq.len() <= self.max_text_chunk_bytes {
+                            let pending = state.pending_record.take().unwrap();
+                            break TextRecord {
+                                id: pending.id,
+                                seq: CachedRev::new(pending.seq, false),
+                                quality: pending.quality,
+                                record_offset: 0,
+                                first_real_position: 0,
+                                is_first_chunk: true,
+                                is_last_chunk: true,
+                            };
+                        }
+
+                        let offset = pending.next_chunk_start;
+                        let end = offset
+                            .saturating_add(self.max_text_chunk_bytes)
+                            .min(pending.seq.len());
+                        let is_first_chunk = offset == 0;
+                        let is_last_chunk = end == pending.seq.len();
+                        let first_real_position = if is_first_chunk { 0 } else { self.overlap };
+                        let chunk = pending.seq[offset..end].to_vec();
+                        let quality = if pending.quality.is_empty() {
+                            Vec::new()
+                        } else {
+                            pending.quality[offset..end].to_vec()
+                        };
+                        let text_record = TextRecord {
+                            id: pending.id.clone(),
+                            seq: CachedRev::new(chunk, false),
+                            quality,
+                            record_offset: offset,
+                            first_real_position,
+                            is_first_chunk,
+                            is_last_chunk,
+                        };
+                        if is_last_chunk {
+                            state.pending_record = None;
+                        } else {
+                            pending.next_chunk_start = end - self.overlap;
+                        }
+                        break text_record;
+                    }
+
                     match state.reader.next() {
                         Some(Ok(rec)) => {
-                            let id = String::from_utf8(rec.id().to_vec()).unwrap().to_string();
-                            let seq = rec.seq().into_owned();
-                            // RC is computed later to avoid blocking the reader.
-                            let static_text = CachedRev::new(seq, false);
-                            break TextRecord {
-                                id,
-                                seq: static_text,
+                            state.pending_record = Some(PendingRecord {
+                                id: String::from_utf8(rec.id().to_vec()).unwrap(),
+                                seq: rec.seq().into_owned(),
                                 quality: rec.qual().unwrap_or(&[]).to_vec(),
-                            };
+                                next_chunk_start: 0,
+                            });
                         }
                         Some(Err(e)) => panic!("Error reading FASTA record: {e}"),
                         None => {
@@ -250,7 +342,8 @@ mod tests {
 
         // Create the iterator
         let paths = vec![file.path().to_path_buf()];
-        let iter = InputIterator::new(&paths, &patterns, Some(500), None, true);
+        let overlap = patterns.iter().map(|p| p.seq.len()).max().unwrap_or(0);
+        let iter = InputIterator::new(&paths, &patterns, Some(500), None, true, overlap, true);
 
         // Pull 10 batches
         let mut batch_id = 0;

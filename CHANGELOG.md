@@ -11,6 +11,8 @@ Some bugs found by `sol`:
   ([#93](https://github.com/RagnarGrootKoerkamp/sassy/pull/93))
 - Avoid allocating/caching the reverse-complement text for `--v2` searches
   ([#92](https://github.com/RagnarGrootKoerkamp/sassy/pull/92))
+- The CLI commands now split long records into chunks for better multi-threading.
+  ([#91](https://github.com/RagnarGrootKoerkamp/sassy/pull/91))
 
 
 ## 0.3.0

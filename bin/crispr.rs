@@ -182,7 +182,15 @@ pub fn crispr(args: &CrisprArgs) {
 
     // Shared iterator that pairs each query with every FASTA record in a batched fashion
     let paths = vec![args.path.clone()];
-    let task_iter = InputIterator::new(&paths, &queries, None, None, true);
+    let task_iter = InputIterator::new(
+        &paths,
+        &queries,
+        None,
+        None,
+        true,
+        guide_sequences.iter().map(Vec::len).max().unwrap_or(0) + args.k,
+        true,
+    );
 
     let start = Instant::now();
     std::thread::scope(|scope| {
@@ -206,19 +214,20 @@ pub fn crispr(args: &CrisprArgs) {
 
                 while let Some((_batch_id, batch)) = task_iter.next_batch() {
                     for text in &*batch.2 {
+                        let sequence = &text.seq;
                         for pattern in batch.1 {
                             let guide_sequence = &pattern.seq;
                             let guide_string = String::from_utf8_lossy(guide_sequence);
                             let id_text = &text;
 
                             let id = &id_text.id;
-                            let text = &id_text.seq;
 
-                            let matches = if !args.allow_pam_edits {
-                                searcher.search_with_fn(guide_sequence, text, args.k, true, filter_fn)
+                            let mut matches = if !args.allow_pam_edits {
+                                searcher.search_with_fn(guide_sequence, sequence, args.k, true, filter_fn)
                             } else {
-                                searcher.search_all(guide_sequence, text, args.k)
+                                searcher.search_all(guide_sequence, sequence, args.k)
                             };
+                            matches.retain(|m| text.owns_match(m, pattern));
                             if matches.is_empty() {
                                 continue;
                             }
@@ -230,8 +239,8 @@ pub fn crispr(args: &CrisprArgs) {
                             for m in matches {
                                 let start = m.text_start;
                                 let end = m.text_end;
-                                let text = text.text();
-                                let slice = &text.as_ref()[start..end];
+                                let text_bytes = sequence.text();
+                                let slice = &text_bytes.as_ref()[start..end];
 
                                 let match_region = if m.strand == Strand::Rc {
                                     let rc = <Iupac as Profile>::reverse_complement(slice);
@@ -247,7 +256,9 @@ pub fn crispr(args: &CrisprArgs) {
                                 };
                                 writeln!(
                                     writer_guard,
-                                    "{guide_string}\t{id}\t{cost}\t{strand}\t{start}\t{end}\t{match_region}\t{cigar}"
+                                    "{guide_string}\t{id}\t{cost}\t{strand}\t{}\t{}\t{match_region}\t{cigar}",
+                                    text.record_offset + start,
+                                    text.record_offset + end,
                                 )
                                     .unwrap();
                             }

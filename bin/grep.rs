@@ -395,6 +395,7 @@ fn run_batch_v2<'a, P: Profile>(
         let batch_matches: Vec<_> = record_matches
             .iter()
             .cloned()
+            .filter(|m| text.owns_match(m, &patterns[m.pattern_idx]))
             .map(|m| {
                 let pattern = &patterns[m.pattern_idx];
                 (pattern, m)
@@ -444,6 +445,8 @@ impl Args {
             args.base.pattern_batch_size,
             // V2 encodes reverse-complemented patterns and only reads forward text.
             rc && !v2,
+            patterns.iter().map(|p| p.seq.len()).max().unwrap_or(0) + k,
+            self.filter.is_none(),
         );
 
         let output = Mutex::new((
@@ -561,8 +564,12 @@ impl Args {
                                             s.search(&pattern.seq, &text.seq, k)
                                         }
                                     };
-                                    batch_matches
-                                        .extend(record_matches.into_iter().map(|m| (pattern, m)));
+                                    batch_matches.extend(
+                                        record_matches
+                                            .into_iter()
+                                            .filter(|m| text.owns_match(m, pattern))
+                                            .map(|m| (pattern, m)),
+                                    );
                                 }
 
                                 // Don't skip when outputting non-matching records.
@@ -772,7 +779,9 @@ impl Args {
         };
         writeln!(
             writer,
-            "{pat_id}\t{text_id}\t{cost}\t{strand}\t{start}\t{end}\t{match_region}\t{cigar}\t{pattern_start}\t{pattern_end}\t{pattern_match_region}"
+            "{pat_id}\t{text_id}\t{cost}\t{strand}\t{}\t{}\t{match_region}\t{cigar}\t{pattern_start}\t{pattern_end}\t{pattern_match_region}",
+            text.record_offset + start,
+            text.record_offset + end,
         )
         .unwrap();
     }
@@ -822,8 +831,10 @@ mod test {
     use clap::Parser;
     use pa_types::Cigar;
     use sassy::profiles::{Dna, Profile};
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
-    use super::{Args, GrepArgs, SearchArgs};
+    use super::{Args, FilterArgs, GrepArgs, SearchArgs};
     use sassy::Strand;
 
     #[test]
