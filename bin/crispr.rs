@@ -189,9 +189,9 @@ pub fn crispr(args: &CrisprArgs) {
         None,
         true,
         guide_sequences.iter().map(Vec::len).max().unwrap_or(0) + args.k,
-        true,
+        false,
     );
-    let input_reader = &BufferedInputIterator::new(4);
+    let input_reader = &BufferedInputIterator::new(num_threads);
     let start = Instant::now();
     std::thread::scope(|s| {
         input_reader.start_reader(s, &input_batch_iter);

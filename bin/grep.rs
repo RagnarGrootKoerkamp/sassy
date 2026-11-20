@@ -7,7 +7,7 @@ use std::{
 };
 
 use colored::Colorize;
-use needletail::parse_fastx_file;
+use helicase::{FastxParser, HelicaseParser};
 use pa_types::Cigar;
 use sassy::{
     Match, Searcher, Strand,
@@ -16,7 +16,7 @@ use sassy::{
 };
 
 use crate::input_iterator::{
-    BufferedInputIterator, InputIterator, PatternRecord, TextBatch, TextRecord,
+    BufferedInputIterator, FASTX_CONFIG, InputIterator, PatternRecord, TextBatch, TextRecord,
 };
 
 // TODO: Support ASCII alphabet.
@@ -448,7 +448,7 @@ impl Args {
             // V2 encodes reverse-complemented patterns and only reads forward text.
             rc && !v2,
             patterns.iter().map(|p| p.seq.len()).max().unwrap_or(0) + k,
-            self.filter.is_none(),
+            self.filter.is_some(),
         );
 
         let output = Mutex::new((
@@ -515,7 +515,7 @@ impl Args {
             Mutex::new(writer)
         });
 
-        let input_reader = &BufferedInputIterator::new(4);
+        let input_reader = &BufferedInputIterator::new(num_threads);
 
         std::thread::scope(|s| {
             input_reader.start_reader(s, input_iterator);
@@ -695,15 +695,14 @@ impl Args {
             return patterns;
         }
         if let Some(pattern_fasta) = &self.base.pattern_fasta {
-            // Pull all sequences and ids from the FASTA file
-            let mut reader = parse_fastx_file(pattern_fasta).expect("valid path/file");
+            let mut reader =
+                FastxParser::<FASTX_CONFIG>::from_file(pattern_fasta).expect("valid path/file");
             let mut patterns = Vec::new();
             while let Some(record) = reader.next() {
-                let seqrec = record.expect("invalid record");
-                let id = String::from_utf8(seqrec.id().to_vec()).unwrap();
+                record.expect("invalid record");
                 patterns.push(PatternRecord {
-                    id,
-                    seq: seqrec.seq().into_owned(),
+                    id: String::from_utf8(reader.get_header_owned()).unwrap(),
+                    seq: reader.get_dna_string_owned(),
                 });
             }
             return patterns;

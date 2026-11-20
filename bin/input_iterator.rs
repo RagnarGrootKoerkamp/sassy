@@ -1,5 +1,6 @@
-use needletail::{FastxReader, parse_fastx_file, parse_fastx_stdin};
+use helicase::{Config, FastxParser, HelicaseParser, ParserOptions};
 use sassy::{CachedRev, Match};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex,
@@ -9,9 +10,17 @@ use std::thread::Scope;
 
 /// Each batch of text records will be at most this size if possible.
 const DEFAULT_BATCH_BYTES: usize = 1024 * 1024; // 1 MiB
-const MAX_TEXT_CHUNK_BYTES: usize = 1024 * 1024;
+const MAX_TEXT_CHUNK_BYTES: usize = 32 * 1024 * 1024;
 /// Each batch of patterns will be at most this size.
 const DEFAULT_BATCH_PATTERNS: usize = 64;
+
+pub(super) const FASTX_CONFIG: Config = ParserOptions::default().config();
+const FASTX_WITH_QUALITY: Config = ParserOptions::default().compute_quality().config();
+
+enum TextReader {
+    Sequence(FastxParser<'static, FASTX_CONFIG>),
+    WithQuality(FastxParser<'static, FASTX_WITH_QUALITY>),
+}
 
 /// Type alias for fasta record IDs.
 pub type ID = String;
@@ -100,7 +109,7 @@ impl<'a> BufferedInputIterator<'a> {
 
 struct RecordState {
     /// The current fasta reader.
-    reader: Box<dyn FastxReader + Send>,
+    reader: TextReader,
     /// The last batch of text records.
     text_batch: Arc<Vec<TextRecord>>,
     /// The next file index.
@@ -133,13 +142,48 @@ pub struct InputIterator<'a> {
     rev: bool,
     overlap: usize,
     max_text_chunk_bytes: usize,
+    filter_mode: bool,
 }
 
-fn parse_file(path: &PathBuf) -> Box<dyn FastxReader> {
+fn parse_file<const CONFIG: Config>(path: &Path) -> FastxParser<'static, CONFIG> {
     if path == Path::new("") || path == Path::new("-") {
-        parse_fastx_stdin().unwrap()
+        FastxParser::from_reader(io::stdin()).unwrap()
     } else {
-        parse_fastx_file(path).unwrap()
+        FastxParser::from_file(path).unwrap()
+    }
+}
+
+impl TextReader {
+    fn open(path: &Path, read_quality: bool) -> Self {
+        if read_quality {
+            Self::WithQuality(parse_file(path))
+        } else {
+            Self::Sequence(parse_file(path))
+        }
+    }
+
+    fn next_record(&mut self) -> Option<PendingRecord> {
+        fn read_record<const CONFIG: Config>(
+            reader: &mut FastxParser<'static, CONFIG>,
+            quality: impl FnOnce(&mut FastxParser<'static, CONFIG>) -> Vec<u8>,
+        ) -> Option<PendingRecord> {
+            reader
+                .next()?
+                .unwrap_or_else(|e| panic!("Error reading FASTA/FASTQ record: {e}"));
+            Some(PendingRecord {
+                id: String::from_utf8(reader.get_header_owned()).unwrap(),
+                seq: reader.get_dna_string_owned(),
+                quality: quality(reader),
+                next_chunk_start: 0,
+            })
+        }
+
+        match self {
+            Self::Sequence(reader) => read_record(reader, |_| Vec::new()),
+            Self::WithQuality(reader) => read_record(reader, |reader| {
+                reader.get_quality_owned().unwrap_or_default()
+            }),
+        }
     }
 }
 
@@ -148,6 +192,7 @@ impl<'a> InputIterator<'a> {
     /// `max_batch_bytes` (default 1MB) controls the target batch size.
     /// `max_batch_patterns` (default 64) controls how many patterns are in a batch.
     /// `overlap` is the maximum reference span of a match, including edits.
+    /// `filter_mode` keeps records whole and reads FASTQ qualities for output.
     pub fn new(
         paths: &'a Vec<PathBuf>,
         patterns: &'a [PatternRecord],
@@ -155,12 +200,12 @@ impl<'a> InputIterator<'a> {
         max_batch_patterns: Option<usize>,
         rev: bool,
         overlap: usize,
-        chunk_long_records: bool,
+        filter_mode: bool,
     ) -> Self {
-        let chunk_size = if chunk_long_records {
-            MAX_TEXT_CHUNK_BYTES
-        } else {
+        let chunk_size = if filter_mode {
             usize::MAX
+        } else {
+            MAX_TEXT_CHUNK_BYTES
         };
         Self::new_with_chunk_size(
             paths,
@@ -170,6 +215,7 @@ impl<'a> InputIterator<'a> {
             rev,
             overlap,
             chunk_size,
+            filter_mode,
         )
     }
 
@@ -183,9 +229,10 @@ impl<'a> InputIterator<'a> {
         rev: bool,
         overlap: usize,
         max_text_chunk_bytes: usize,
+        filter_mode: bool,
     ) -> Self {
         assert!(max_text_chunk_bytes > overlap.saturating_mul(2));
-        let reader = parse_file(&paths[0]);
+        let reader = TextReader::open(&paths[0], filter_mode);
         // Just empty state when we create the iterator
         let batch_pattern_limit = max_batch_patterns.unwrap_or(DEFAULT_BATCH_PATTERNS);
         let state = RecordState {
@@ -205,6 +252,7 @@ impl<'a> InputIterator<'a> {
             rev,
             overlap,
             max_text_chunk_bytes,
+            filter_mode,
         }
     }
 
@@ -279,16 +327,10 @@ impl<'a> InputIterator<'a> {
                         break text_record;
                     }
 
-                    match state.reader.next() {
-                        Some(Ok(rec)) => {
-                            state.pending_record = Some(PendingRecord {
-                                id: String::from_utf8(rec.id().to_vec()).unwrap(),
-                                seq: rec.seq().into_owned(),
-                                quality: rec.qual().unwrap_or(&[]).to_vec(),
-                                next_chunk_start: 0,
-                            });
+                    match state.reader.next_record() {
+                        Some(record) => {
+                            state.pending_record = Some(record);
                         }
-                        Some(Err(e)) => panic!("Error reading FASTA record: {e}"),
                         None => {
                             // Return last batch for the current file.
                             if !text_batch.is_empty() {
@@ -302,7 +344,8 @@ impl<'a> InputIterator<'a> {
                                 return None;
                             }
                             // Start reading next file.
-                            state.reader = parse_file(&self.paths[state.file_idx]);
+                            state.reader =
+                                TextReader::open(&self.paths[state.file_idx], self.filter_mode);
                             continue;
                         }
                     }
@@ -446,7 +489,7 @@ mod tests {
             let paths = vec![path.to_path_buf()];
             let patterns = std::slice::from_ref(pattern);
             let iter = InputIterator::new_with_chunk_size(
-                &paths, patterns, None, None, true, overlap, chunk_size,
+                &paths, patterns, None, None, true, overlap, chunk_size, false,
             );
             let mut searcher = Searcher::<Dna>::new_rc();
             let mut found = Vec::new();
