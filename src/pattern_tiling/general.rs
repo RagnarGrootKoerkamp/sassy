@@ -568,11 +568,11 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "to require a non-N base in the mandatory suffix")]
-    fn hierarchical_search_rejects_threshold_allowing_all_n_suffix() {
+    fn hierarchical_search_rejects_all_n_matches_at_a_permissive_threshold() {
         let mut searcher = Searcher::<Iupac>::new(None);
         let encoded = searcher.encode(&[vec![b'A'; 20]], false);
-        // The U16 suffix must consume at least 16 - 3 bases.
-        searcher.search(&encoded, &[b'N'; 40], 3, Some(13.0 / 23.0));
+        // This threshold can admit an all-N U16 suffix, but the full match is all Ns.
+        let matches = searcher.search_all(&encoded, &[b'N'; 40], 3, Some(13.0 / 23.0));
+        assert!(matches.is_empty());
     }
 }
