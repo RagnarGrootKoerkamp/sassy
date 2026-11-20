@@ -57,7 +57,7 @@ pub struct BaseArgs {
     )]
     pattern_fasta: Option<PathBuf>,
 
-    /// Number of patterns to process inside each batch. Default 64.
+    /// Number of patterns to process inside each batch. Default 32.
     #[arg(long, requires = "pattern_file")]
     pattern_batch_size: Option<usize>,
 

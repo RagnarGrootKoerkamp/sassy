@@ -1,4 +1,4 @@
-use helicase::{Config, FastxParser, HelicaseParser, ParserOptions};
+use helicase::{Config, FastxParser, HelicaseParser, ParallelFastxParser, ParserOptions};
 use sassy::{CachedRev, Match};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -10,17 +10,12 @@ use std::thread::Scope;
 
 /// Each batch of text records will be at most this size if possible.
 const DEFAULT_BATCH_BYTES: usize = 1024 * 1024; // 1 MiB
-const MAX_TEXT_CHUNK_BYTES: usize = 32 * 1024 * 1024;
+const MAX_TEXT_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 /// Each batch of patterns will be at most this size.
 const DEFAULT_BATCH_PATTERNS: usize = 32;
 
 pub(super) const FASTX_CONFIG: Config = ParserOptions::default().config();
 const FASTX_WITH_QUALITY: Config = ParserOptions::default().compute_quality().config();
-
-enum TextReader {
-    Sequence(FastxParser<'static, FASTX_CONFIG>),
-    WithQuality(FastxParser<'static, FASTX_WITH_QUALITY>),
-}
 
 /// Type alias for fasta record IDs.
 pub type ID = String;
@@ -145,44 +140,90 @@ pub struct InputIterator<'a> {
     filter_mode: bool,
 }
 
-fn parse_file<const CONFIG: Config>(path: &Path) -> FastxParser<'static, CONFIG> {
-    if path == Path::new("") || path == Path::new("-") {
-        FastxParser::from_reader(io::stdin()).unwrap()
-    } else {
-        FastxParser::from_file(path).unwrap()
-    }
+/// Helicase-based parallel input reader.
+struct TextReader {
+    batches: Receiver<Vec<PendingRecord>>,
+    records: std::vec::IntoIter<PendingRecord>,
+    worker: Option<std::thread::JoinHandle<Result<(), helicase::parser::Error>>>,
 }
 
 impl TextReader {
     fn open(path: &Path, read_quality: bool) -> Self {
         if read_quality {
-            Self::WithQuality(parse_file(path))
+            Self::open_parser::<FASTX_WITH_QUALITY, _>(path, |parser| {
+                parser.get_quality_owned().unwrap_or_default()
+            })
         } else {
-            Self::Sequence(parse_file(path))
+            Self::open_parser::<FASTX_CONFIG, _>(path, |_| Vec::new())
+        }
+    }
+
+    fn open_parser<const CONFIG: Config, Q>(path: &Path, quality: Q) -> Self
+    where
+        Q: Fn(&mut FastxParser<'_, CONFIG>) -> Vec<u8> + Send + Sync + 'static,
+    {
+        let workers =
+            std::thread::available_parallelism().map_or(1, |cpus| (cpus.get() / 4).max(1));
+        let parser = if path == Path::new("") || path == Path::new("-") {
+            ParallelFastxParser::<CONFIG>::from_reader(io::stdin())
+        } else if path.is_file() {
+            ParallelFastxParser::<CONFIG>::from_file_mmap(path).unwrap()
+        } else {
+            ParallelFastxParser::<CONFIG>::from_reader(std::fs::File::open(path).unwrap())
+        }
+        .threads(workers);
+        let (sender, batches) = sync_channel(2);
+        let worker = std::thread::spawn(move || {
+            let send = |records| {
+                sender
+                    .send(records)
+                    .map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))
+            };
+            parser.for_each(|mut parser| {
+                let mut records = Vec::new();
+                let mut bytes = 0;
+                while let Some(event) = parser.next() {
+                    event?;
+                    let seq = parser.get_dna_string_owned();
+                    bytes += seq.len().max(1);
+                    records.push(PendingRecord {
+                        id: String::from_utf8(parser.get_header_owned()).unwrap(),
+                        seq,
+                        quality: quality(&mut parser),
+                        next_chunk_start: 0,
+                    });
+                    if bytes >= DEFAULT_BATCH_BYTES {
+                        send(std::mem::take(&mut records))?;
+                        bytes = 0;
+                    }
+                }
+                if !records.is_empty() {
+                    send(records)?;
+                }
+                Ok(())
+            })
+        });
+        Self {
+            batches,
+            records: Vec::new().into_iter(),
+            worker: Some(worker),
         }
     }
 
     fn next_record(&mut self) -> Option<PendingRecord> {
-        fn read_record<const CONFIG: Config>(
-            reader: &mut FastxParser<'static, CONFIG>,
-            quality: impl FnOnce(&mut FastxParser<'static, CONFIG>) -> Vec<u8>,
-        ) -> Option<PendingRecord> {
-            reader
-                .next()?
-                .unwrap_or_else(|e| panic!("Error reading FASTA/FASTQ record: {e}"));
-            Some(PendingRecord {
-                id: String::from_utf8(reader.get_header_owned()).unwrap(),
-                seq: reader.get_dna_string_owned(),
-                quality: quality(reader),
-                next_chunk_start: 0,
-            })
-        }
-
-        match self {
-            Self::Sequence(reader) => read_record(reader, |_| Vec::new()),
-            Self::WithQuality(reader) => read_record(reader, |reader| {
-                reader.get_quality_owned().unwrap_or_default()
-            }),
+        loop {
+            if let Some(record) = self.records.next() {
+                return Some(record);
+            }
+            match self.batches.recv() {
+                Ok(records) => self.records = records.into_iter(),
+                Err(_) => {
+                    if let Some(worker) = self.worker.take() {
+                        worker.join().unwrap().unwrap();
+                    }
+                    return None;
+                }
+            }
         }
     }
 }
@@ -190,7 +231,7 @@ impl TextReader {
 impl<'a> InputIterator<'a> {
     /// Create a new iterator over `fasta_path`, going through `patterns`.
     /// `max_batch_bytes` (default 1MB) controls the target batch size.
-    /// `max_batch_patterns` (default 64) controls how many patterns are in a batch.
+    /// `max_batch_patterns` (default 32) controls how many patterns are in a batch.
     /// `overlap` is the maximum reference span of a match, including edits.
     /// `filter_mode` keeps records whole and reads FASTQ qualities for output.
     pub fn new(
@@ -408,6 +449,40 @@ mod tests {
     use sassy::{Searcher, profiles::Dna};
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn parallel_reader_preserves_fastq_records_and_quality() {
+        let mut file = NamedTempFile::new().unwrap();
+        let sequence = "ACGT".repeat(64);
+        let qualities: Vec<_> = (0..128)
+            .map(|idx| {
+                char::from(b'!' + (idx % 35) as u8)
+                    .to_string()
+                    .repeat(sequence.len())
+            })
+            .collect();
+        // Helicase uses the serial parser for files smaller than 32 KiB.
+        for (idx, quality) in qualities.iter().enumerate() {
+            writeln!(file, "@read {idx}\n{sequence}\n+\n{quality}").unwrap();
+        }
+
+        for read_quality in [false, true] {
+            let mut reader = TextReader::open(file.path(), read_quality);
+            let mut records: Vec<_> = std::iter::from_fn(|| reader.next_record()).collect();
+            records.sort_by_key(|record| record.id[5..].parse::<usize>().unwrap());
+            assert_eq!(records.len(), qualities.len());
+            for (idx, (record, quality)) in records.iter().zip(&qualities).enumerate() {
+                assert_eq!(record.id, format!("read {idx}"));
+                assert_eq!(record.seq, sequence.as_bytes());
+                let expected = if read_quality {
+                    quality.as_bytes()
+                } else {
+                    &[]
+                };
+                assert_eq!(record.quality, expected);
+            }
+        }
+    }
 
     fn random_dan_seq(len: usize) -> Vec<u8> {
         let mut rng = rand::rng();
