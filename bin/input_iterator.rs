@@ -12,7 +12,7 @@ use std::thread::Scope;
 const DEFAULT_BATCH_BYTES: usize = 1024 * 1024; // 1 MiB
 const MAX_TEXT_CHUNK_BYTES: usize = 32 * 1024 * 1024;
 /// Each batch of patterns will be at most this size.
-const DEFAULT_BATCH_PATTERNS: usize = 64;
+const DEFAULT_BATCH_PATTERNS: usize = 32;
 
 pub(super) const FASTX_CONFIG: Config = ParserOptions::default().config();
 const FASTX_WITH_QUALITY: Config = ParserOptions::default().compute_quality().config();
