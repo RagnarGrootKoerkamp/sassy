@@ -3,7 +3,19 @@
 <!-- next-header -->
 
 ## git
-Some bugs found by `sol`:
+Performance improvements for searching through N-heavy chromosomes on many threads:
+- The CLI commands now split long records into chunks for better multi-threading.
+  ([#91](https://github.com/RagnarGrootKoerkamp/sassy/pull/91))
+- Add `sassy crispr --v2` to use the faster v2 algorithm.
+  ([#89](https://github.com/RagnarGrootKoerkamp/sassy/pull/89))
+- Better handling of N runs in v1.
+  ([#87](https://github.com/RagnarGrootKoerkamp/sassy/pull/87))
+- Better handling of N runs in v2.
+  ([#88](https://github.com/RagnarGrootKoerkamp/sassy/pull/88))
+- Switch to parallel helicase input parser.
+
+
+And some small bugs found by `sol`:
 - **Breaking**: in `search --v2` output, the CIGAR string output was not in the
   direction of the pattern (as v1 does it). Fix that.
   ([#95](https://github.com/RagnarGrootKoerkamp/sassy/pull/95))
@@ -11,8 +23,6 @@ Some bugs found by `sol`:
   ([#93](https://github.com/RagnarGrootKoerkamp/sassy/pull/93))
 - Avoid allocating/caching the reverse-complement text for `--v2` searches
   ([#92](https://github.com/RagnarGrootKoerkamp/sassy/pull/92))
-- The CLI commands now split long records into chunks for better multi-threading.
-  ([#91](https://github.com/RagnarGrootKoerkamp/sassy/pull/91))
 
 
 ## 0.3.0
