@@ -31,7 +31,7 @@ Feature highlights:
   (See [paper](https://doi.org/10.1101/2025.07.22.666207) appendix for details.)
 - Support for (case-insensitive) ASCII, DNA (`ACGT`), and
   [IUPAC](https://www.bioinformatics.org/sms/iupac.html) (=`ACGT+NYR...`) alphabets.
-- Rust library (`cargo add sassy`), binary (`cargo install sassy`, see details below), Python
+- Rust library (`cargo add sassy`), binary (`cargo install sassy` or bioconda, see details below), Python
   bindings (`pip install sassy-rs`), `duckdb` extension/`R` bindings ([`ducksassy`](https://github.com/Rgenomicsetl/ducksassy)),
   and C bindings (see below).
 
@@ -43,12 +43,57 @@ corresponding evals in [evals/](evals/), and the **papers**:
 > Bioinformatics, May 2026.  
 > https://doi.org/10.1093/bioinformatics/btag244 
 
-and
+and for the **batching v2 algorithm**:
 
 > Rick Beeloo and Ragnar Groot Koerkamp.  
 > Sassy2: Batch Searching of Short DNA Patterns  
 > bioRxiv, March 2026.  
 > https://doi.org/10.64898/2026.03.10.710811
+
+## Algorithm overview
+
+### Sassy 1
+
+The original algorithm was made for searching short (20-100bp) patterns in say
+human chromosomes. This searches 1 pattern at a time. SIMD parallelization is
+achieved by splitting each record/chromosome into 4 equal-length chunks and
+searching those in lockstep in 4 64-bit SIMD lanes.
+Each SIMD lane contains a `u64` covering a block 64 text positions.
+For each block, it iterates the characters of the pattern as long as some prefix
+of the pattern matches with cost `<k`.
+
+Pros:
+- Good when there is only 1/few patterns.
+- Good for longer patterns.
+
+Cons:
+- Iterating a text-chunk per lane is inefficient.
+- It's unpredictable how many rows (pattern characters) must be processed before
+  a block can be rejected.
+
+### Sassy 2
+
+Version 2 is optimized for **searching many equal length patterns** of length at most 64.
+It**batches** patterns into groups of 32. It first searches the 16bp suffix of
+all patterns in a batch using `32*16=512` wide SIMD. Basically it computes the
+first 16bp rows of the alignment matrix for each of the patterns at once.
+It then finds all positions where these pattern-suffixes match and refines those
+searches.
+
+Use this via `Searcher::search_encoded_patterns`.
+
+### CLI
+
+The library provides these two algorithms as 'raw' building blocks.
+The CLI provides parallelization, automatic algorithm selection
+
+### Details
+
+- Both algorithms typically return _one match per end position_.
+- They can either return for _all_ end positions with cost up to `k`, or for all
+  _local minima_ with cost up to `k`.
+- Reverse-complement searches work by searching the patterns as given in the
+  reverse-complement text.
 
 ## Installation
 
@@ -148,7 +193,7 @@ The CLI can be used via:
 1. `sassy grep`: to show nicely coloured output.
 2. `sassy search`: to write a `.tsv` of matching locations.
 3. `sassy filter`: to write a `.fasta`/`.fastq` of (non)-matching records.
-4. `sassy crispr`: to search for CRISPR guides.
+4. `sassy crispr`: to search for CRISPR guides with exact PAM matches.
 
 `grep`, `search`, and `filter` all take the same arguments, and are implemented
 by forwarding to `grep`. Thus, they can all be combined via e.g.
@@ -186,15 +231,12 @@ TTAAATA
 sassy search --pattern-fasta patterns.fasta -k 1 text.fasta
 ```
 
-If your `patterns.fasta` has many patterns (>8) which are equally long and <=64bp enable V2 
-`--v2` for higher throughput:
+The CLI automatically selects the v2 algorithm when all patterns have the same
+length (of at most 64). Use `--v2` to request it explicitly:
 
 ```bash
 sassy search --pattern-fasta patterns.fasta -k 1 text.fasta --v2
 ```
-
-
-
 
 #### 1.3: TSV output for matches
 
