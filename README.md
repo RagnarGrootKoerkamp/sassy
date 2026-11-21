@@ -80,7 +80,7 @@ first 16bp rows of the alignment matrix for each of the patterns at once.
 It then finds all positions where these pattern-suffixes match and refines those
 searches.
 
-Use this via `Searcher::search_encoded_patterns`.
+Use this via `Searcher::search_v2`.
 
 ### CLI
 
@@ -167,18 +167,17 @@ assert_eq!(matches[0].strand, Strand::Fwd);
 assert_eq!(matches[0].cigar.to_string(), "2=1X1=");
 ```
 
-When searching __multiple equally long (<=64bp) patterns__ you can pre-encode the patterns. This is around 10-20x faster for short texts (<=200bp), and 2-3x faster for longer texts.
+Use `search_v2` for multiple equal-length patterns of up to 64 bases. Pass a slice of texts to encode the patterns once for the entire batch. Each match identifies its input pattern and text by index.
 
 ```rust
 use sassy::{Searcher, Match, profiles::Iupac, Strand};
 
-let patterns = [b"ATG".to_vec(), b"TTT".to_vec()];
+let patterns = [b"ATG", b"TTT"];
 let text = b"CCCCATGCCCCTTT";
 let k = 1;
 
 let mut searcher = Searcher::<Iupac>::new_fwd();
-let encoded = searcher.encode_patterns(&patterns);
-let matches = searcher.search_encoded_patterns(&encoded, text, k);
+let matches = searcher.search_v2(&patterns, &[text], k);
 assert_eq!(matches.len(), 2);
 assert_eq!(matches[0].text_start, 4);  // ATG
 assert_eq!(matches[1].text_start, 11); // TTT

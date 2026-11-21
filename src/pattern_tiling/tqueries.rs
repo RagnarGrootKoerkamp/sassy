@@ -16,8 +16,7 @@ pub struct TQueries<B: SimdBackend, P: Profile> {
     /// Pre-computed offsets into peqs for each character
     /// peq_offsets[encoded_char] is the starting index for that character's peq blocks
     pub peq_offsets: [usize; IUPAC_MASKS],
-    // Not sure if we should keep it here, but might be handy with
-    // get_pattern_seq(i) to make sure it aligns with the indices of `scan` result bools
+    /// Original pattern sequences, indexed by pattern ID.
     pub queries: Vec<Vec<u8>>,
     _marker: PhantomData<(B, P)>,
 }
@@ -49,13 +48,13 @@ fn build_flat_peqs<B: SimdBackend>(
 
 #[allow(clippy::needless_range_loop)]
 impl<B: SimdBackend, P: Profile> TQueries<B, P> {
-    pub fn new(queries: &[Vec<u8>]) -> Self {
+    pub fn new(queries: &[impl AsRef<[u8]>]) -> Self {
         if P::N_CHARS > IUPAC_MASKS {
             panic!("Please raise issue on GitHub if you are using this for ASCII profile");
         }
 
         assert!(!queries.is_empty(), "No queries provided");
-        let pattern_length = queries[0].len();
+        let pattern_length = queries[0].as_ref().len();
         assert!(
             pattern_length > 0 && pattern_length <= B::LIMB_BITS,
             "Invalid pattern length {} (must be <= {})",
@@ -63,7 +62,7 @@ impl<B: SimdBackend, P: Profile> TQueries<B, P> {
             B::LIMB_BITS
         );
         assert!(
-            queries.iter().all(|q| q.len() == pattern_length),
+            queries.iter().all(|q| q.as_ref().len() == pattern_length),
             "All queries must have the same length"
         );
 
@@ -86,7 +85,7 @@ impl<B: SimdBackend, P: Profile> TQueries<B, P> {
                 // iter queries
                 for i in 0..count {
                     let qi = start_q + i;
-                    let encoded = P::encode_char(queries[qi][pos]);
+                    let encoded = P::encode_char(queries[qi].as_ref()[pos]);
                     temp_block_buffer[i] = encoded;
                     if encoded != 0 {
                         // Skipping X
@@ -115,13 +114,9 @@ impl<B: SimdBackend, P: Profile> TQueries<B, P> {
             peq_masks,
             peqs,
             peq_offsets,
-            queries: queries.to_vec(),
+            queries: queries.iter().map(|q| q.as_ref().to_vec()).collect(),
             _marker: PhantomData,
         }
-    }
-
-    pub fn get_pattern_seq(&self, pattern_idx: usize) -> &[u8] {
-        &self.queries[pattern_idx]
     }
 
     pub fn reduce_to_suffix<NB: SimdBackend, NP: Profile>(&self) -> TQueries<NB, NP> {

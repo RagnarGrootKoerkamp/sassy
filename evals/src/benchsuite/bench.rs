@@ -1,7 +1,6 @@
 use edlib_rs::*;
 use parasail_rs::prelude::{Aligner, Matrix};
 use parasail_rs::profile::Profile;
-use sassy::EncodedPatterns;
 use sassy::Searcher;
 use sassy::profiles::Iupac;
 use serde::Deserialize;
@@ -312,6 +311,20 @@ trait SearchTool: Send + Sync {
         text: &[u8],
         k: usize,
     ) -> usize;
+
+    fn search_batch(
+        &mut self,
+        prepared: &Self::PreparedData,
+        chunk_idx: usize,
+        patterns: &[Vec<u8>],
+        texts: &[impl AsRef<[u8]>],
+        k: usize,
+    ) -> usize {
+        texts
+            .iter()
+            .map(|text| self.search(prepared, chunk_idx, patterns, text.as_ref(), k))
+            .sum()
+    }
 }
 
 /// Sassy v1 - text tilling
@@ -351,35 +364,15 @@ impl SearchTool for SassyV1 {
     }
 }
 
-/// Sassy V2 - pattern tilling pre encoded patterns
+/// Sassy v2 - pattern tiling
 struct SassyV2 {
     searcher: Searcher<Iupac>,
 }
 
 impl SearchTool for SassyV2 {
-    type PreparedData = Vec<EncodedPatterns<Iupac>>;
+    type PreparedData = ();
 
-    fn prepare(&self, queries: &[Vec<u8>]) -> Self::PreparedData {
-        // Pre-encode patterns for each pattern chunk
-        let mut encoded_chunks = Vec::new();
-        let mut pattern_start = 0;
-
-        while pattern_start < queries.len() {
-            let pattern_end = (pattern_start + MIN_PATTERNS_PER_CHUNK).min(queries.len());
-            let pattern_slice = &queries[pattern_start..pattern_end];
-
-            let mut searcher = if USE_RC {
-                Searcher::<Iupac>::new_rc()
-            } else {
-                Searcher::<Iupac>::new_fwd()
-            };
-            encoded_chunks.push(searcher.encode_patterns(pattern_slice));
-
-            pattern_start = pattern_end;
-        }
-
-        encoded_chunks
-    }
+    fn prepare(&self, _queries: &[Vec<u8>]) -> Self::PreparedData {}
 
     fn new_worker(&self) -> Self {
         SassyV2 {
@@ -394,15 +387,24 @@ impl SearchTool for SassyV2 {
     #[inline(always)]
     fn search(
         &mut self,
-        prepared: &Self::PreparedData,
-        chunk_idx: usize,
-        _pattern_slice: &[Vec<u8>],
+        _prepared: &Self::PreparedData,
+        _chunk_idx: usize,
+        pattern_slice: &[Vec<u8>],
         text: &[u8],
         k: usize,
     ) -> usize {
-        self.searcher
-            .search_encoded_patterns(&prepared[chunk_idx], text, k)
-            .len()
+        self.searcher.search_v2(pattern_slice, &[text], k).len()
+    }
+
+    fn search_batch(
+        &mut self,
+        _prepared: &Self::PreparedData,
+        _chunk_idx: usize,
+        patterns: &[Vec<u8>],
+        texts: &[impl AsRef<[u8]>],
+        k: usize,
+    ) -> usize {
+        self.searcher.search_v2(patterns, texts, k).len()
     }
 }
 
@@ -613,18 +615,13 @@ where
                                 .downcast_mut::<Tool>()
                                 .expect("Worker type mismatch");
 
-                            let mut count = 0usize;
-                            let pattern_slice = &queries[pat_start..pat_end];
-                            for text in &texts[text_start..text_end] {
-                                count += worker.search(
-                                    &*prepared,
-                                    chunk_idx,
-                                    pattern_slice,
-                                    text.as_ref(),
-                                    k,
-                                );
-                            }
-                            count
+                            worker.search_batch(
+                                &prepared,
+                                chunk_idx,
+                                &queries[pat_start..pat_end],
+                                &texts[text_start..text_end],
+                                k,
+                            )
                         })
                     })
                     .sum()
@@ -633,10 +630,13 @@ where
             let mut worker = tool.new_worker();
             let mut count = 0usize;
             for &(chunk_idx, pat_start, pat_end, text_start, text_end) in &work_items {
-                let pattern_slice = &queries[pat_start..pat_end];
-                for text in &texts[text_start..text_end] {
-                    count += worker.search(&*prepared, chunk_idx, pattern_slice, text.as_ref(), k);
-                }
+                count += worker.search_batch(
+                    &prepared,
+                    chunk_idx,
+                    &queries[pat_start..pat_end],
+                    &texts[text_start..text_end],
+                    k,
+                );
             }
             count
         }

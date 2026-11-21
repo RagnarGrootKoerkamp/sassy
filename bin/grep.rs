@@ -468,21 +468,18 @@ fn run_batch_v2<'a, P: Profile>(
     k: usize,
     crispr: Option<CrisprMode>,
 ) {
-    let patterns_vec: Vec<Vec<u8>> = patterns.iter().map(|p| p.seq.clone()).collect();
-    let encoded = searcher.encode_patterns(&patterns_vec);
+    let sequences: Vec<_> = patterns.iter().map(|p| p.seq.as_slice()).collect();
+    let mut matches = search_v2(searcher, &sequences, text_batch, k, crispr)
+        .into_iter()
+        .peekable();
     for (i, text) in text_batch.iter().enumerate() {
-        if text.seq.text.is_empty() && crispr.is_some() {
-            continue;
-        }
-        let record_matches = search_v2(searcher, &encoded, text, k, crispr);
-        let batch_matches: Vec<_> = record_matches
-            .iter()
+        let batch_matches: Vec<_> = std::iter::from_fn(|| matches.next_if(|m| m.text_idx == i))
             .filter(|m| text.owns_match(m))
             .filter_map(|m| {
                 let pattern = &patterns[m.pattern_idx];
                 crispr
-                    .is_none_or(|mode| mode.accepts_match(pattern, m))
-                    .then(|| (pattern, m.clone()))
+                    .is_none_or(|mode| mode.accepts_match(pattern, &m))
+                    .then_some((pattern, m))
             })
             .collect();
         if batch_matches.is_empty() {
@@ -969,22 +966,21 @@ pub(super) fn search_v1<P: Profile>(
     }
 }
 
-pub(super) fn search_v2<'a, P: Profile>(
-    searcher: &'a mut Searcher<P>,
-    encoded: &sassy::EncodedPatterns<P>,
-    text: &TextRecord,
+pub(super) fn search_v2<P: Profile>(
+    searcher: &mut Searcher<P>,
+    patterns: &[&[u8]],
+    texts: &[TextRecord],
     k: usize,
     crispr: Option<CrisprMode>,
-) -> &'a [Match] {
+) -> Vec<Match> {
     match crispr {
-        Some(mode) if mode.needs_pam() => searcher.search_all_encoded_patterns_with_fn(
-            encoded,
-            &text.seq,
-            k,
-            |pattern, prefix| mode.accepts_endpoint::<P>(pattern, prefix),
-        ),
-        Some(_) => searcher.search_all_encoded_patterns(encoded, &text.seq, k),
-        None => searcher.search_encoded_patterns(encoded, &text.seq, k),
+        Some(mode) if mode.needs_pam() => {
+            searcher.search_all_v2_with_fn(patterns, texts, k, |pattern, prefix| {
+                mode.accepts_endpoint::<P>(pattern, prefix)
+            })
+        }
+        Some(_) => searcher.search_all_v2(patterns, texts, k),
+        None => searcher.search_v2(patterns, texts, k),
     }
 }
 

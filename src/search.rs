@@ -14,8 +14,8 @@ use std::fmt::Debug;
 use std::hint::assert_unchecked;
 
 // pattern_tiling imports
-use crate::pattern_tiling::general::EncodedPatterns;
 use crate::pattern_tiling::general::Searcher as PatterntilingSearcher;
+use crate::pattern_tiling::minima::TracePostProcess;
 
 /// A match of the pattern against the text.
 ///
@@ -408,60 +408,78 @@ impl<P: Profile> Searcher<P> {
         self
     }
 
-    pub fn encode_patterns(&self, patterns: &[Vec<u8>]) -> EncodedPatterns<P> {
-        self.pattern_tiling_searcher.encode(patterns, self.rc)
-    }
-
-    /// Returns a match for each *rightmost local minimum* end position with score <=k.
+    /// Search equal-length patterns of 1 to 64 bases using the v2 backend.
     ///
-    /// This avoids reporting matches that completely overlap apart from a few characters at the ends.
-    ///
-    /// Searches the forward text, and optionally the reverse complement of the text.
-    ///
-    /// Input queries have to be encoded using `encode_patterns` prior to calling this
-    pub fn search_encoded_patterns<I: RcSearchAble + ?Sized>(
+    /// Returns a match at the rightmost endpoint of each local minimum with score <= k.
+    /// The patterns are encoded once for the whole text batch.
+    /// Results are grouped in input text order. [`Match::pattern_idx`] and
+    /// [`Match::text_idx`] index the input slices.
+    pub fn search_v2<I: RcSearchAble>(
         &mut self,
-        encoded_queries: &EncodedPatterns<P>,
-        text: &I,
+        patterns: &[impl AsRef<[u8]>],
+        texts: &[I],
         k: usize,
-    ) -> &[Match] {
-        self.pattern_tiling_searcher
-            .search(encoded_queries, text, k as u32, self.max_n_frac)
+    ) -> Vec<Match> {
+        self.search_v2_with_options(patterns, texts, k, TracePostProcess::LocalMinima)
     }
 
-    pub fn search_all_encoded_patterns<I: RcSearchAble + ?Sized>(
+    /// Like [`Searcher::search_v2`], but returns a match for every end position with score <= k.
+    pub fn search_all_v2<I: RcSearchAble>(
         &mut self,
-        encoded_queries: &EncodedPatterns<P>,
-        text: &I,
+        patterns: &[impl AsRef<[u8]>],
+        texts: &[I],
         k: usize,
-    ) -> &[Match] {
-        self.pattern_tiling_searcher.search_all(
-            encoded_queries,
-            text,
-            k as u32,
-            self.max_n_frac,
-            None,
-        )
+    ) -> Vec<Match> {
+        self.search_v2_with_options(patterns, texts, k, TracePostProcess::All(None))
     }
 
-    /// Returns matches for all in-text endpoints within the edit budget that
-    /// pass `endpoint_filter`. The filter runs before traceback and receives
-    /// the pattern and the text prefix ending at the candidate position.
+    /// Like [`Searcher::search_all_v2`], but traces only in-text endpoints accepted by the filter.
+    ///
+    /// The filter receives the pattern and the text prefix ending at the candidate position.
     /// On the reverse strand, the pattern is complemented and the text is reversed.
-    pub fn search_all_encoded_patterns_with_fn<I: RcSearchAble + ?Sized>(
+    pub fn search_all_v2_with_fn<I: RcSearchAble>(
         &mut self,
-        encoded_queries: &EncodedPatterns<P>,
-        text: &I,
+        patterns: &[impl AsRef<[u8]>],
+        texts: &[I],
         k: usize,
         endpoint_filter: impl Fn(&[u8], &[u8]) -> bool,
-    ) -> &[Match] {
-        self.pattern_tiling_searcher.search_all(
-            encoded_queries,
-            text,
-            k as u32,
-            self.max_n_frac,
-            Some(&endpoint_filter),
+    ) -> Vec<Match> {
+        self.search_v2_with_options(
+            patterns,
+            texts,
+            k,
+            TracePostProcess::All(Some(&endpoint_filter)),
         )
+    }
+
+    fn search_v2_with_options<I: RcSearchAble>(
+        &mut self,
+        patterns: &[impl AsRef<[u8]>],
+        texts: &[I],
+        k: usize,
+        post: TracePostProcess<'_>,
+    ) -> Vec<Match> {
+        if texts.is_empty() {
+            return Vec::new();
+        }
+        let encoded = self.pattern_tiling_searcher.encode(patterns, self.rc);
+        let mut matches = Vec::new();
+        for (text_idx, text) in texts.iter().enumerate() {
+            let start = matches.len();
+            self.pattern_tiling_searcher.search_record(
+                &encoded,
+                text,
+                k as u32,
+                Some(true),
+                post,
+                self.max_n_frac,
+                &mut matches,
+            );
+            for m in &mut matches[start..] {
+                m.text_idx = text_idx;
+            }
+        }
+        matches
     }
 
     /// Set overhang cost `0<=alpha<=1`.
@@ -3859,14 +3877,29 @@ mod tests {
         let p = b"ATG".to_vec();
         let t = b"NTG".to_vec();
         let mut searcher = Searcher::<Iupac>::new_fwd();
-        let encoded = searcher.encode_patterns(std::slice::from_ref(&p));
-        let matches = searcher.search_encoded_patterns(&encoded, &t, 0);
+        let matches = searcher.search_v2(std::slice::from_ref(&p), std::slice::from_ref(&t), 0);
         assert_eq!(matches.len(), 1);
 
         let mut dna_searcher = Searcher::<Dna>::new_fwd();
-        let encoded = dna_searcher.encode_patterns(&[p]);
-        let matches = dna_searcher.search_encoded_patterns(&encoded, &t, 0);
+        let matches = dna_searcher.search_v2(&[p], &[t], 0);
         assert_eq!(matches.len(), 0);
+    }
+
+    #[test]
+    fn search_v2_reports_pattern_and_text_indices_across_strands() {
+        let mut searcher = Searcher::<Iupac>::new_rc().with_max_n_frac(0.0);
+        let patterns = [b"ATG", b"CCC"];
+        let texts = [b"CAT".as_slice(), b"", b"CCCTATG", b"NNN"];
+        let matches = searcher.search_v2(&patterns, &texts, 0);
+        let indices: Vec<_> = matches
+            .iter()
+            .map(|m| (m.pattern_idx, m.text_idx, m.strand))
+            .collect();
+        assert_eq!(
+            indices,
+            [(0, 0, Strand::Rc), (1, 2, Strand::Fwd), (0, 2, Strand::Fwd)]
+        );
+        assert!(searcher.search_v2(&patterns, &texts[..0], 0).is_empty());
     }
 
     #[test]

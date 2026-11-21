@@ -145,7 +145,7 @@ fn check_search(case: &Case, id: usize, local_minima: bool) {
     let k = case.k;
     let mut v1 = case.searcher(true);
     let mut v2 = case.searcher(true);
-    let encoded = v2.encode_patterns(std::slice::from_ref(pattern));
+    let patterns = [pattern.as_slice()];
     let mode = if local_minima {
         "local minima"
     } else {
@@ -155,13 +155,12 @@ fn check_search(case: &Case, id: usize, local_minima: bool) {
         if local_minima {
             (
                 v1.search(pattern, &text.seq, k),
-                v2.search_encoded_patterns(&encoded, &text.seq, k).to_vec(),
+                v2.search_v2(&patterns, std::slice::from_ref(text), k),
             )
         } else {
             (
                 v1.search_all(pattern, &text.seq, k),
-                v2.search_all_encoded_patterns(&encoded, &text.seq, k)
-                    .to_vec(),
+                v2.search_all_v2(&patterns, std::slice::from_ref(text), k),
             )
         }
     });
@@ -196,7 +195,7 @@ fn fuzz_n_rich_crispr_backends_on_both_strands() {
         let reverse_pam = Iupac::complement(pam);
         let mut v1 = case.searcher(true);
         let mut v2 = case.searcher(true);
-        let encoded = v2.encode_patterns(std::slice::from_ref(guide));
+        let patterns = [guide.as_slice()];
         for allow_pam_edits in [false, true] {
             let pam_filter = CrisprMode {
                 pam_length: pam_len,
@@ -210,9 +209,7 @@ fn fuzz_n_rich_crispr_backends_on_both_strands() {
             };
             case.check(case_id, mode, |text| {
                 let mut a = v1.search_all(guide, &text.seq, k);
-                let mut b = v2
-                    .search_all_encoded_patterns(&encoded, &text.seq, k)
-                    .to_vec();
+                let mut b = v2.search_all_v2(&patterns, std::slice::from_ref(text), k);
                 let filter = |m: &Match| {
                     let prefix = match m.strand {
                         Strand::Fwd => &text.seq.text[..m.text_end],
@@ -238,10 +235,16 @@ fn fuzz_n_rich_crispr_backends_on_both_strands() {
                 a.retain(filter);
                 b.retain(filter);
                 let filtered_v1 = search_v1(&mut v1, &case.pattern, text, k, Some(pam_filter));
-                let filtered_v2 = search_v2(&mut v2, &encoded, text, k, Some(pam_filter));
+                let filtered_v2 = search_v2(
+                    &mut v2,
+                    &patterns,
+                    std::slice::from_ref(text),
+                    k,
+                    Some(pam_filter),
+                );
                 assert_eq!(filtered_v1, a, "v1, case {case_id}, {mode}");
                 assert_eq!(filtered_v2, b, "v2, case {case_id}, {mode}");
-                (filtered_v1, filtered_v2.to_vec())
+                (filtered_v1, filtered_v2)
             });
         }
     }
@@ -252,9 +255,9 @@ fn n_filter_changes_local_minimum_selection_between_backends() {
     let pattern = b"AAAA".to_vec();
     let text = b"AAAANNNN";
     let mut searcher = Searcher::<Iupac>::new_fwd().with_max_n_frac(0.9);
-    let encoded = searcher.encode_patterns(std::slice::from_ref(&pattern));
+    let patterns = [pattern.as_slice()];
     assert!(searcher.search(&pattern, text, 0).is_empty());
-    let v2 = searcher.search_encoded_patterns(&encoded, text, 0);
+    let v2 = searcher.search_v2(&patterns, &[text], 0);
     assert_eq!(v2.len(), 1);
     assert_eq!(v2[0].text_start..v2[0].text_end, 3..7);
 }
@@ -264,7 +267,7 @@ fn reverse_search_uses_the_same_anchors_in_both_backends() {
     let pattern = b"AAAA".to_vec();
     let text = b"TTTTT";
     let mut searcher = Searcher::<Iupac>::new_rc().with_max_n_frac(0.5);
-    let encoded = searcher.encode_patterns(std::slice::from_ref(&pattern));
+    let patterns = [pattern.as_slice()];
     let spans = |matches: &[Match]| {
         let mut spans: Vec<_> = matches
             .iter()
@@ -275,7 +278,7 @@ fn reverse_search_uses_the_same_anchors_in_both_backends() {
     };
     assert_eq!(spans(&searcher.search(&pattern, text, 0)), [(0, 4, 0)]);
     assert_eq!(
-        spans(searcher.search_encoded_patterns(&encoded, text, 0)),
+        spans(&searcher.search_v2(&patterns, &[text], 0)),
         [(0, 4, 0)]
     );
     assert_eq!(
@@ -283,7 +286,7 @@ fn reverse_search_uses_the_same_anchors_in_both_backends() {
         [(0, 4, 0), (1, 5, 0), (2, 5, 1)]
     );
     assert_eq!(
-        spans(searcher.search_all_encoded_patterns(&encoded, text, 1)),
+        spans(&searcher.search_all_v2(&patterns, &[text], 1)),
         [(0, 4, 0), (1, 5, 0), (2, 5, 1)]
     );
 }

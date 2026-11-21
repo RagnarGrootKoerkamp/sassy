@@ -98,15 +98,14 @@ fn bench_searchers(c: &mut Criterion) {
         });
 
         let mut searcher = Searcher::<Iupac>::new_fwd();
-        let encoded = searcher.encode_patterns(&queries);
 
         group.bench_function(format!("sassy_pattern_tiling/q={}", num_queries), |b| {
             b.iter(|| {
-                black_box(searcher.search_encoded_patterns(&encoded, &text, k));
+                black_box(searcher.search_v2(&queries, std::slice::from_ref(&text), k));
             });
         });
         let ipc3 = measure_ipc(|| {
-            black_box(searcher.search_encoded_patterns(&encoded, &text, k));
+            black_box(searcher.search_v2(&queries, std::slice::from_ref(&text), k));
         });
 
         println!("\nIPC Stats for q={}:", num_queries);

@@ -27,13 +27,11 @@ fn main() {
     let texts = read_path(&texts_path.unwrap_or(patterns_path));
 
     let mut searcher = Searcher::<Iupac>::new_fwd();
-    let encoded_barcodes = searcher.encode_patterns(&barcodes);
 
-    let mut num_matches = 0;
-    for text in &texts {
-        let matches = searcher.search_encoded_patterns(&encoded_barcodes, text, k);
-        num_matches += matches.len();
-    }
+    let num_matches: usize = texts
+        .chunks(1024)
+        .map(|batch| searcher.search_v2(&barcodes, batch, k).len())
+        .sum();
     eprintln!("Total matches: {}", num_matches);
 }
 

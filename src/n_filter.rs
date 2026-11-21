@@ -153,9 +153,7 @@ mod tests {
             let _matches_v1 = std::hint::black_box(searcher.search_all(&pattern, &text, k));
 
             // Also make sure we don't crash for v2 post filter
-            let encoded = searcher.encode_patterns(&[pattern.clone()]);
-            let _matches_v2 =
-                std::hint::black_box(searcher.search_all_encoded_patterns(&encoded, &text, k));
+            let _matches_v2 = std::hint::black_box(searcher.search_all_v2(&[pattern], &[text], k));
         }
     }
 }

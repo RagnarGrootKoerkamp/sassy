@@ -168,10 +168,9 @@ fn main() {
         });
 
         let mut s_enc = Searcher::<Iupac>::new_fwd();
-        let encoded = s_enc.encode_patterns(&queries);
         let ipc_tiling = measure_perf(|| {
             for _ in 0..reps {
-                black_box(s_enc.search_encoded_patterns(&encoded, &text, k));
+                black_box(s_enc.search_v2(&queries, std::slice::from_ref(&text), k));
             }
         });
 

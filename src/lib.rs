@@ -32,12 +32,10 @@
 //!
 //! ## Reverse complements
 //!
-//! When searching reverse complements, by default Sassy searches the pattern in both the forward and reverse-complement text.
-//! Only Sassy2 ([`Searcher::search_encoded_patterns`]) instead searches the reverse complement of the pattern in the forward text.
-//!
-//! This has implications for the set of matches that is returned. By default,
-//! there is at most 1 match per text _end_ position of each RC match, but in v2,
-//! there is at most 1 match per text _start_ position of each RC match.
+//! Both [`Searcher::search`] and [`Searcher::search_v2`] can search the pattern in
+//! the forward and reverse-complement text. Both report coordinates in the
+//! forward text. The search endpoint is `text_end` on the forward strand and
+//! `text_start` on the reverse strand.
 //!
 //! ## Traceback
 //!
@@ -46,8 +44,6 @@
 //!
 //! In case more precise alignments are needed, e.g. via affine-cost alignments, it is recommended to run sassy with [`Searcher::without_trace`].
 //! Then, each match only contains the end position in the text and pattern, and the user can manually run a backwards extension-alignment from that point.
-//! In case of a reverse-complement match, in v1, the match in against `RC(text[text_start..])`, while in v2 (`search_encoded_patterns`),
-//! the match is against `RC(pattern[pattern_start..])`.
 //!
 //! ## Example
 //!
@@ -151,7 +147,6 @@ mod trace;
 pub mod alignment_iterator;
 mod pattern_tiling;
 pub mod profiles;
-pub use pattern_tiling::general::EncodedPatterns;
 pub use search::CachedRev;
 pub use search::Match;
 pub use search::RcSearchAble;

@@ -756,7 +756,7 @@ mod tests {
 
             assert_eq!(
                 sorted_output(&expected),
-                sorted_output(actual),
+                sorted_output(&actual),
                 "all endpoints={}, k={k}, alpha={alpha:?}, rc={include_rc}, max_n_frac={max_n_frac:?}, text={:?}, patterns={:?}",
                 matches!(post, TracePostProcess::All(_)),
                 String::from_utf8_lossy(&text),
@@ -816,8 +816,8 @@ mod tests {
         let mut v2 = Searcher::<Iupac>::new(None);
         let encoded = v2.encode(&[q.to_vec()], true);
         let expected = v1.search_all(q, t, 1);
-        let actual = v2.search_all(&encoded, t, 1, None, None);
-        assert_eq!(sorted_output(&expected), sorted_output(actual));
+        let actual = v2.search_all(&encoded, t, 1, None);
+        assert_eq!(sorted_output(&expected), sorted_output(&actual));
     }
 
     #[test]

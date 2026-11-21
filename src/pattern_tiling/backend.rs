@@ -28,7 +28,6 @@ pub trait SimdBackend: Copy + 'static + Send + Sync + Default + std::fmt::Debug 
     fn default_array() -> Self::Array;
     fn from_array(arr: Self::Array) -> Self::Simd;
     fn to_array(vec: Self::Simd) -> Self::Array;
-    fn simd_eq(lhs: Self::Simd, rhs: Self::Simd) -> Self::Simd;
     fn simd_gt(lhs: Self::Simd, rhs: Self::Simd) -> Self::Simd;
     fn scalar_to_u64(value: Self::Scalar) -> u64;
     fn splat_all_ones() -> Self::Simd;
@@ -90,10 +89,6 @@ macro_rules! impl_wide_backend {
             #[inline(always)]
             fn scalar_to_u64(value: Self::Scalar) -> u64 {
                 value as u64
-            }
-            #[inline(always)]
-            fn simd_eq(lhs: Self::Simd, rhs: Self::Simd) -> Self::Simd {
-                lhs.simd_eq(rhs)
             }
             #[inline(always)]
             fn simd_gt(lhs: Self::Simd, rhs: Self::Simd) -> Self::Simd {

@@ -1,5 +1,5 @@
 use helicase::{Config, FastxParser, HelicaseParser, ParallelFastxParser, ParserOptions};
-use sassy::{CachedRev, Match};
+use sassy::{CachedRev, Match, RcSearchAble};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -48,6 +48,16 @@ impl TextRecord {
         // The first chunk also owns matches ending at position zero.
         (self.record_offset == 0 || m.text_end > self.first_real_position)
             && m.text_end <= self.last_real_position
+    }
+}
+
+impl RcSearchAble for TextRecord {
+    fn text(&self) -> impl AsRef<[u8]> {
+        self.seq.text()
+    }
+
+    fn rev_text(&self) -> impl AsRef<[u8]> {
+        self.seq.rev_text()
     }
 }
 
