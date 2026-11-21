@@ -5,7 +5,6 @@ use crate::pattern_tiling::search::{HitRange, Myers};
 use crate::pattern_tiling::tqueries::TQueries;
 use crate::profiles::Profile;
 use crate::search::Match;
-use crate::search::Strand;
 use crate::search::get_overhang_steps;
 use crate::trace::{CostLookup, get_trace};
 use pa_types::Cost;
@@ -465,18 +464,6 @@ fn traceback_single<B: SimdBackend, P: Profile>(
         searcher.max_overhang,
     );
 
-    m.pattern_idx = original_pattern_idx % t_queries.n_original_queries;
-    m.strand = if original_pattern_idx >= t_queries.n_original_queries {
-        // The v2 search uses rc(pattern) against the forward text, but matches are always
-        // returned in the fwd(pattern) direction, so reverse-complement them.
-        let rc_pattern_start = m.pattern_start;
-        m.pattern_start = pattern.len() - m.pattern_end;
-        m.pattern_end = pattern.len() - rc_pattern_start;
-        m.cigar.reverse();
-        Strand::Rc
-    } else {
-        Strand::Fwd
-    };
-
+    m.pattern_idx = original_pattern_idx;
     m
 }

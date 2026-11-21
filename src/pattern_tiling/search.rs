@@ -525,7 +525,7 @@ mod tests {
         let mut searcher = Myers::<TestBackend, Iupac>::new(None);
 
         let queries = vec![b"ACGT".to_vec(), b"TGCA".to_vec()];
-        let t_queries = TQueries::<TestBackend, Iupac>::new(&queries, false);
+        let t_queries = TQueries::<TestBackend, Iupac>::new(&queries);
         let text = b"AAACGTTTGCAAA";
         //                           ^    ^
         //                      0123456789-12
@@ -559,7 +559,7 @@ mod tests {
         let mut searcher = Myers::<TestBackend, Iupac>::new(Some(0.5));
 
         let queries = vec![b"ACGT".to_vec()];
-        let t_queries = TQueries::<TestBackend, Iupac>::new(&queries, false);
+        let t_queries = TQueries::<TestBackend, Iupac>::new(&queries);
 
         let text = b"AC";
         let k = 2;
@@ -574,7 +574,7 @@ mod tests {
         let mut searcher = Myers::<TestBackend, Iupac>::new(Some(0.5));
 
         let queries = vec![b"AAAGT".to_vec()];
-        let t_queries = TQueries::<TestBackend, Iupac>::new(&queries, false);
+        let t_queries = TQueries::<TestBackend, Iupac>::new(&queries);
         let text = b"GTCCCCCCCCC";
         let k = 2;
 
@@ -587,7 +587,7 @@ mod tests {
         let mut searcher = Myers::<TestBackend, Iupac>::new(None);
 
         let queries = vec![b"ACGT".to_vec()];
-        let t_queries = TQueries::<TestBackend, Iupac>::new(&queries, false);
+        let t_queries = TQueries::<TestBackend, Iupac>::new(&queries);
         let text = b"TTTTTTTT";
         let k = 1;
 
@@ -601,7 +601,7 @@ mod tests {
         let mut searcher = Myers::<TestBackend, Iupac>::new(None);
 
         let queries = vec![b"ACGT".to_vec()];
-        let t_queries = TQueries::<TestBackend, Iupac>::new(&queries, false);
+        let t_queries = TQueries::<TestBackend, Iupac>::new(&queries);
         //                       ACGT
         let text = b"AAACGTAAA";
         //                     012345678
@@ -625,7 +625,7 @@ mod tests {
             .map(|c| vec![c; 4])
             .collect();
 
-        let t_queries = TQueries::<TestBackend, Iupac>::new(&queries, false);
+        let t_queries = TQueries::<TestBackend, Iupac>::new(&queries);
         let text = b"AAAACCCCGGGGTTTT";
         let k = 2;
 
@@ -688,27 +688,20 @@ mod tests {
         }
     }
 
-    fn fuzz_against_sassy_batch(
-        alpha: Option<f32>,
-        include_rc: bool,
-        use_hierarchical: bool,
-        filter_local_pattern_tilingma: bool,
-    ) {
-        let mut sassy_searcher = if let Some(a) = alpha {
-            SassySearcher::<Iupac>::new_fwd_with_overhang(a)
-        } else {
-            SassySearcher::<Iupac>::new_fwd()
-        };
+    fn sorted_output(matches: &[Match]) -> Vec<(&Match, String)> {
+        // Match equality excludes CIGARs, so compare them explicitly.
+        let mut output: Vec<_> = matches.iter().map(|m| (m, m.cigar.to_string())).collect();
+        output.sort_unstable();
+        output
+    }
 
-        // Set max n-frac
+    fn fuzz_against_sassy_batch(alpha: Option<f32>, include_rc: bool, post: TracePostProcess) {
+        let mut v1 = SassySearcher::<Iupac>::new(include_rc, alpha);
+        let mut v2 = Searcher::<Iupac>::new(alpha);
         let max_n_frac = random_max_n_frac();
-
-        if let Some(max_n_frac) = max_n_frac {
-            sassy_searcher.set_max_n_frac(max_n_frac);
+        if let Some(fraction) = max_n_frac {
+            v1.set_max_n_frac(fraction);
         }
-
-        //let max_n_frac = None;
-        let mut pattern_tiling_searcher = Searcher::<Iupac>::new(alpha);
 
         for _ in 0..ITER {
             let k = random_range(0..4);
@@ -731,150 +724,31 @@ mod tests {
                 );
             }
 
-            let pattern_tiling_encoded = pattern_tiling_searcher.encode(&queries, include_rc);
-            let mut pattern_tiling_matches: Vec<Match> = pattern_tiling_searcher
-                .search_with_options(
-                    &pattern_tiling_encoded,
-                    &text,
-                    k as u32,
-                    if use_hierarchical { Some(true) } else { None },
-                    if filter_local_pattern_tilingma {
-                        crate::pattern_tiling::minima::TracePostProcess::LocalMinima
-                    } else {
-                        crate::pattern_tiling::minima::TracePostProcess::All
-                    },
-                    max_n_frac,
-                )
-                .to_vec();
-            pattern_tiling_matches.sort_unstable_by_key(|m| {
-                (
-                    m.pattern_idx,
-                    m.text_start,
-                    m.text_end,
-                    m.cost,
-                    m.strand,
-                    m.cigar.to_string(),
-                )
-            });
-
-            let mut sassy_matches: Vec<Match> = Vec::new();
+            let encoded = v2.encode(&queries, include_rc);
+            let actual = v2.search_with_options(&encoded, &text, k, Some(true), post, max_n_frac);
+            let mut expected = Vec::new();
             for (idx, pattern) in queries.iter().enumerate() {
-                let fwd_matches = if filter_local_pattern_tilingma {
-                    sassy_searcher.search(pattern, &text, k as usize)
-                } else {
-                    sassy_searcher.search_all(pattern, &text, k as usize)
+                let matches = match post {
+                    TracePostProcess::LocalMinima => v1.search(pattern, &text, k as usize),
+                    TracePostProcess::All => v1.search_all(pattern, &text, k as usize),
                 };
-
-                let mut all_matches = fwd_matches;
-
-                // v2 searches  rc(pattern) in fwd(text),
-                // v1 searches fwd(pattern) in  rc(text).
-                // Thus, as a baseline, we call the fwd v1 search to search rc(pattern) in rc(text),
-                // so that it becomes fwd(rc(pattern))=rc(pattern) in rc(rc(text))=fwd(text), so that it matches v1.
-                // We reverse-complement the returned matches as well.
-                if include_rc {
-                    let pattern_rc = crate::profiles::iupac::reverse_complement(pattern);
-                    let mut rc_matches = if filter_local_pattern_tilingma {
-                        sassy_searcher.search(&pattern_rc, &text, k as usize)
-                    } else {
-                        sassy_searcher.search_all(&pattern_rc, &text, k as usize)
-                    };
-                    rc_matches.iter_mut().for_each(|m| {
-                        m.strand = crate::Strand::Rc;
-                        let rc_pattern_start = m.pattern_start;
-                        m.pattern_start = pattern.len() - m.pattern_end;
-                        m.pattern_end = pattern.len() - rc_pattern_start;
-                        m.cigar.reverse();
-                    });
-                    all_matches.extend(rc_matches);
-                }
-
-                all_matches.iter_mut().for_each(|m| {
+                expected.extend(matches.into_iter().map(|mut m| {
                     m.pattern_idx = idx;
-                });
-                sassy_matches.extend(all_matches);
+                    m
+                }));
             }
-            sassy_matches.sort_unstable_by_key(|m| {
-                (
-                    m.pattern_idx,
-                    m.text_start,
-                    m.text_end,
-                    m.cost,
-                    m.strand,
-                    m.cigar.to_string(),
-                )
-            });
 
-            if sassy_matches != pattern_tiling_matches {
-                eprintln!("Match mismatch");
-                eprintln!("Text: {:?}", String::from_utf8_lossy(&text));
-                eprintln!(
-                    "k: {}, text length: {}, batch_size: {}",
-                    k,
-                    text.len(),
-                    queries.len()
-                );
-                eprintln!("Max n frac: {:?}", max_n_frac);
-                for pattern in &queries {
-                    eprintln!("Pattern: {:?}", String::from_utf8_lossy(pattern));
-                }
-                eprintln!();
-
-                eprintln!("Sassy matches ({}):", sassy_matches.len());
-                for m in &sassy_matches {
-                    eprintln!(
-                        "  pattern_idx: {}, pattern_start: {}, pattern_end: {}, text_start: {}, text_end: {}, cigar: {}, cost: {}, strand: {:?}",
-                        m.pattern_idx,
-                        m.pattern_start,
-                        m.pattern_end,
-                        m.text_start,
-                        m.text_end,
-                        m.cigar.to_string(),
-                        m.cost,
-                        m.strand
-                    );
-                }
-                eprintln!();
-
-                eprintln!("Pattern_tiling matches ({}):", pattern_tiling_matches.len());
-                for m in &pattern_tiling_matches {
-                    eprintln!(
-                        "  pattern_idx: {}, pattern_start: {}, pattern_end: {}, text_start: {}, text_end: {}, cigar: {}, cost: {}, strand: {:?}",
-                        m.pattern_idx,
-                        m.pattern_start,
-                        m.pattern_end,
-                        m.text_start,
-                        m.text_end,
-                        m.cigar.to_string(),
-                        m.cost,
-                        m.strand
-                    );
-                }
-                eprintln!();
-
-                panic!("Match mismatch detected");
-            }
+            assert_eq!(
+                sorted_output(&expected),
+                sorted_output(actual),
+                "{post:?}, k={k}, alpha={alpha:?}, rc={include_rc}, max_n_frac={max_n_frac:?}, text={:?}, patterns={:?}",
+                String::from_utf8_lossy(&text),
+                queries
+                    .iter()
+                    .map(|q| String::from_utf8_lossy(q))
+                    .collect::<Vec<_>>(),
+            );
         }
-    }
-
-    #[allow(dead_code)]
-    fn search_sassy_pattern_local_pattern_tilingma(
-        searcher: &mut SassySearcher<Iupac>,
-        pattern: &[u8],
-        text: &[u8],
-        k: usize,
-    ) -> Vec<Match> {
-        searcher.search(pattern, &text, k)
-    }
-
-    #[allow(dead_code)]
-    fn search_sassy_pattern(
-        searcher: &mut SassySearcher<Iupac>,
-        pattern: &[u8],
-        text: &[u8],
-        k: usize,
-    ) -> Vec<Match> {
-        searcher.search_all(pattern, &text, k)
     }
 
     #[test]
@@ -896,74 +770,37 @@ mod tests {
     #[test]
     fn fuzz_against_sassy_all() {
         // This is just sassy search all in pattern_tiling
-        fuzz_against_sassy_batch(Some(0.5), true, true, false);
+        fuzz_against_sassy_batch(Some(0.5), true, TracePostProcess::All);
     }
 
     #[test]
     fn fuzz_against_sassy_general_local() {
         // This is sassy search in pattern_tiling
-        fuzz_against_sassy_batch(Some(0.5), true, true, true);
+        fuzz_against_sassy_batch(Some(0.5), true, TracePostProcess::LocalMinima);
     }
 
     #[test]
     fn fuzz_against_sassy_general_local_no_alpha() {
         // This is sassy search in pattern_tiling (no overhang)
-        fuzz_against_sassy_batch(None, true, true, true);
+        fuzz_against_sassy_batch(None, true, TracePostProcess::LocalMinima);
     }
 
     #[test]
     fn fuzz_against_sassy_general_local_no_alpha_no_rc() {
         // This is sassy search in pattern_tiling (no overhang)
-        fuzz_against_sassy_batch(None, false, true, true);
+        fuzz_against_sassy_batch(None, false, TracePostProcess::LocalMinima);
     }
 
     #[test]
     fn pattern_tiling_trace_bug() {
         let q = b"GTCCGAC";
-        let q_rc = crate::profiles::iupac::reverse_complement(q);
         let t = b"AAACGAAGTCCTTAGACTGACTTGGCACCAGTATACTCACTTTTTTGTCTCC";
-
-        let k = 1;
-        let mut searcher = Myers::<TestBackend, Iupac>::new(None);
-        let pattern_transposed = TQueries::<TestBackend, Iupac>::new(&[q.to_vec()], true);
-        let pattern_tiling_matches = trace_all_for_test(
-            &mut searcher,
-            &pattern_transposed,
-            t,
-            k as u32,
-            TracePostProcess::All,
-        );
-        for m in pattern_tiling_matches {
-            println!(
-                "pattern_tiling edits: {} cigar: {} end: {} strand: {:?}",
-                m.cost,
-                m.cigar.to_string(),
-                m.text_end,
-                m.strand
-            );
-        }
-
-        let mut sassy_searcher = SassySearcher::<Iupac>::new_fwd();
-        let sassy_matches = sassy_searcher.search_all(q, &t, k as usize);
-        for m in sassy_matches {
-            println!(
-                "Sassy edits: {} cigar: {} end: {} strand: {:?}",
-                m.cost,
-                m.cigar.to_string(),
-                m.text_end,
-                m.strand
-            );
-        }
-        let sassy_matches_rc = sassy_searcher.search_all(&q_rc, &t, k as usize);
-        for m in sassy_matches_rc {
-            println!(
-                "Sassy RC edits: {} cigar: {} end: {} strand: {:?}",
-                m.cost,
-                m.cigar.to_string(),
-                m.text_end,
-                m.strand
-            );
-        }
+        let mut v1 = SassySearcher::<Iupac>::new_rc();
+        let mut v2 = Searcher::<Iupac>::new(None);
+        let encoded = v2.encode(&[q.to_vec()], true);
+        let expected = v1.search_all(q, t, 1);
+        let actual = v2.search_all(&encoded, t, 1, None);
+        assert_eq!(sorted_output(&expected), sorted_output(actual));
     }
 
     #[test]

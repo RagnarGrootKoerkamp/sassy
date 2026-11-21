@@ -1,5 +1,5 @@
 use crate::pattern_tiling::backend::SimdBackend;
-use crate::profiles::{Profile, iupac::reverse_complement};
+use crate::profiles::Profile;
 use std::marker::PhantomData;
 
 pub(crate) const IUPAC_MASKS: usize = 16;
@@ -9,7 +9,6 @@ pub struct TQueries<B: SimdBackend, P: Profile> {
     /// Holds [position][transposition_block_index]
     pub pattern_length: usize,
     pub n_queries: usize,
-    pub n_original_queries: usize,
     /// Number of SIMD vectors needed to hold all queries (for Peqs)
     pub n_simd_blocks: usize,
     pub peq_masks: [Vec<u64>; IUPAC_MASKS],
@@ -50,7 +49,7 @@ fn build_flat_peqs<B: SimdBackend>(
 
 #[allow(clippy::needless_range_loop)]
 impl<B: SimdBackend, P: Profile> TQueries<B, P> {
-    pub fn new(queries: &[Vec<u8>], include_rc: bool) -> Self {
+    pub fn new(queries: &[Vec<u8>]) -> Self {
         if P::N_CHARS > IUPAC_MASKS {
             panic!("Please raise issue on GitHub if you are using this for ASCII profile");
         }
@@ -68,18 +67,7 @@ impl<B: SimdBackend, P: Profile> TQueries<B, P> {
             "All queries must have the same length"
         );
 
-        let n_original_queries = queries.len();
-        let est_capacity = n_original_queries * (1 + include_rc as usize);
-        let mut all_queries = Vec::with_capacity(est_capacity);
-        all_queries.extend_from_slice(queries);
-        if include_rc {
-            for q in queries {
-                let q_rc = reverse_complement(q);
-                all_queries.push(q_rc);
-            }
-        }
-
-        let n_queries = all_queries.len();
+        let n_queries = queries.len();
         let n_transposition_blocks = n_queries.div_ceil(B::LIMB_BITS);
         let n_simd_blocks = n_queries.div_ceil(B::LANES);
 
@@ -98,7 +86,7 @@ impl<B: SimdBackend, P: Profile> TQueries<B, P> {
                 // iter queries
                 for i in 0..count {
                     let qi = start_q + i;
-                    let encoded = P::encode_char(all_queries[qi][pos]);
+                    let encoded = P::encode_char(queries[qi][pos]);
                     temp_block_buffer[i] = encoded;
                     if encoded != 0 {
                         // Skipping X
@@ -123,12 +111,11 @@ impl<B: SimdBackend, P: Profile> TQueries<B, P> {
         Self {
             pattern_length,
             n_queries,
-            n_original_queries,
             n_simd_blocks,
             peq_masks,
             peqs,
             peq_offsets,
-            queries: all_queries,
+            queries: queries.to_vec(),
             _marker: PhantomData,
         }
     }
@@ -147,6 +134,6 @@ impl<B: SimdBackend, P: Profile> TQueries<B, P> {
                 q[start..].to_vec()
             })
             .collect();
-        TQueries::<NB, NP>::new(&suffix_queries, false)
+        TQueries::<NB, NP>::new(&suffix_queries)
     }
 }

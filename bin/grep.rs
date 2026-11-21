@@ -94,7 +94,7 @@ pub struct BaseArgs {
 
     /// Use Sassy v2 encoded search (faster for many equal-length patterns).
     ///
-    /// Note: results can differ slightly from V1 due to the difference in reverse complement searching.
+    /// With N filtering, v2 can pick different local minima than v1.
     #[arg(long)]
     v2: bool,
 
@@ -393,7 +393,7 @@ fn run_batch_v2<'a, P: Profile>(
     let patterns_vec: Vec<Vec<u8>> = patterns.iter().map(|p| p.seq.clone()).collect();
     let encoded = searcher.encode_patterns(&patterns_vec);
     for (i, text) in text_batch.iter().enumerate() {
-        let record_matches = searcher.search_encoded_patterns(&encoded, &text.seq.text, k);
+        let record_matches = searcher.search_encoded_patterns(&encoded, &text.seq, k);
         let batch_matches: Vec<_> = record_matches
             .iter()
             .cloned()
@@ -445,8 +445,7 @@ impl Args {
             &patterns,
             None,
             args.base.pattern_batch_size,
-            // V2 encodes reverse-complemented patterns and only reads forward text.
-            rc && !v2,
+            rc,
             patterns.iter().map(|p| p.seq.len()).max().unwrap_or(0) + k,
             self.filter.is_some(),
         );

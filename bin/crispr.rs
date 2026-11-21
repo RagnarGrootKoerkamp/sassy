@@ -214,7 +214,7 @@ pub fn crispr(args: &CrisprArgs) {
         let total_found = &total_found;
         for _ in 0..num_threads {
             s.spawn(move || {
-                let mut searcher = if v2 || args.no_rc {
+                let mut searcher = if args.no_rc {
                     Searcher::<Iupac>::new_fwd().with_max_n_frac(max_n_frac)
                 } else {
                     Searcher::<Iupac>::new_rc().with_max_n_frac(max_n_frac)
@@ -235,21 +235,13 @@ pub fn crispr(args: &CrisprArgs) {
                 while let Some((_batch_id, batch)) = input_reader.next_batch() {
                     let encoded = v2.then(|| {
                         let patterns: Vec<_> = batch.1.iter().map(|p| p.seq.clone()).collect();
-                        let forward = searcher.encode_patterns(&patterns);
-                        // Like v1, complement the patterns and reverse the text.
-                        // This preserves the direction of the alignment and its CIGAR.
-                        let reverse = (!args.no_rc).then(|| {
-                            let complements: Vec<_> =
-                                patterns.iter().map(|p| Iupac::complement(p)).collect();
-                            searcher.encode_patterns(&complements)
-                        });
-                        (forward, reverse)
+                        searcher.encode_patterns(&patterns)
                     });
                     for text in &*batch.2 {
                         let sequence = &text.seq;
-                        let mut v2_matches = encoded.as_ref().map(|(forward, reverse)| {
+                        let mut v2_matches = encoded.as_ref().map(|encoded| {
                             search_v2(
-                                &mut searcher, forward, reverse.as_ref(), sequence,
+                                &mut searcher, encoded, sequence,
                                 batch.1.len(), args.k,
                                 |prefix, strand| args.allow_pam_edits || matches_pam(prefix, strand),
                             )
@@ -323,8 +315,7 @@ pub fn crispr(args: &CrisprArgs) {
 
 pub(super) fn search_v2(
     searcher: &mut Searcher<Iupac>,
-    forward: &EncodedPatterns<Iupac>,
-    reverse: Option<&EncodedPatterns<Iupac>>,
+    encoded: &EncodedPatterns<Iupac>,
     sequence: &CachedRev<Vec<u8>>,
     num_guides: usize,
     k: usize,
@@ -336,21 +327,13 @@ pub(super) fn search_v2(
         return matches;
     }
 
-    let orientations = std::iter::once((forward, sequence.text.as_slice(), Strand::Fwd)).chain(
-        reverse
-            .into_iter()
-            .map(|encoded| (encoded, sequence.rev.as_deref().unwrap(), Strand::Rc)),
-    );
-    for (encoded, text, strand) in orientations {
-        for m in searcher.search_all_encoded_patterns(encoded, text, k) {
-            if accepts_endpoint(&text[..m.text_end], strand) {
-                let mut m = m.clone();
-                if strand == Strand::Rc {
-                    (m.text_start, m.text_end) = (len - m.text_end, len - m.text_start);
-                    m.strand = Strand::Rc;
-                }
-                matches[m.pattern_idx].push(m);
-            }
+    for m in searcher.search_all_encoded_patterns(encoded, sequence, k) {
+        let prefix = match m.strand {
+            Strand::Fwd => &sequence.text[..m.text_end],
+            Strand::Rc => &sequence.rev.as_ref().unwrap()[..len - m.text_start],
+        };
+        if accepts_endpoint(prefix, m.strand) {
+            matches[m.pattern_idx].push(m.clone());
         }
     }
     matches

@@ -6,7 +6,7 @@ use crate::pattern_tiling::tqueries::TQueries;
 use crate::pattern_tiling::trace::TraceBuffer;
 use crate::pattern_tiling::trace::trace_batch_ranges;
 use crate::profiles::Profile;
-use crate::search::Match;
+use crate::search::{Match, RcSearchAble, Strand};
 
 // If AVX-512 is available, we want to use the 512-bit backends instead of the default 256-bit ones.
 // This allows processing twice as many patterns in parallel.
@@ -33,6 +33,7 @@ macro_rules! dispatch_encoded {
                 let $searcher = &mut $self.searcher_u64;
                 $body
             }
+            EncodedPatterns::Both { .. } => unreachable!("search one strand at a time"),
         }
     };
 }
@@ -93,7 +94,6 @@ pub fn hierarchical_search<S, F, P: Profile>(
         full_searcher.alpha_pattern,
     );
 
-    out.clear();
     for chunk_start in (0..suffix_ranges.len()).step_by(F::LANES) {
         let chunk_end: usize = (chunk_start + F::LANES).min(suffix_ranges.len());
         let batch_slice = &suffix_ranges[chunk_start..chunk_end];
@@ -177,7 +177,6 @@ fn trace_ranges_backend<S: SimdBackend, P: Profile>(
     out: &mut Vec<Match>,
     trace_buffer: &mut TraceBuffer,
 ) {
-    out.clear();
     for chunk in ranges.chunks(S::LANES) {
         trace_batch_ranges(
             searcher,
@@ -198,6 +197,11 @@ fn trace_ranges_backend<S: SimdBackend, P: Profile>(
 #[derive(Debug, Clone)]
 pub enum EncodedPatterns<P: Profile> {
     U8(TQueries<U8Backend, P>),
+    /// Independent encodings for the forward and reversed text.
+    Both {
+        forward: Box<Self>,
+        reverse: Box<Self>,
+    },
     U16 {
         full: TQueries<U16Backend, P>,
         suffix_u8: Option<Box<TQueries<U8Backend, P>>>,
@@ -218,6 +222,7 @@ pub enum EncodedPatterns<P: Profile> {
 impl<P: Profile> EncodedPatterns<P> {
     pub fn max_pattern_length(&self) -> usize {
         match self {
+            Self::Both { forward, .. } => forward.max_pattern_length(),
             EncodedPatterns::U8(_) => U8Backend::LIMB_BITS,
             EncodedPatterns::U16 { .. } => U16Backend::LIMB_BITS,
             EncodedPatterns::U32 { .. } => U32Backend::LIMB_BITS,
@@ -227,6 +232,7 @@ impl<P: Profile> EncodedPatterns<P> {
 
     pub fn n_queries(&self) -> usize {
         match self {
+            Self::Both { forward, reverse } => forward.n_queries() + reverse.n_queries(),
             EncodedPatterns::U8(tq) => tq.n_queries,
             EncodedPatterns::U16 { full, .. } => full.n_queries,
             EncodedPatterns::U32 { full, .. } => full.n_queries,
@@ -236,6 +242,7 @@ impl<P: Profile> EncodedPatterns<P> {
 
     pub fn suffix_u16(&self) -> Option<&TQueries<U16Backend, P>> {
         match self {
+            Self::Both { forward, .. } => forward.suffix_u16(),
             EncodedPatterns::U8(_) | EncodedPatterns::U16 { .. } => None,
             EncodedPatterns::U32 { suffix_u16, .. } => suffix_u16.as_deref(),
             EncodedPatterns::U64 { suffix_u16, .. } => suffix_u16.as_deref(),
@@ -244,6 +251,7 @@ impl<P: Profile> EncodedPatterns<P> {
 
     pub fn suffix_u32(&self) -> Option<&TQueries<U32Backend, P>> {
         match self {
+            Self::Both { forward, .. } => forward.suffix_u32(),
             EncodedPatterns::U8(_) | EncodedPatterns::U16 { .. } | EncodedPatterns::U32 { .. } => {
                 None
             }
@@ -253,6 +261,7 @@ impl<P: Profile> EncodedPatterns<P> {
 
     pub fn suffix_u8(&self) -> Option<&TQueries<U8Backend, P>> {
         match self {
+            Self::Both { forward, .. } => forward.suffix_u8(),
             EncodedPatterns::U8(_) => None,
             EncodedPatterns::U16 { suffix_u8, .. } => suffix_u8.as_deref(),
             EncodedPatterns::U32 { suffix_u8, .. } => suffix_u8.as_deref(),
@@ -311,6 +320,20 @@ impl<P: Profile> Searcher<P> {
     }
 
     pub fn encode(&self, queries: &[Vec<u8>], include_rc: bool) -> EncodedPatterns<P> {
+        let forward = Self::encode_strand(queries);
+        if include_rc {
+            // As in v1, complement the patterns and reuse the reversed text.
+            let complements: Vec<_> = queries.iter().map(|q| P::complement(q)).collect();
+            EncodedPatterns::Both {
+                forward: Box::new(forward),
+                reverse: Box::new(Self::encode_strand(&complements)),
+            }
+        } else {
+            forward
+        }
+    }
+
+    fn encode_strand(queries: &[Vec<u8>]) -> EncodedPatterns<P> {
         //Fixme: neat to encode all possible suffixes so every k is supported when
         // search is called, it is wasteful when user never searches different k's
         if queries.is_empty() {
@@ -326,22 +349,22 @@ impl<P: Profile> Searcher<P> {
         );
 
         if max_pattern_length <= U8Backend::LIMB_BITS {
-            EncodedPatterns::U8(TQueries::<U8Backend, P>::new(queries, include_rc))
+            EncodedPatterns::U8(TQueries::<U8Backend, P>::new(queries))
         } else if max_pattern_length <= U16Backend::LIMB_BITS {
-            let full = TQueries::<U16Backend, P>::new(queries, include_rc);
+            let full = TQueries::<U16Backend, P>::new(queries);
             EncodedPatterns::U16 {
                 suffix_u8: Some(Box::new(full.reduce_to_suffix::<U8Backend, P>())),
                 full,
             }
         } else if max_pattern_length <= U32Backend::LIMB_BITS {
-            let full = TQueries::new(queries, include_rc);
+            let full = TQueries::new(queries);
             EncodedPatterns::U32 {
                 suffix_u16: Some(Box::new(full.reduce_to_suffix::<U16Backend, P>())),
                 suffix_u8: Some(Box::new(full.reduce_to_suffix::<U8Backend, P>())),
                 full,
             }
         } else if max_pattern_length <= U64Backend::LIMB_BITS {
-            let full = TQueries::new(queries, include_rc);
+            let full = TQueries::new(queries);
             EncodedPatterns::U64 {
                 suffix_u16: Some(Box::new(full.reduce_to_suffix::<U16Backend, P>())),
                 suffix_u32: Some(Box::new(full.reduce_to_suffix::<U32Backend, P>())),
@@ -399,10 +422,10 @@ impl<P: Profile> Searcher<P> {
         }
     }
 
-    pub fn search(
+    pub fn search<I: RcSearchAble + ?Sized>(
         &mut self,
         encoded_queries: &EncodedPatterns<P>,
-        text: &[u8],
+        text: &I,
         k: u32,
         max_n_frac: Option<f32>,
     ) -> &[Match] {
@@ -416,10 +439,10 @@ impl<P: Profile> Searcher<P> {
         )
     }
 
-    pub fn search_all(
+    pub fn search_all<I: RcSearchAble + ?Sized>(
         &mut self,
         encoded_queries: &EncodedPatterns<P>,
-        text: &[u8],
+        text: &I,
         k: u32,
         max_n_frac: Option<f32>,
     ) -> &[Match] {
@@ -433,7 +456,55 @@ impl<P: Profile> Searcher<P> {
         )
     }
 
-    pub fn search_with_options(
+    pub fn search_with_options<I: RcSearchAble + ?Sized>(
+        &mut self,
+        encoded_queries: &EncodedPatterns<P>,
+        text: &I,
+        k: u32,
+        use_hierarchical: Option<bool>,
+        post: TracePostProcess,
+        max_n_frac: Option<f32>,
+    ) -> &[Match] {
+        self.alignments_buf.clear();
+        let forward_text = text.text();
+        let forward_text = forward_text.as_ref();
+        if let EncodedPatterns::Both { forward, reverse } = encoded_queries {
+            self.search_strand(forward, forward_text, k, use_hierarchical, post, max_n_frac);
+            let start = self.alignments_buf.len();
+            let reversed_text = text.rev_text();
+            self.search_strand(
+                reverse,
+                reversed_text.as_ref(),
+                k,
+                use_hierarchical,
+                post,
+                max_n_frac,
+            );
+            for m in &mut self.alignments_buf[start..] {
+                (m.text_start, m.text_end) = (
+                    forward_text.len() - m.text_end,
+                    forward_text.len() - m.text_start,
+                );
+                m.strand = Strand::Rc;
+            }
+        } else {
+            self.search_strand(
+                encoded_queries,
+                forward_text,
+                k,
+                use_hierarchical,
+                post,
+                max_n_frac,
+            );
+        }
+        if let Some(max_n_frac) = max_n_frac {
+            self.alignments_buf
+                .retain(|m| traced_satisfy_n_frac(m, forward_text, max_n_frac));
+        }
+        &self.alignments_buf
+    }
+
+    fn search_strand(
         &mut self,
         encoded_queries: &EncodedPatterns<P>,
         text: &[u8],
@@ -441,7 +512,7 @@ impl<P: Profile> Searcher<P> {
         use_hierarchical: Option<bool>,
         post: TracePostProcess,
         max_n_frac: Option<f32>,
-    ) -> &[Match] {
+    ) {
         if let Some(prefilter) = Self::should_use_hierarchical(encoded_queries, k, use_hierarchical)
         {
             self.hierarchical_search_with_prefilter(
@@ -475,11 +546,6 @@ impl<P: Profile> Searcher<P> {
                 );
             });
         }
-        if let Some(max_n_frac) = max_n_frac {
-            self.alignments_buf
-                .retain(|m| traced_satisfy_n_frac(m, text, max_n_frac));
-        }
-        self.alignments_buf.as_slice()
     }
 }
 

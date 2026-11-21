@@ -418,21 +418,21 @@ impl<P: Profile> Searcher<P> {
     ///
     /// Searches the forward text, and optionally the reverse complement of the text.
     ///
-    /// Input queries have to be encoded using `encode_queries` prior to calling this
-    pub fn search_encoded_patterns(
+    /// Input queries have to be encoded using `encode_patterns` prior to calling this
+    pub fn search_encoded_patterns<I: RcSearchAble + ?Sized>(
         &mut self,
         encoded_queries: &EncodedPatterns<P>,
-        text: &[u8],
+        text: &I,
         k: usize,
     ) -> &[Match] {
         self.pattern_tiling_searcher
             .search(encoded_queries, text, k as u32, self.max_n_frac)
     }
 
-    pub fn search_all_encoded_patterns(
+    pub fn search_all_encoded_patterns<I: RcSearchAble + ?Sized>(
         &mut self,
         encoded_queries: &EncodedPatterns<P>,
-        text: &[u8],
+        text: &I,
         k: usize,
     ) -> &[Match] {
         self.pattern_tiling_searcher
@@ -531,7 +531,7 @@ impl<P: Profile> Searcher<P> {
         std::mem::take(&mut self.matches)
     }
 
-    /// Search each given pattern in each given text, using the algorithms given by `mode` (see [`SearchMode`]).
+    /// Search each given pattern in each given text, by batching the v1 algorithm as given by `mode` (see [`SearchMode`]).
     ///
     /// [`Match::pattern_idx`] and [`Match::text_idx`] contain the corresponding index of the pattern and text of each match.
     ///
