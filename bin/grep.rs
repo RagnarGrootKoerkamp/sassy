@@ -1,14 +1,14 @@
 use std::{
     collections::VecDeque,
     fs::File,
-    io::{BufRead, Read, Write},
+    io::{BufRead, BufWriter, Read, Write},
     path::{Path, PathBuf},
     sync::Mutex,
 };
 
 use colored::Colorize;
 use helicase::{FastxParser, HelicaseParser};
-use pa_types::Cigar;
+use pa_types::{Cigar, CigarOp};
 use sassy::{
     Match, Searcher, Strand,
     pretty_print::{PrettyPrintDirection, PrettyPrintStyle},
@@ -164,6 +164,18 @@ pub struct SearchArgs {
     /// Optional .fa output path for matching records. Empty or "-" for stdout.
     #[arg(short='o', long, default_missing_value = "-", num_args(0..=1))]
     output: Option<PathBuf>,
+
+    /// Report all qualifying endpoints and require a matching terminal PAM.
+    #[arg(long)]
+    crispr: bool,
+
+    /// Number of bases in the terminal PAM.
+    #[arg(long, requires = "crispr")]
+    pam_length: Option<usize>,
+
+    /// Allow edits in the terminal PAM.
+    #[arg(long, requires = "crispr")]
+    allow_pam_edits: bool,
 }
 
 #[derive(clap::Parser, Clone)]
@@ -180,12 +192,33 @@ pub struct FilterArgs {
     output: Option<PathBuf>,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct CrisprMode {
+    pub(super) pam_length: usize,
+    pub(super) allow_pam_edits: bool,
+    pub(super) legacy_tsv: bool,
+}
+
+impl CrisprMode {
+    pub(super) fn accepts_match(self, pattern: &PatternRecord, m: &Match) -> bool {
+        // CIGARs are in pattern orientation on both strands. Require the PAM
+        // to be covered by an uninterrupted run of terminal matches.
+        self.allow_pam_edits
+            || self.pam_length == 0
+            || (m.pattern_end == pattern.seq.len()
+                && m.cigar.ops.last().is_some_and(|op| {
+                    op.op == CigarOp::Match && op.cnt as usize >= self.pam_length
+                }))
+    }
+}
+
 struct Args {
     base: BaseArgs,
 
     context: usize,
 
     grep: bool,
+    crispr: Option<CrisprMode>,
     search: Option<PathBuf>,
     filter: Option<PathBuf>,
 }
@@ -202,6 +235,7 @@ impl GrepArgs {
             base,
             context,
             grep: true,
+            crispr: None,
             search,
             filter,
         }
@@ -343,17 +377,48 @@ fn print_statistics(hist: &[usize]) {
 
 impl SearchArgs {
     pub fn run(self) {
-        let SearchArgs {
-            base,
-            matches,
-            output,
-        } = self;
         Args {
-            base,
+            base: self.base,
             context: 0,
             grep: false,
-            search: matches.or(Some(PathBuf::from(""))),
-            filter: output,
+            crispr: self.crispr.then_some(CrisprMode {
+                pam_length: self.pam_length.unwrap_or(3),
+                allow_pam_edits: self.allow_pam_edits,
+                legacy_tsv: false,
+            }),
+            search: self.matches.or(Some(PathBuf::new())),
+            filter: self.output,
+        }
+        .run()
+    }
+
+    pub(super) fn run_crispr(args: &crate::crispr::CrisprArgs) {
+        Args {
+            base: BaseArgs {
+                pattern: None,
+                pattern_file: Some(PathBuf::from(&args.guide)),
+                pattern_fasta: None,
+                pattern_batch_size: None,
+                k: args.k,
+                alphabet: Alphabet::Iupac,
+                overhang: None,
+                no_rc: args.no_rc,
+                max_n_frac: args.max_n_frac,
+                v2: args.v2,
+                threads: args.threads,
+                invert: false,
+                sam: false,
+                paths: vec![args.path.clone()],
+            },
+            context: 0,
+            grep: false,
+            crispr: Some(CrisprMode {
+                pam_length: args.pam_length,
+                allow_pam_edits: args.allow_pam_edits,
+                legacy_tsv: true,
+            }),
+            search: Some(args.output.clone().unwrap_or_default()),
+            filter: None,
         }
         .run()
     }
@@ -370,6 +435,7 @@ impl FilterArgs {
             base,
             context: 0,
             grep: false,
+            crispr: None,
             search: matches,
             filter: output.or(Some(PathBuf::from(""))),
         }
@@ -389,18 +455,27 @@ fn run_batch_v2<'a, P: Profile>(
     patterns: &'a [PatternRecord],
     text_batch: &TextBatch,
     k: usize,
+    crispr: Option<CrisprMode>,
 ) {
     let patterns_vec: Vec<Vec<u8>> = patterns.iter().map(|p| p.seq.clone()).collect();
     let encoded = searcher.encode_patterns(&patterns_vec);
     for (i, text) in text_batch.iter().enumerate() {
-        let record_matches = searcher.search_encoded_patterns(&encoded, &text.seq, k);
+        if text.seq.text.is_empty() && crispr.is_some() {
+            continue;
+        }
+        let record_matches = if crispr.is_some() {
+            searcher.search_all_encoded_patterns(&encoded, &text.seq, k)
+        } else {
+            searcher.search_encoded_patterns(&encoded, &text.seq, k)
+        };
         let batch_matches: Vec<_> = record_matches
             .iter()
-            .cloned()
             .filter(|m| text.owns_match(m))
-            .map(|m| {
+            .filter_map(|m| {
                 let pattern = &patterns[m.pattern_idx];
-                (pattern, m)
+                crispr
+                    .is_none_or(|mode| mode.accepts_match(pattern, m))
+                    .then(|| (pattern, m.clone()))
             })
             .collect();
         if batch_matches.is_empty() {
@@ -427,13 +502,39 @@ impl Args {
         let args = &self;
 
         let patterns = args.get_patterns();
+        if patterns.is_empty() && args.crispr.is_some_and(|mode| mode.legacy_tsv) {
+            return;
+        }
         assert!(!patterns.is_empty(), "No pattern sequences found");
 
-        let mut v2 = args.base.v2;
-        if !v2 && should_suggest_v2(&patterns) {
-            eprintln!("All patterns have equal length; using the --v2 backend.");
-            v2 = true;
+        if let Some(mode) = args.crispr {
+            assert!(
+                (0.0..=1.0).contains(&args.base.max_n_frac),
+                "max_n_frac must be between 0 and 1"
+            );
+            assert!(
+                patterns
+                    .iter()
+                    .all(|pattern| pattern.seq.len() >= mode.pam_length),
+                "All guides must be at least as long as the PAM"
+            );
+            if mode.legacy_tsv {
+                let pam = &patterns[0].seq[patterns[0].seq.len() - mode.pam_length..];
+                assert!(
+                    patterns.iter().all(|pattern| pattern.seq.ends_with(pam)),
+                    "All guides must have the same PAM"
+                );
+            }
+        }
+        let auto_v2 = if args.crispr.is_some() {
+            equal_v2_pattern_lengths(&patterns)
+        } else {
+            should_suggest_v2(&patterns)
         };
+        let v2 = args.base.v2 || auto_v2;
+        if !args.base.v2 && auto_v2 {
+            eprintln!("All patterns have equal length; using the --v2 backend.");
+        }
 
         let k = args.base.k;
         let rc = (args.base.alphabet == Alphabet::Dna || args.base.alphabet == Alphabet::Iupac)
@@ -479,7 +580,7 @@ impl Args {
         // Match writer
         let match_writer = args.search.as_ref().map(|path| {
             let mut writer = if path != "" && path != "-" {
-                Box::new(std::fs::File::create(path).expect("create matches file"))
+                Box::new(BufWriter::new(File::create(path).expect("create matches file")))
                     as Box<dyn std::io::Write + Send>
             } else {
                 matches_to_stdout = true;
@@ -495,21 +596,12 @@ impl Args {
                 );
             }
 
-            let header = format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-                "pat_id",
-                "text_id",
-                "cost",
-                "strand",
-                "start",
-                "end",
-                "match_region",
-                "cigar",
-                "pattern_start",
-                "pattern_end",
-                "pattern_match_region"
-            );
-            write!(writer, "{header}").unwrap();
+            let header = if args.crispr.is_some_and(|mode| mode.legacy_tsv) {
+                "guide\ttext_id\tcost\tstrand\tstart\tend\tmatch_region\tcigar"
+            } else {
+                "pat_id\ttext_id\tcost\tstrand\tstart\tend\tmatch_region\tcigar\tpattern_start\tpattern_end\tpattern_match_region"
+            };
+            writeln!(writer, "{header}").unwrap();
 
             Mutex::new(writer)
         });
@@ -550,12 +642,24 @@ impl Args {
 
                         if v2 {
                             match &mut searcher {
-                                SearcherType::Dna(s) => {
-                                    run_batch_v2(s, &mut results, path, batch.1, &batch.2, k)
-                                }
-                                SearcherType::Iupac(s) => {
-                                    run_batch_v2(s, &mut results, path, batch.1, &batch.2, k)
-                                }
+                                SearcherType::Dna(s) => run_batch_v2(
+                                    s,
+                                    &mut results,
+                                    path,
+                                    batch.1,
+                                    &batch.2,
+                                    k,
+                                    args.crispr,
+                                ),
+                                SearcherType::Iupac(s) => run_batch_v2(
+                                    s,
+                                    &mut results,
+                                    path,
+                                    batch.1,
+                                    &batch.2,
+                                    k,
+                                    args.crispr,
+                                ),
                             }
                         } else {
                             for (i, text) in batch.2.iter().enumerate() {
@@ -563,16 +667,21 @@ impl Args {
                                 for pattern in batch.1 {
                                     let record_matches = match &mut searcher {
                                         SearcherType::Dna(s) => {
-                                            s.search(&pattern.seq, &text.seq, k)
+                                            search_v1(s, pattern, text, k, args.crispr)
                                         }
                                         SearcherType::Iupac(s) => {
-                                            s.search(&pattern.seq, &text.seq, k)
+                                            search_v1(s, pattern, text, k, args.crispr)
                                         }
                                     };
                                     batch_matches.extend(
                                         record_matches
                                             .into_iter()
                                             .filter(|m| text.owns_match(m))
+                                            .filter(|m| {
+                                                args.crispr.is_none_or(|mode| {
+                                                    mode.accepts_match(pattern, m)
+                                                })
+                                            })
                                             .map(|m| (pattern, m)),
                                     );
                                 }
@@ -631,6 +740,9 @@ impl Args {
             }
         });
 
+        if let Some(writer) = match_writer {
+            writer.into_inner().unwrap().flush().unwrap();
+        }
         print_statistics(&global_histogram.into_inner().unwrap());
         assert!(output.into_inner().unwrap().1.is_empty());
     }
@@ -686,9 +798,13 @@ impl Args {
 
             let mut patterns = Vec::new();
             for line in reader.lines() {
+                let seq = line.unwrap().into_bytes();
+                if self.crispr.is_some() && seq.is_empty() {
+                    continue;
+                }
                 patterns.push(PatternRecord {
                     id: format!("{}", patterns.len() + 1),
-                    seq: line.unwrap().into(),
+                    seq,
                 });
             }
             return patterns;
@@ -774,20 +890,36 @@ impl Args {
         let pattern_match_region =
             String::from_utf8_lossy(&pattern.seq[pattern_start..pattern_end]);
 
-        let pat_id = &pattern.id;
+        let legacy = self.crispr.is_some_and(|mode| mode.legacy_tsv);
+        let guide;
+        let pat_id = if legacy {
+            guide = String::from_utf8_lossy(&pattern.seq);
+            guide.as_ref()
+        } else {
+            &pattern.id
+        };
         let text_id = &text.id;
         let cigar = self.format_cigar(&m.cigar, m.strand);
         let strand = match m.strand {
             Strand::Fwd => "+",
             Strand::Rc => "-",
         };
-        writeln!(
+        write!(
             writer,
-            "{pat_id}\t{text_id}\t{cost}\t{strand}\t{}\t{}\t{match_region}\t{cigar}\t{pattern_start}\t{pattern_end}\t{pattern_match_region}",
+            "{pat_id}\t{text_id}\t{cost}\t{strand}\t{}\t{}\t{match_region}\t{cigar}",
             text.record_offset + start,
             text.record_offset + end,
         )
         .unwrap();
+        if legacy {
+            writeln!(writer).unwrap();
+        } else {
+            writeln!(
+                writer,
+                "\t{pattern_start}\t{pattern_end}\t{pattern_match_region}"
+            )
+            .unwrap();
+        }
     }
 
     fn format_match_region(&self, slice: &[u8], strand: Strand) -> Vec<u8> {
@@ -812,22 +944,29 @@ impl Args {
     }
 }
 
-/// Whether an input batch is large and regular enough to benefit from v2's
-/// encoded-pattern search. Pattern batches are encoded independently.
-fn should_suggest_v2(patterns: &[PatternRecord]) -> bool {
-    if patterns.len() <= 8 {
-        return false;
+fn search_v1<P: Profile>(
+    searcher: &mut Searcher<P>,
+    pattern: &PatternRecord,
+    text: &TextRecord,
+    k: usize,
+    crispr: Option<CrisprMode>,
+) -> Vec<Match> {
+    if crispr.is_some() {
+        searcher.search_all(&pattern.seq, &text.seq, k)
+    } else {
+        searcher.search(&pattern.seq, &text.seq, k)
     }
+}
 
+fn should_suggest_v2(patterns: &[PatternRecord]) -> bool {
+    patterns.len() > 8 && equal_v2_pattern_lengths(patterns)
+}
+
+fn equal_v2_pattern_lengths(patterns: &[PatternRecord]) -> bool {
     let Some(first) = patterns.first() else {
         return false;
     };
-    let l = first.seq.len();
-    if l > 64 {
-        return false;
-    }
-
-    patterns.iter().all(|pattern| pattern.seq.len() == l)
+    first.seq.len() <= 64 && patterns.iter().all(|p| p.seq.len() == first.seq.len())
 }
 
 #[cfg(test)]
@@ -909,6 +1048,7 @@ mod test {
             base,
             context,
             grep: true,
+            crispr: None,
             search,
             filter,
         }

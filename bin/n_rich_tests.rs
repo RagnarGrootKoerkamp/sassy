@@ -1,4 +1,4 @@
-use crate::crispr::{matching_seq, search_v2};
+use crate::grep::CrisprMode;
 use crate::input_iterator::{InputIterator, PatternRecord, TextRecord};
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use sassy::{
@@ -198,15 +198,10 @@ fn fuzz_n_rich_crispr_backends_on_both_strands() {
         let mut v2 = case.searcher(true);
         let encoded = v2.encode_patterns(std::slice::from_ref(guide));
         for allow_pam_edits in [false, true] {
-            let accepts_endpoint = |prefix: &[u8], strand| {
-                let expected = if strand == Strand::Fwd {
-                    pam
-                } else {
-                    &reverse_pam
-                };
-                allow_pam_edits
-                    || (prefix.len() >= pam_len
-                        && matching_seq::<Iupac>(&prefix[prefix.len() - pam_len..], expected))
+            let pam_filter = CrisprMode {
+                pam_length: pam_len,
+                allow_pam_edits,
+                legacy_tsv: false,
             };
             let mode = if allow_pam_edits {
                 "editable PAM"
@@ -214,16 +209,34 @@ fn fuzz_n_rich_crispr_backends_on_both_strands() {
                 "checked PAM"
             };
             case.check(case_id, mode, |text| {
-                let a = if allow_pam_edits {
-                    v1.search_all(guide, &text.seq, k)
-                } else {
-                    v1.search_with_fn(guide, &text.seq, k, true, |_, prefix, strand| {
-                        accepts_endpoint(prefix, strand)
-                    })
+                let mut a = v1.search_all(guide, &text.seq, k);
+                let mut b = v2
+                    .search_all_encoded_patterns(&encoded, &text.seq, k)
+                    .to_vec();
+                let filter = |m: &Match| {
+                    let prefix = match m.strand {
+                        Strand::Fwd => &text.seq.text[..m.text_end],
+                        Strand::Rc => {
+                            &text.seq.rev.as_ref().unwrap()[..text.seq.text.len() - m.text_start]
+                        }
+                    };
+                    let expected = if m.strand == Strand::Fwd {
+                        pam
+                    } else {
+                        &reverse_pam
+                    };
+                    let matching_pam = prefix.len() >= pam_len
+                        && Iupac::is_match_slice(expected, &prefix[prefix.len() - pam_len..]);
+                    let accepted = pam_filter.accepts_match(&case.pattern, m);
+                    assert_eq!(
+                        accepted,
+                        allow_pam_edits || matching_pam,
+                        "PAM length {pam_len}: {m:?}"
+                    );
+                    accepted
                 };
-                let [b] = search_v2(&mut v2, &encoded, &text.seq, 1, k, accepts_endpoint)
-                    .try_into()
-                    .unwrap();
+                a.retain(filter);
+                b.retain(filter);
                 (a, b)
             });
         }

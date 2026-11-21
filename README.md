@@ -318,9 +318,13 @@ Search for one or more guides in `guides.txt`:
 sassy crispr --threads 8 --guide guides.txt --k 5 --max-n-frac 0.1 --output hits.tsv hg38.fasta
 ```
 
-Allows `<= k` edits in the sgRNA, and the PAM (the last 3 characters of each guide) has to match exactly, unless `--allow-pam-edits` is given.
+Both `crispr` and `search --crispr --pattern-file guides.txt` consider all
+endpoints within the edit budget. A hit must end in a run of matching CIGAR
+operations that covers the terminal PAM. `--allow-pam-edits` disables that
+check. Use `--pam-length` to change the default of 3 bases.
 
-Use e.g. `--pam-length 5` to change the default of 3.
+`search --crispr` uses the standard search TSV columns. The `crispr` command
+keeps its guide-oriented TSV format below.
 
 Output of the `crispr` command is a tab-delimited file with one row per hit, e.g.:
 
