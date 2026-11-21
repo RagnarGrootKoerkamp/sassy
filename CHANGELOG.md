@@ -3,6 +3,8 @@
 <!-- next-header -->
 
 ## git
+
+## 0.3.1
 Performance improvements for searching through N-heavy chromosomes on many threads:
 - The CLI commands now split long records into chunks for better multi-threading.
   ([#91](https://github.com/RagnarGrootKoerkamp/sassy/pull/91))

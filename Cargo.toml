@@ -1,6 +1,6 @@
 [package]
 name = "sassy"
-version = "0.3.0"
+version = "0.3.1"
 default-run = "sassy"
 edition = "2024"
 authors = ["Rick Beeloo", "Ragnar Groot Koerkamp"]
