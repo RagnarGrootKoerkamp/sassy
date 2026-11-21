@@ -184,7 +184,7 @@ fn trace_passing_alignments<B: SimdBackend, P: Profile>(
     t_queries: &TQueries<B, P>,
     text: &[u8],
     k: u32,
-    post: TracePostProcess,
+    post: TracePostProcess<'_>,
     max_n_frac: Option<f32>,
 ) {
     let text_len = text.len();
@@ -223,8 +223,16 @@ fn trace_passing_alignments<B: SimdBackend, P: Profile>(
         }
 
         match post {
-            TracePostProcess::All => {
-                // Trace all passing positions
+            TracePostProcess::All(endpoint_filter) => {
+                if let Some(filter) = endpoint_filter {
+                    let pattern = &t_queries.queries[pattern_idx];
+                    buffer.pos_cost_buffer.retain(|&(pos, _)| {
+                        // Range endpoints are inclusive. Suffix overhangs have
+                        // no corresponding text prefix.
+                        text.get(..(pos + 1) as usize)
+                            .is_some_and(|prefix| filter(pattern, prefix))
+                    });
+                }
                 traceback_positions::<B, P>(
                     &buffer.pos_cost_buffer,
                     searcher,
@@ -289,7 +297,7 @@ pub fn trace_batch_ranges<B: SimdBackend, P: Profile>(
     text: &[u8],
     ranges: &[HitRange],
     k: u32,
-    post: TracePostProcess,
+    post: TracePostProcess<'_>,
     max_n_frac: Option<f32>,
     alpha: Option<f32>,
     max_overhang: Option<usize>,

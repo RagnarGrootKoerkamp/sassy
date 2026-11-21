@@ -1,6 +1,6 @@
 use crate::n_filter::traced_satisfy_n_frac;
 use crate::pattern_tiling::backend::SimdBackend;
-use crate::pattern_tiling::minima::TracePostProcess;
+use crate::pattern_tiling::minima::{EndpointFilter, TracePostProcess};
 use crate::pattern_tiling::search::{HitRange, Myers};
 use crate::pattern_tiling::tqueries::TQueries;
 use crate::pattern_tiling::trace::TraceBuffer;
@@ -66,7 +66,7 @@ pub fn hierarchical_search<S, F, P: Profile>(
     full_tqueries: &TQueries<F, P>,
     text: &[u8],
     k: u32,
-    post: TracePostProcess,
+    post: TracePostProcess<'_>,
     max_n_frac: Option<f32>,
     out: &mut Vec<Match>,
     trace_buffer: &mut TraceBuffer,
@@ -172,7 +172,7 @@ fn trace_ranges_backend<S: SimdBackend, P: Profile>(
     text: &[u8],
     ranges: &[HitRange],
     k: u32,
-    post: TracePostProcess,
+    post: TracePostProcess<'_>,
     max_n_frac: Option<f32>,
     out: &mut Vec<Match>,
     trace_buffer: &mut TraceBuffer,
@@ -408,7 +408,7 @@ impl<P: Profile> Searcher<P> {
         text: &[u8],
         k: u32,
         prefilter: PrefilterBackend,
-        post: TracePostProcess,
+        post: TracePostProcess<'_>,
         max_n_frac: Option<f32>,
     ) {
         match (prefilter, full_queries) {
@@ -445,13 +445,14 @@ impl<P: Profile> Searcher<P> {
         text: &I,
         k: u32,
         max_n_frac: Option<f32>,
+        endpoint_filter: EndpointFilter<'_>,
     ) -> &[Match] {
         self.search_with_options(
             encoded_queries,
             text,
             k,
             Some(true),
-            TracePostProcess::All,
+            TracePostProcess::All(endpoint_filter),
             max_n_frac,
         )
     }
@@ -462,7 +463,7 @@ impl<P: Profile> Searcher<P> {
         text: &I,
         k: u32,
         use_hierarchical: Option<bool>,
-        post: TracePostProcess,
+        post: TracePostProcess<'_>,
         max_n_frac: Option<f32>,
     ) -> &[Match] {
         self.alignments_buf.clear();
@@ -510,7 +511,7 @@ impl<P: Profile> Searcher<P> {
         text: &[u8],
         k: u32,
         use_hierarchical: Option<bool>,
-        post: TracePostProcess,
+        post: TracePostProcess<'_>,
         max_n_frac: Option<f32>,
     ) {
         if let Some(prefilter) = Self::should_use_hierarchical(encoded_queries, k, use_hierarchical)
@@ -612,7 +613,7 @@ mod tests {
         let spans: Vec<_> = matches.iter().map(|m| m.text_start..m.text_end).collect();
         assert_eq!(spans, expected);
 
-        let matches = searcher.search_all(&encoded, &text, 0, max_n_frac);
+        let matches = searcher.search_all(&encoded, &text, 0, max_n_frac, None);
         let spans: Vec<_> = matches.iter().map(|m| m.text_start..m.text_end).collect();
         assert_eq!(spans, expected);
     }
@@ -624,7 +625,7 @@ mod tests {
         let text = b"AAAANNNN";
         let max_n_frac = Some(0.9);
 
-        let matches = searcher.search_all(&encoded, text, 0, max_n_frac);
+        let matches = searcher.search_all(&encoded, text, 0, max_n_frac, None);
         let spans: Vec<_> = matches.iter().map(|m| m.text_start..m.text_end).collect();
         assert_eq!(spans, [0..4, 1..5, 2..6, 3..7]);
 
@@ -638,7 +639,7 @@ mod tests {
         let mut searcher = Searcher::<Iupac>::new(None);
         let encoded = searcher.encode(&[vec![b'A'; 20]], false);
         // This threshold can admit an all-N U16 suffix, but the full match is all Ns.
-        let matches = searcher.search_all(&encoded, &[b'N'; 40], 3, Some(13.0 / 23.0));
+        let matches = searcher.search_all(&encoded, &[b'N'; 40], 3, Some(13.0 / 23.0), None);
         assert!(matches.is_empty());
     }
 }

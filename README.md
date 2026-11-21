@@ -319,9 +319,10 @@ sassy crispr --threads 8 --guide guides.txt --k 5 --max-n-frac 0.1 --output hits
 ```
 
 Both `crispr` and `search --crispr --pattern-file guides.txt` consider all
-endpoints within the edit budget. A hit must end in a run of matching CIGAR
-operations that covers the terminal PAM. `--allow-pam-edits` disables that
-check. Use `--pam-length` to change the default of 3 bases.
+endpoints within the edit budget. They check the terminal PAM before traceback
+and verify that the resulting CIGAR ends in consecutive matches covering the
+PAM. `--allow-pam-edits` disables both checks. Use `--pam-length` to change the
+default of 3 bases.
 
 `search --crispr` uses the standard search TSV columns. The `crispr` command
 keeps its guide-oriented TSV format below.

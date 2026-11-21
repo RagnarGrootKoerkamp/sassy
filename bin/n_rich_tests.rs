@@ -1,4 +1,4 @@
-use crate::grep::CrisprMode;
+use crate::grep::{CrisprMode, search_v1, search_v2};
 use crate::input_iterator::{InputIterator, PatternRecord, TextRecord};
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use sassy::{
@@ -237,7 +237,11 @@ fn fuzz_n_rich_crispr_backends_on_both_strands() {
                 };
                 a.retain(filter);
                 b.retain(filter);
-                (a, b)
+                let filtered_v1 = search_v1(&mut v1, &case.pattern, text, k, Some(pam_filter));
+                let filtered_v2 = search_v2(&mut v2, &encoded, text, k, Some(pam_filter));
+                assert_eq!(filtered_v1, a, "v1, case {case_id}, {mode}");
+                assert_eq!(filtered_v2, b, "v2, case {case_id}, {mode}");
+                (filtered_v1, filtered_v2.to_vec())
             });
         }
     }

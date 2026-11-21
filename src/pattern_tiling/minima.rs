@@ -1,6 +1,8 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TracePostProcess {
-    All,
+pub(super) type EndpointFilter<'a> = Option<&'a dyn Fn(&[u8], &[u8]) -> bool>;
+
+#[derive(Clone, Copy)]
+pub enum TracePostProcess<'a> {
+    All(EndpointFilter<'a>),
     LocalMinima,
 }
 

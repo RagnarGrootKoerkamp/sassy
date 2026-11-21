@@ -435,8 +435,33 @@ impl<P: Profile> Searcher<P> {
         text: &I,
         k: usize,
     ) -> &[Match] {
-        self.pattern_tiling_searcher
-            .search_all(encoded_queries, text, k as u32, self.max_n_frac)
+        self.pattern_tiling_searcher.search_all(
+            encoded_queries,
+            text,
+            k as u32,
+            self.max_n_frac,
+            None,
+        )
+    }
+
+    /// Returns matches for all in-text endpoints within the edit budget that
+    /// pass `endpoint_filter`. The filter runs before traceback and receives
+    /// the pattern and the text prefix ending at the candidate position.
+    /// On the reverse strand, the pattern is complemented and the text is reversed.
+    pub fn search_all_encoded_patterns_with_fn<I: RcSearchAble + ?Sized>(
+        &mut self,
+        encoded_queries: &EncodedPatterns<P>,
+        text: &I,
+        k: usize,
+        endpoint_filter: impl Fn(&[u8], &[u8]) -> bool,
+    ) -> &[Match] {
+        self.pattern_tiling_searcher.search_all(
+            encoded_queries,
+            text,
+            k as u32,
+            self.max_n_frac,
+            Some(&endpoint_filter),
+        )
     }
 
     /// Set overhang cost `0<=alpha<=1`.
@@ -764,15 +789,10 @@ impl<P: Profile> Searcher<P> {
 
     /// Returns matches for *all* end positions where `end_filter_fn` returns true.
     ///
-    /// The extra `usize` field is always 0 here and is only present for
-    /// consistency with the mult-search functions.
-    ///
-    /// Used in CRISPR search to filter for only those end positions where the
-    /// PAM (last three characters) matches exactly.
-    ///
-    /// `filter_fn` is passed the pattern, the (rc) text up to the end position, and the strand.
-    /// Note that due to the implementation, for rc searches,
-    /// both the pattern and text are complemented from what you would expect.
+    /// The filter runs before traceback and receives the pattern, the text
+    /// prefix ending at the candidate position, and the strand. On the reverse
+    /// strand, the pattern is complemented and the text is reversed. Endpoints
+    /// beyond the text (suffix overhangs) are excluded.
     pub fn search_with_fn<I: RcSearchAble + ?Sized>(
         &mut self,
         pattern: &[u8],
@@ -908,8 +928,8 @@ impl<P: Profile> Searcher<P> {
                 };
                 if let Some(p) = pattern.get_lane(l) {
                     lane.matches.retain(|(end_pos, _)| {
-                        let text_till_end = &t[..*end_pos];
-                        filter_fn(p, text_till_end, strand)
+                        t.get(..*end_pos)
+                            .is_some_and(|prefix| filter_fn(p, prefix, strand))
                     });
                 }
             }

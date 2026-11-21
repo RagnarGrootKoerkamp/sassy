@@ -495,7 +495,7 @@ mod tests {
         t_queries: &TQueries<B, Iupac>,
         text: &[u8],
         k: u32,
-        post: TracePostProcess,
+        post: TracePostProcess<'_>,
     ) -> Vec<Match> {
         let ranges: Vec<HitRange> = searcher
             .search_ranges(t_queries, text, k, true, true)
@@ -531,8 +531,13 @@ mod tests {
         //                      0123456789-12
         let k = 0;
 
-        let alignments =
-            trace_all_for_test(&mut searcher, &t_queries, text, k, TracePostProcess::All);
+        let alignments = trace_all_for_test(
+            &mut searcher,
+            &t_queries,
+            text,
+            k,
+            TracePostProcess::All(None),
+        );
 
         for a in alignments.iter() {
             println!(
@@ -578,7 +583,13 @@ mod tests {
         let text = b"GTCCCCCCCCC";
         let k = 2;
 
-        let hits = trace_all_for_test(&mut searcher, &t_queries, text, k, TracePostProcess::All);
+        let hits = trace_all_for_test(
+            &mut searcher,
+            &t_queries,
+            text,
+            k,
+            TracePostProcess::All(None),
+        );
         assert!(!hits.is_empty(), "Should find match with prefix overhang");
     }
 
@@ -629,8 +640,13 @@ mod tests {
         let text = b"AAAACCCCGGGGTTTT";
         let k = 2;
 
-        let alignments =
-            trace_all_for_test(&mut searcher, &t_queries, text, k, TracePostProcess::All);
+        let alignments = trace_all_for_test(
+            &mut searcher,
+            &t_queries,
+            text,
+            k,
+            TracePostProcess::All(None),
+        );
 
         assert!(!alignments.is_empty(), "Should find some matches");
     }
@@ -695,7 +711,7 @@ mod tests {
         output
     }
 
-    fn fuzz_against_sassy_batch(alpha: Option<f32>, include_rc: bool, post: TracePostProcess) {
+    fn fuzz_against_sassy_batch(alpha: Option<f32>, include_rc: bool, post: TracePostProcess<'_>) {
         let mut v1 = SassySearcher::<Iupac>::new(include_rc, alpha);
         let mut v2 = Searcher::<Iupac>::new(alpha);
         let max_n_frac = random_max_n_frac();
@@ -730,7 +746,7 @@ mod tests {
             for (idx, pattern) in queries.iter().enumerate() {
                 let matches = match post {
                     TracePostProcess::LocalMinima => v1.search(pattern, &text, k as usize),
-                    TracePostProcess::All => v1.search_all(pattern, &text, k as usize),
+                    TracePostProcess::All(_) => v1.search_all(pattern, &text, k as usize),
                 };
                 expected.extend(matches.into_iter().map(|mut m| {
                     m.pattern_idx = idx;
@@ -741,7 +757,8 @@ mod tests {
             assert_eq!(
                 sorted_output(&expected),
                 sorted_output(actual),
-                "{post:?}, k={k}, alpha={alpha:?}, rc={include_rc}, max_n_frac={max_n_frac:?}, text={:?}, patterns={:?}",
+                "all endpoints={}, k={k}, alpha={alpha:?}, rc={include_rc}, max_n_frac={max_n_frac:?}, text={:?}, patterns={:?}",
+                matches!(post, TracePostProcess::All(_)),
                 String::from_utf8_lossy(&text),
                 queries
                     .iter()
@@ -770,7 +787,7 @@ mod tests {
     #[test]
     fn fuzz_against_sassy_all() {
         // This is just sassy search all in pattern_tiling
-        fuzz_against_sassy_batch(Some(0.5), true, TracePostProcess::All);
+        fuzz_against_sassy_batch(Some(0.5), true, TracePostProcess::All(None));
     }
 
     #[test]
@@ -799,7 +816,7 @@ mod tests {
         let mut v2 = Searcher::<Iupac>::new(None);
         let encoded = v2.encode(&[q.to_vec()], true);
         let expected = v1.search_all(q, t, 1);
-        let actual = v2.search_all(&encoded, t, 1, None);
+        let actual = v2.search_all(&encoded, t, 1, None, None);
         assert_eq!(sorted_output(&expected), sorted_output(actual));
     }
 
@@ -862,7 +879,7 @@ mod tests {
             &text,
             k,
             Some(true),
-            crate::pattern_tiling::minima::TracePostProcess::All,
+            crate::pattern_tiling::minima::TracePostProcess::All(None),
             None,
         );
 
@@ -886,7 +903,7 @@ mod tests {
             &text,
             k,
             Some(true),
-            crate::pattern_tiling::minima::TracePostProcess::All,
+            crate::pattern_tiling::minima::TracePostProcess::All(None),
             None,
         );
 
@@ -945,7 +962,7 @@ mod tests {
             &t,
             k as u32,
             Some(false),
-            crate::pattern_tiling::minima::TracePostProcess::All,
+            crate::pattern_tiling::minima::TracePostProcess::All(None),
             None,
         );
 
@@ -987,7 +1004,7 @@ mod tests {
             &t,
             k as u32,
             Some(true),
-            crate::pattern_tiling::minima::TracePostProcess::All,
+            crate::pattern_tiling::minima::TracePostProcess::All(None),
             None,
         );
         for m in matches {
@@ -1029,7 +1046,7 @@ mod tests {
             &t,
             k as u32,
             Some(true),
-            crate::pattern_tiling::minima::TracePostProcess::All,
+            crate::pattern_tiling::minima::TracePostProcess::All(None),
             None,
         );
         let mut sorted_matches = matches.to_vec();

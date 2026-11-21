@@ -200,11 +200,22 @@ pub(super) struct CrisprMode {
 }
 
 impl CrisprMode {
+    fn needs_pam(self) -> bool {
+        !self.allow_pam_edits && self.pam_length != 0
+    }
+
+    pub(super) fn accepts_endpoint<P: Profile>(self, pattern: &[u8], prefix: &[u8]) -> bool {
+        prefix.len() >= self.pam_length
+            && P::is_match_slice(
+                &pattern[pattern.len() - self.pam_length..],
+                &prefix[prefix.len() - self.pam_length..],
+            )
+    }
+
     pub(super) fn accepts_match(self, pattern: &PatternRecord, m: &Match) -> bool {
         // CIGARs are in pattern orientation on both strands. Require the PAM
         // to be covered by an uninterrupted run of terminal matches.
-        self.allow_pam_edits
-            || self.pam_length == 0
+        !self.needs_pam()
             || (m.pattern_end == pattern.seq.len()
                 && m.cigar.ops.last().is_some_and(|op| {
                     op.op == CigarOp::Match && op.cnt as usize >= self.pam_length
@@ -463,11 +474,7 @@ fn run_batch_v2<'a, P: Profile>(
         if text.seq.text.is_empty() && crispr.is_some() {
             continue;
         }
-        let record_matches = if crispr.is_some() {
-            searcher.search_all_encoded_patterns(&encoded, &text.seq, k)
-        } else {
-            searcher.search_encoded_patterns(&encoded, &text.seq, k)
-        };
+        let record_matches = search_v2(searcher, &encoded, text, k, crispr);
         let batch_matches: Vec<_> = record_matches
             .iter()
             .filter(|m| text.owns_match(m))
@@ -944,17 +951,40 @@ impl Args {
     }
 }
 
-fn search_v1<P: Profile>(
+pub(super) fn search_v1<P: Profile>(
     searcher: &mut Searcher<P>,
     pattern: &PatternRecord,
     text: &TextRecord,
     k: usize,
     crispr: Option<CrisprMode>,
 ) -> Vec<Match> {
-    if crispr.is_some() {
-        searcher.search_all(&pattern.seq, &text.seq, k)
-    } else {
-        searcher.search(&pattern.seq, &text.seq, k)
+    match crispr {
+        Some(mode) if mode.needs_pam() => {
+            searcher.search_with_fn(&pattern.seq, &text.seq, k, true, |pattern, prefix, _| {
+                mode.accepts_endpoint::<P>(pattern, prefix)
+            })
+        }
+        Some(_) => searcher.search_all(&pattern.seq, &text.seq, k),
+        None => searcher.search(&pattern.seq, &text.seq, k),
+    }
+}
+
+pub(super) fn search_v2<'a, P: Profile>(
+    searcher: &'a mut Searcher<P>,
+    encoded: &sassy::EncodedPatterns<P>,
+    text: &TextRecord,
+    k: usize,
+    crispr: Option<CrisprMode>,
+) -> &'a [Match] {
+    match crispr {
+        Some(mode) if mode.needs_pam() => searcher.search_all_encoded_patterns_with_fn(
+            encoded,
+            &text.seq,
+            k,
+            |pattern, prefix| mode.accepts_endpoint::<P>(pattern, prefix),
+        ),
+        Some(_) => searcher.search_all_encoded_patterns(encoded, &text.seq, k),
+        None => searcher.search_encoded_patterns(encoded, &text.seq, k),
     }
 }
 
