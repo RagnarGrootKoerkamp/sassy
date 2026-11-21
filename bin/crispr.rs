@@ -321,7 +321,7 @@ pub fn crispr(args: &CrisprArgs) {
     println!("  Time taken: {:?}", start.elapsed());
 }
 
-fn search_v2(
+pub(super) fn search_v2(
     searcher: &mut Searcher<Iupac>,
     forward: &EncodedPatterns<Iupac>,
     reverse: Option<&EncodedPatterns<Iupac>>,

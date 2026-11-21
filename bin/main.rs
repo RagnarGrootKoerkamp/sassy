@@ -1,6 +1,8 @@
 mod crispr;
 mod grep;
 mod input_iterator;
+#[cfg(test)]
+mod n_rich_tests;
 
 use clap::Parser;
 use crispr::{CrisprArgs, crispr};
